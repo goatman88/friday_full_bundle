@@ -1,79 +1,79 @@
-from flask import Flask, render_template, request, jsonify, session
+from __future__ import annotations
 import os
-from datetime import timedelta
-from openai import OpenAI
+from datetime import datetime
+from typing import Any, Dict
 
-def create_app():
-    app = Flask(__name__, template_folder="integrations/templates")
-    app.secret_key = os.getenv("FLASK_SECRET", "dev-secret")
-    app.permanent_session_lifetime = timedelta(days=14)
+from flask import Flask, jsonify, render_template, request
 
-    @app.route("/ping")
-    def ping():
-        return jsonify(ok=True, now="")
+try:
+    # OpenAI ≥ 1.0 client (no proxies kwarg)
+    from openai import OpenAI
+except Exception:
+    OpenAI = None  # type: ignore
 
+
+def create_app() -> Flask:
+    app = Flask(__name__, template_folder="templates")
+
+    # ---------- pages ----------
     @app.route("/chat")
     def chat_page():
+        # bump a cache-busting query if you want: ?v=6
         return render_template("chat.html")
 
+    # ---------- health ----------
+    @app.route("/ping")
+    def ping():
+        return jsonify(ok=True, now=datetime.utcnow().isoformat() + "Z")
+
+    # optional: tiny debug endpoint the UI can read (no secrets)
+    @app.route("/__meta__/debug")
+    def debug_meta():
+        return jsonify(
+            env={
+                "openai_key_present": bool(os.getenv("OPENAI_API_KEY")),
+                "flask_env": os.getenv("FLASK_ENV", ""),
+            }
+        )
+
+    # ---------- API ----------
     @app.route("/api/chat", methods=["POST"])
     def api_chat():
-        data = request.get_json(silent=True) or {}
+        # ensure JSON and the right key
+        data: Dict[str, Any] = request.get_json(silent=True) or {}
         message = (data.get("message") or "").strip()
         if not message:
-            return jsonify(error="Invalid request: expected JSON with 'message'"), 400
+            return (
+                jsonify(error="Invalid request: expected JSON with 'message'"),
+                400,
+            )
 
-        # Load history from session (list of {role, content})
-        session.permanent = True
-        history = session.get("history", [])
+        api_key = os.getenv("OPENAI_API_KEY", "").strip()
 
-        # No key? dev echo
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            reply = f"(dev echo) You said: {message}"
-            # keep the UX consistent even in dev
-            history.append({"role": "user", "content": message})
-            history.append({"role": "assistant", "content": reply})
-            # trim history
-            if len(history) > 20:  # 10 turns
-                history = history[-20:]
-            session["history"] = history
-            return jsonify(reply=reply)
+        # Dev echo if no key or no OpenAI library
+        if not api_key or OpenAI is None:
+            return jsonify(reply=f"(dev echo) You said: {message}")
 
-        # Real model call
+        # Real call
         try:
             client = OpenAI(api_key=api_key)
-            # Build prompt with short history + new user msg
-            messages = history[-18:] + [{"role": "user", "content": message}]
             resp = client.chat.completions.create(
                 model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-                messages=messages,
+                messages=[{"role": "user", "content": message}],
                 temperature=0.3,
             )
-            reply = resp.choices[0].message.content
-            # save back
-            history = messages + [{"role": "assistant", "content": reply}]
-            if len(history) > 20:
-                history = history[-20:]
-            session["history"] = history
+            reply = resp.choices[0].message.content or ""
             return jsonify(reply=reply)
         except Exception as e:
-            # bubble the exact error so chat UI shows it
+            # Return the error text so the front-end shows it
             return jsonify(error=f"OpenAI error: {e}"), 500
-
-    @app.route("/api/reset", methods=["POST"])
-    def api_reset():
-        session.pop("history", None)
-        return jsonify(ok=True)
-
-    # Optional: debug/status for the pill
-    @app.route("/__meta__/debug")
-    def debug():
-        return jsonify(env={"openai_key_present": bool(os.getenv("OPENAI_API_KEY"))})
 
     return app
 
+
+# Flask CLI entrypoint expects an "app" object
 app = create_app()
+
 
 
 
