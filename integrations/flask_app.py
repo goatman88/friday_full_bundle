@@ -1,12 +1,9 @@
 from __future__ import annotations
-import os
+import os, json
 from datetime import datetime
-from typing import Any, Dict
-
 from flask import Flask, jsonify, render_template, request
 
 try:
-    # OpenAI ≥ 1.0 client (no proxies kwarg)
     from openai import OpenAI
 except Exception:
     OpenAI = None  # type: ignore
@@ -15,64 +12,110 @@ except Exception:
 def create_app() -> Flask:
     app = Flask(__name__, template_folder="templates")
 
-    # ---------- pages ----------
-    @app.route("/chat")
+    @app.get("/chat")
     def chat_page():
-        # bump a cache-busting query if you want: ?v=6
         return render_template("chat.html")
 
-    # ---------- health ----------
-    @app.route("/ping")
+    @app.get("/ping")
     def ping():
         return jsonify(ok=True, now=datetime.utcnow().isoformat() + "Z")
 
-    # optional: tiny debug endpoint the UI can read (no secrets)
-    @app.route("/__meta__/debug")
-    def debug_meta():
+    # Ultra-minimal echo to prove what the server receives
+    @app.post("/api/echo")
+    def api_echo():
+        body_text = (request.data or b"").decode("utf-8", "ignore")
         return jsonify(
-            env={
-                "openai_key_present": bool(os.getenv("OPENAI_API_KEY")),
-                "flask_env": os.getenv("FLASK_ENV", ""),
-            }
+            content_type=request.headers.get("Content-Type", ""),
+            is_json=request.is_json,
+            json=request.get_json(silent=True),
+            form={k: v for k, v in request.form.items()},
+            raw_len=len(body_text),
+            raw_sample=body_text[:200],
         )
 
-    # ---------- API ----------
-    @app.route("/api/chat", methods=["POST"])
+    @app.post("/api/chat")
     def api_chat():
-        # ensure JSON and the right key
-        data: Dict[str, Any] = request.get_json(silent=True) or {}
-        message = (data.get("message") or "").strip()
+        content_type = request.headers.get("Content-Type", "")
+        data = request.get_json(silent=True)
+
+        message = None
+
+        # JSON body
+        if isinstance(data, dict):
+            for k in ("message", "text", "prompt", "content", "q", "query"):
+                v = data.get(k)
+                if isinstance(v, str) and v.strip():
+                    message = v.strip()
+                    break
+
+        # Form fallback
         if not message:
-            return (
-                jsonify(error="Invalid request: expected JSON with 'message'"),
-                400,
-            )
+            for k in ("message", "text", "prompt", "content", "q", "query"):
+                v = request.form.get(k)
+                if v and v.strip():
+                    message = v.strip()
+                    break
+
+        # Raw body fallback
+        if not message and request.data:
+            body = request.data.decode("utf-8", "ignore").strip()
+            if body:
+                if body.startswith("{"):
+                    try:
+                        raw = json.loads(body)
+                        if isinstance(raw, dict):
+                            for k in ("message", "text", "prompt", "content", "q", "query"):
+                                v = raw.get(k)
+                                if isinstance(v, str) and v.strip():
+                                    message = v.strip()
+                                    break
+                    except Exception:
+                        pass
+                if not message:
+                    message = body
+
+        if not message:
+            return jsonify({
+                "error": "Invalid request: expected JSON with 'message'",
+                "received": {
+                    "content_type": content_type,
+                    "is_json": request.is_json,
+                    "json_keys": list(data.keys()) if isinstance(data, dict) else None,
+                    "form_keys": list(request.form.keys()),
+                    "raw_len": len(request.data or b""),
+                    "raw_sample": (request.data or b"")[:160].decode("utf-8", "ignore"),
+                }
+            }), 400
 
         api_key = os.getenv("OPENAI_API_KEY", "").strip()
-
-        # Dev echo if no key or no OpenAI library
         if not api_key or OpenAI is None:
             return jsonify(reply=f"(dev echo) You said: {message}")
 
-        # Real call
         try:
             client = OpenAI(api_key=api_key)
+            model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
             resp = client.chat.completions.create(
-                model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+                model=model,
                 messages=[{"role": "user", "content": message}],
                 temperature=0.3,
             )
             reply = resp.choices[0].message.content or ""
             return jsonify(reply=reply)
         except Exception as e:
-            # Return the error text so the front-end shows it
             return jsonify(error=f"OpenAI error: {e}"), 500
+
+    @app.after_request
+    def no_store(resp):
+        resp.headers["Cache-Control"] = "no-store, max-age=0"
+        return resp
 
     return app
 
 
-# Flask CLI entrypoint expects an "app" object
 app = create_app()
+
+
+
 
 
 
