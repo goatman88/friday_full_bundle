@@ -1,0 +1,240 @@
+<!-- templates/brief.html — Hybrid (Rich + Plain) with Export -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Your Brief — Hybrid</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="https://unpkg.com/@picocss/pico@2/css/pico.min.css">
+  <link href="https://cdn.jsdelivr.net/npm/quill@1.3.7/dist/quill.snow.css" rel="stylesheet" />
+  <style>
+    body { padding: 1.25rem; }
+    header { display:flex; align-items:center; justify-content:space-between; gap:1rem; margin-bottom:1rem; }
+    .muted { color:#6b7280; font-size:.9rem; }
+    .row { display:flex; gap:.75rem; flex-wrap:wrap; align-items:center; }
+    .right { margin-left:auto; }
+    .badge { background:#e5e7eb; color:#111827; border-radius:999px; padding:.15rem .5rem; font-size:.75rem; }
+    dialog[open] { max-width: 920px; }
+    .history-item { padding:.6rem .75rem; border:1px solid #e5e7eb; border-radius:8px; margin:.4rem 0; }
+    .history-item .meta { display:flex; gap:.5rem; align-items:center; }
+    .history-item .preview { border-top:1px dashed #e5e7eb; margin-top:.4rem; padding-top:.4rem; max-height:10rem; overflow:auto; }
+    /* Editors */
+    #editorWrap { display:none; }
+    #editor { height: 55vh; background:#fff; }
+    #plainWrap { display:none; }
+    #plain { min-height:55vh; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+    .q-toolbar { border:1px solid #e5e7eb; border-bottom:0; border-radius:8px 8px 0 0; }
+    .q-container { border:1px solid #e5e7eb; border-top:0; border-radius:0 0 8px 8px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h3 style="margin:0;">Your Brief</h3>
+    <nav class="row">
+      <span class="badge" id="userEmail"></span>
+      <a href="/account" role="button" class="secondary">View account</a>
+      <a href="/__meta__/debug" role="button" class="secondary">Diagnostics</a>
+      <a href="/logout" role="button" class="contrast">Logout</a>
+    </nav>
+  </header>
+
+  <p class="muted">Toggle Rich ↔ Plain. We always save as HTML; plain mode converts your text on save.</p>
+
+  <div class="row" style="margin:.5rem 0 1rem;">
+    <label class="muted">Editor mode:</label>
+    <select id="modeSelect">
+      <option value="rich" selected>Rich (Quill)</option>
+      <option value="plain">Plain (Textarea)</option>
+    </select>
+
+    <!-- Export dropdown -->
+    <details class="dropdown">
+      <summary role="button" class="secondary">Export</summary>
+      <ul>
+        <li><a href="#" data-export="html">Download HTML</a></li>
+        <li><a href="#" data-export="md">Download Markdown</a></li>
+        <li><a href="#" data-export="txt">Download TXT</a></li>
+      </ul>
+    </details>
+
+    <span id="saveStatus" class="muted right"></span>
+    <span id="lastSaved" class="muted"></span>
+  </div>
+
+  <!-- Rich editor -->
+  <div id="editorWrap">
+    <div id="toolbar" class="q-toolbar">
+      <span class="ql-formats">
+        <select class="ql-header"><option selected></option><option value="1"></option><option value="2"></option></select>
+        <select class="ql-font"></select>
+        <select class="ql-size"></select>
+      </span>
+      <span class="ql-formats">
+        <button class="ql-bold"></button><button class="ql-italic"></button>
+        <button class="ql-underline"></button><button class="ql-strike"></button>
+      </span>
+      <span class="ql-formats">
+        <button class="ql-list" value="ordered"></button>
+        <button class="ql-list" value="bullet"></button>
+        <button class="ql-indent" value="-1"></button>
+        <button class="ql-indent" value="+1"></button>
+      </span>
+      <span class="ql-formats">
+        <select class="ql-color"></select><select class="ql-background"></select>
+      </span>
+      <span class="ql-formats">
+        <button class="ql-link"></button><button class="ql-blockquote"></button><button class="ql-code-block"></button>
+      </span>
+      <span class="ql-formats"><button class="ql-clean"></button></span>
+    </div>
+    <div id="editor" class="q-container"></div>
+  </div>
+
+  <!-- Plain editor -->
+  <div id="plainWrap">
+    <textarea id="plain" placeholder="Type or paste your brief…"></textarea>
+    <p class="muted" style="margin:.5rem 0 0;">Plain mode saves as HTML by escaping characters and converting newlines to &lt;br&gt;.</p>
+  </div>
+
+  <div class="row" style="margin-top:.75rem;">
+    <button id="saveBtn">Save</button>
+    <button id="historyBtn" class="secondary" type="button">History</button>
+  </div>
+
+  <!-- History Modal -->
+  <dialog id="historyModal">
+    <article>
+      <header class="row" style="align-items:center;">
+        <h4 style="margin:0;">Brief History</h4>
+        <button id="closeHistory" class="secondary right" type="button">Close</button>
+      </header>
+      <div id="historyList" aria-busy="true">Loading…</div>
+      <footer class="row" style="justify-content:flex-end;">
+        <button id="refreshHistory" class="secondary" type="button">Refresh</button>
+        <button id="closeHistoryFooter" type="button">Done</button>
+      </footer>
+    </article>
+  </dialog>
+
+  <script src="https://cdn.jsdelivr.net/npm/quill@1.3.7/dist/quill.min.js"></script>
+  <script>
+    const qs = (s,p=document)=>p.querySelector(s);
+    const el = {
+      email: qs('#userEmail'),
+      mode: qs('#modeSelect'),
+      saveBtn: qs('#saveBtn'),
+      status: qs('#saveStatus'),
+      last: qs('#lastSaved'),
+      histBtn: qs('#historyBtn'),
+      modal: qs('#historyModal'),
+      histList: qs('#historyList'),
+      closeTop: qs('#closeHistory'),
+      closeBot: qs('#closeHistoryFooter'),
+      refresh: qs('#refreshHistory'),
+      editorWrap: qs('#editorWrap'),
+      plainWrap: qs('#plainWrap'),
+      plain: qs('#plain')
+    };
+
+    // Quill
+    const quill = new Quill('#editor', { theme:'snow', modules:{ toolbar:'#toolbar' }, placeholder:'Type or paste your brief…' });
+
+    const setStatus=(m,ok=true)=>{ el.status.textContent=m; el.status.style.color=ok?'#10b981':'#ef4444';
+      if(ok) el.last.textContent='Last saved: '+new Date().toLocaleTimeString();
+      clearTimeout(setStatus._t); setStatus._t=setTimeout(()=>el.status.textContent='',2500);
+    };
+    const htmlToText=(h)=>{ const d=document.createElement('div'); d.innerHTML=h||''; return d.textContent||d.innerText||''; };
+    const textToHtml=(t)=> (t||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+
+    function showMode(mode){
+      if(mode==='plain'){
+        el.plain.value = htmlToText(quill.root.innerHTML);
+        el.editorWrap.style.display='none'; el.plainWrap.style.display='';
+      }else{
+        quill.clipboard.dangerouslyPasteHTML(textToHtml(el.plain.value));
+        el.plainWrap.style.display='none'; el.editorWrap.style.display='';
+      }
+    }
+
+    async function whoami(){
+      const r=await fetch('/whoami'); const j=await r.json();
+      if(!j.logged_in){ location.href='/login'; return; }
+      el.email.textContent=j.session?.email||'';
+    }
+    async function loadBrief(){
+      try{ const r=await fetch('/api/brief'); if(!r.ok) throw new Error('load '+r.status);
+        const j=await r.json(); const html=j.content||'';
+        quill.clipboard.dangerouslyPasteHTML(html);
+        el.plain.value = htmlToText(html);
+        setStatus('Loaded ✓', true);
+      }catch(e){ setStatus('Load error: '+e.message,false); }
+    }
+    async function saveBrief(){
+      try{
+        const mode=el.mode.value;
+        const html=(mode==='plain')? textToHtml(el.plain.value) : quill.root.innerHTML;
+        const r=await fetch('/api/brief',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:html})});
+        if(!r.ok) throw new Error('save '+r.status);
+        setStatus('Saved ✓', true);
+      }catch(e){ setStatus('Save error: '+e.message,false); }
+    }
+
+    function renderHistory(items){
+      if(!items.length){ el.histList.innerHTML='<p class="muted">No history yet.</p>'; return; }
+      el.histList.innerHTML='';
+      for(const it of items){
+        const div=document.createElement('div'); div.className='history-item';
+        div.innerHTML=`
+          <div class="meta">
+            <strong>v${it.version}</strong>
+            <span class="muted">• ${new Date(it.created_at).toLocaleString()}</span>
+            <button class="secondary right" type="button">Restore</button>
+          </div>
+          <div class="preview">${(it.content||'').slice(0,800)}${(it.content||'').length>800?'…':''}</div>`;
+        div.querySelector('button').addEventListener('click',()=>{
+          quill.clipboard.dangerouslyPasteHTML(it.content||'');
+          el.plain.value = htmlToText(it.content||'');
+          el.modal.close(); setStatus('Loaded v'+it.version+' (not saved yet)');
+        });
+        el.histList.appendChild(div);
+      }
+    }
+    async function openHistory(){
+      el.histList.setAttribute('aria-busy','true'); el.histList.textContent='Loading…'; el.modal.showModal();
+      try{ const r=await fetch('/api/brief/history?limit=20'); if(!r.ok) throw new Error('history '+r.status);
+        const j=await r.json(); renderHistory(j.items||[]);
+      }catch(e){ el.histList.innerHTML=`<p style="color:#ef4444">History error: ${e.message}</p>`; }
+      finally{ el.histList.removeAttribute('aria-busy'); }
+    }
+
+    // Autosave
+    let t=null; const bump=()=>{ clearTimeout(t); t=setTimeout(saveBrief,1200); el.status.textContent='Typing…'; el.status.style.color='#6b7280'; };
+    quill.on('text-change', bump); el.plain.addEventListener('input', bump);
+
+    // Export links
+    document.addEventListener('click', (e)=>{
+      const a = e.target.closest('a[data-export]');
+      if(!a) return;
+      e.preventDefault();
+      const fmt = a.getAttribute('data-export');
+      window.location = `/api/brief/export?format=${encodeURIComponent(fmt)}`;
+    });
+
+    // Hooks
+    el.mode.addEventListener('change', ()=>showMode(el.mode.value));
+    qs('#saveBtn').addEventListener('click', saveBrief);
+    el.histBtn.addEventListener('click', openHistory);
+    el.refresh?.addEventListener('click', openHistory);
+    qs('#closeHistory')?.addEventListener('click', ()=>el.modal.close());
+    qs('#closeHistoryFooter')?.addEventListener('click', ()=>el.modal.close());
+
+    (async()=>{ await whoami(); await loadBrief(); el.mode.value='rich'; showMode('rich'); })();
+  </script>
+</body>
+</html>
+
+
+
+
+
+

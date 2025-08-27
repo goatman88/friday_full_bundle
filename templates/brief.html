@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Your Brief</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:900px;margin:40px auto;padding:0 16px;}
+    h1{margin:0 0 16px}
+    h2{margin:20px 0 8px}
+    ul{margin:8px 0 16px}
+    li{margin:4px 0}
+    a{color:#0b57d0;text-decoration:none}
+  </style>
+</head>
+<body>
+  <h1>Good morning.</h1>
+
+  <h2>Weather:</h2>
+  <p>{{ weather_line or "—" }}</p>
+
+  <h2>Plan</h2>
+  {% if plan_items and plan_items|length %}
+    <ul>
+      {% for item in plan_items %}
+        <li>{{ item }}</li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p>—</p>
+  {% endif %}
+
+  <h2>Reminders:</h2>
+  {% if reminders_list and reminders_list|length %}
+    <ul>
+      {% for item in reminders_list %}
+        <li>{{ item }}</li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p>—</p>
+  {% endif %}
+
+  <p><a href="{{ url_for('paste_page') }}">Back</a></p>
+</body>
+</html>
+
+</html>

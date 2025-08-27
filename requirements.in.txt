@@ -1,0 +1,8 @@
+Flask>=3.0,<3.1
+openai>=1.40,<2
+requests>=2.31
+python-dotenv>=1.0,<2
+# Gunicorn is for Linux hosts (Render). This marker keeps it off your Windows dev box:
+gunicorn==21.2.0 ; platform_system != "Windows"
+
+

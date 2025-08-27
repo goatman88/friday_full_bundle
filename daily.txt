@@ -1,0 +1,9 @@
+Weather: (optional, leave blank if you want live API)
+Plan:
+0900 – Work block
+1300 – Gym
+1800 – Family dinner
+
+Reminders:
+Pay bills
+Call mom

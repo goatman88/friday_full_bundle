@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Friday AI</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    :root{
+      --bg:#0b0c10; --panel:#13151a; --muted:#9aa3ad; --text:#e8edf2; --accent:#86c5ff;
+      --ok:#3ac779; --err:#ff6b6b; --ring:#25425e;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0; background:linear-gradient(180deg,#0b0c10,#0e1218 40%,#0b0c10);
+      color:var(--text); font:16px/1.4 system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+      min-height:100vh; display:grid; place-items:center; padding:24px;
+    }
+    .card{
+      width:min(900px,100%); background:rgba(19,21,26,.85); backdrop-filter:blur(6px);
+      border:1px solid #1f2730; border-radius:18px; box-shadow:0 20px 60px rgba(0,0,0,.45);
+      overflow:hidden;
+    }
+    header{padding:18px 18px 10px; display:flex; gap:14px; align-items:center; flex-wrap:wrap}
+    h1{margin:0; font-size:26px}
+    .sub{color:var(--muted); font-size:13px; margin-top:4px}
+    .pill{display:inline-block; padding:4px 8px; border-radius:999px; font-size:12px; margin-left:8px}
+    .ok{background:#0f2a1b; color:#9dffbe; border:1px solid #1c6a3c}
+    .no{background:#2a1010; color:#ffc1c1; border:1px solid #6a1c1c}
+    .row{margin-left:auto; display:flex; gap:8px; align-items:center}
+    select{
+      appearance:none; background:#0c1117; color:var(--text); border:1px solid #273140;
+      border-radius:10px; padding:8px 12px; outline:none;
+    }
+    .log{height:52vh; max-height:560px; overflow:auto; padding:18px 18px 0 18px}
+    .bubble{margin:10px 0; padding:12px 14px; border-radius:14px; width:fit-content; max-width:90%}
+    .you{background:#1b2330; border:1px solid #293346}
+    .bot{background:#141a22; border:1px solid #222b36}
+    .error{border-color:#43252b; background:#29181b; color:#ffd8d8}
+    .ts{display:block; color:var(--muted); font-size:12px; margin-bottom:4px}
+    form{display:flex; gap:10px; padding:16px; background:#0f141b; border-top:1px solid #1b2430}
+    input[type=text]{
+      flex:1; padding:12px 14px; border-radius:12px; border:1px solid #273140; outline:none;
+      background:#0c1117; color:var(--text); transition:box-shadow .15s,border-color .15s;
+    }
+    input[type=text]:focus{border-color:var(--accent); box-shadow:0 0 0 4px var(--ring)}
+    button{
+      padding:12px 18px; border-radius:12px; border:1px solid #213448; background:#0e1e2c;
+      color:var(--text); cursor:pointer; transition:transform .08s ease, background .15s,border-color .15s;
+    }
+    button:hover{background:#123047}
+    button:active{transform:translateY(1px)}
+    .hint{color:var(--muted); font-size:12px; padding:0 18px 16px}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <header>
+      <div>
+        <h1>Friday AI
+          <span id="modePill" class="pill">checking…</span>
+        </h1>
+        <div id="sub" class="sub">Say something…</div>
+      </div>
+      <div class="row">
+        <label for="keySel" class="sub">Active key</label>
+        <select id="keySel" title="Switch OpenAI key"></select>
+        <button id="applyKey" title="Apply selected key">Switch</button>
+      </div>
+    </header>
+
+    <div id="log" class="log" aria-live="polite"></div>
+
+    <form id="chatForm" autocomplete="off">
+      <input id="msg" type="text" placeholder="Type a message" />
+      <button type="submit">Send</button>
+    </form>
+    <div class="hint">Posts to <code>/api/chat</code>. If no key is set, replies use <em>dev echo</em>.</div>
+  </div>
+
+<script>
+(function () {
+  const log = document.getElementById('log');
+  const form = document.getElementById('chatForm');
+  const input = document.getElementById('msg');
+  const modePill = document.getElementById('modePill');
+  const sub = document.getElementById('sub');
+  const keySel = document.getElementById('keySel');
+  const applyBtn = document.getElementById('applyKey');
+
+  const ts = () => new Date().toLocaleTimeString();
+  function add(html, cls='bot'){
+    const div = document.createElement('div');
+    div.className = `bubble ${cls}`;
+    div.innerHTML = `<span class="ts">${ts()}</span>${html}`;
+    log.appendChild(div); log.scrollTop = log.scrollHeight;
+  }
+  const esc = s => s.replace(/[&<>"']/g,m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m]));
+
+  async function loadDebug(){
+    try{
+      const r = await fetch('/__meta__/debug');
+      if(!r.ok) throw new Error('debug endpoint not found');
+      const d = await r.json();
+      const env = d?.env || {};
+      const on = !!env.openai_key_present;
+      modePill.textContent = on ? 'model: ON' : 'model: dev echo';
+      modePill.className = `pill ${on ? 'ok' : 'no'}`;
+      sub.textContent = on ? `Connected to model. (${env.model})` : 'Dev echo mode (no key detected).';
+
+      // Fill selector
+      keySel.innerHTML = '';
+      const keys = env.available_keys || [];
+      if(keys.length === 0){
+        const opt = document.createElement('option');
+        opt.textContent = 'No keys detected';
+        opt.value = '';
+        keySel.appendChild(opt);
+        keySel.disabled = true; applyBtn.disabled = true;
+      } else {
+        keys.forEach(name=>{
+          const opt = document.createElement('option');
+          opt.value = name; opt.textContent = name;
+          if(name === env.active_key_name) opt.selected = true;
+          keySel.appendChild(opt);
+        });
+        keySel.disabled = false; applyBtn.disabled = false;
+      }
+    }catch{
+      modePill.textContent = 'mode: unknown';
+      modePill.className = 'pill no';
+      sub.textContent = 'Debug endpoint missing; continuing.';
+    }
+  }
+  loadDebug();
+
+  applyBtn.addEventListener('click', async ()=>{
+    const name = keySel.value;
+    if(!name){ return; }
+    try{
+      const r = await fetch('/__meta__/switch_key', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ key_name: name })
+      });
+      const data = await r.json();
+      if(!r.ok){ add(`Switch failed<br><code>${esc(JSON.stringify(data))}</code>`, 'bubble error'); return; }
+      add(`Switched active key to <b>${esc(data.active)}</b>`, 'bot');
+      await loadDebug();
+    }catch(e){
+      add(`Switch failed<br><code>${esc(String(e))}</code>`, 'bubble error');
+    }
+  });
+<button type="button" id="resetBtn" title="Clear conversation">Reset</button>
+
+document.getElementById('resetBtn').addEventListener('click', async () => {
+  try {
+    await fetch('/api/reset', { method: 'POST' });
+    log.innerHTML = '';
+    add('Conversation cleared.', 'bot');
+  } catch (e) {
+    add('Could not reset.', 'bubble error');
+  }
+});
+
+
+  form.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const message = input.value.trim();
+    if(!message) return;
+    add(`You<br>${esc(message)}`, 'you');
+    input.value = '';
+    try{
+     const r = await fetch('/api/chat', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ message: text })
+});
+const j = await r.json();
+if (r.ok) {
+  append("Friday", j.reply);
+} else {
+  append("Error", j.error || r.statusText);
+}
+
+      const ct = res.headers.get('content-type') || '';
+      if(!res.ok){
+        const text = await res.text();
+        add(`Error: HTTP ${res.status}<br><code>${esc(text)}</code>`, 'bubble error');
+        return;
+      }
+      if(ct.includes('application/json')){
+        const data = await res.json();
+        add(esc(data.reply ?? JSON.stringify(data)));
+      }else{
+        add(esc(await res.text()));
+      }
+    }catch(err){
+      add(`Network error<br><code>${esc(String(err))}</code>`, 'bubble error');
+    }
+  });
+})();
+</script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+
+

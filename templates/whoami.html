@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <title>Whoami</title>
+  <style>
+    .avatar { width: 84px; height: 84px; border-radius: 50%; object-fit: cover; }
+    .token { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .muted { opacity: .8; }
+    .card { border-radius: 16px; }
+  </style>
+</head>
+<body class="bg-light">
+  <nav class="navbar navbar-dark bg-dark">
+    <div class="container">
+      <span class="navbar-brand">Friday</span>
+      <div>
+        {% if session.email %}
+          <a class="btn btn-outline-light btn-sm me-2" href="/">Home</a>
+          <a class="btn btn-outline-light btn-sm" href="/logout">Logout</a>
+        {% else %}
+          <a class="btn btn-warning btn-sm" href="/login">Login</a>
+        {% endif %}
+      </div>
+    </div>
+  </nav>
+
+  <div class="container py-4">
+    <h1 class="h3 mb-4">Account</h1>
+
+    <div class="row g-4">
+      <div class="col-12 col-lg-6">
+        <div class="card shadow-sm">
+          <div class="card-body d-flex align-items-center">
+            <img class="avatar me-3" src="{{ session.picture or 'https://via.placeholder.com/84?text=%20' }}" alt="avatar">
+            <div>
+              <div class="fw-semibold">{{ session.name or '—' }}</div>
+              <div class="text-muted">{{ session.email or 'Not signed in' }}</div>
+              <div class="small mt-2 muted">{{ 'Signed in' if session.email else 'Guest' }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-12 col-lg-6">
+        <div class="card shadow-sm">
+          <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center">
+              <h2 class="h6 m-0">OAuth Token (preview)</h2>
+              <a class="small" href="/whoami?json=1">View JSON</a>
+            </div>
+            <p class="small text-muted mt-2">Token preview not shown in template mode. Use JSON view for full payload.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mt-4">
+      <a class="btn btn-secondary" href="/">Back Home</a>
+      <a class="btn btn-outline-secondary" href="/__meta__/debug">Diagnostics</a>
+      <a class="btn btn-outline-primary" href="/brief">Go to Brief</a>
+    </div>
+  </div>
+</body>
+</html>
