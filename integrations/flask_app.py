@@ -121,6 +121,26 @@ def debug_env():
         return resp
 
     return app
+# ==========================
+# Debug helpers (safe to keep)
+# ==========================
+import os
+from flask import jsonify
+
+@app.get("/debug/env")
+@app.get("/api/debug/env")
+def debug_env():
+    return jsonify({
+        "openai_key_present": bool(os.getenv("OPENAI_API_KEY")),
+        "flask_env": os.getenv("FLASK_ENV", "not_set"),
+    })
+
+@app.get("/__routes")
+@app.get("/api/__routes")
+def list_routes():
+    routes = sorted(str(r.rule) for r in app.url_map.iter_rules())
+    return jsonify({"routes": routes})
+
 
 
 app = create_app()
