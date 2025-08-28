@@ -87,38 +87,45 @@ def api_echo():
     return jsonify(received=request.get_json(silent=True) or {})
 
 
-# --- debug + utility endpoints ---
-import os, re
+# ---- Debug & Inspection Routes ----
+import os, time
 from flask import jsonify
+
+REDACT_KEYS = ("KEY", "SECRET", "TOKEN", "PASS", "PWD", "PASSWORD", "AUTH")
 
 @app.get("/debug/health")
 def debug_health():
-    return jsonify(ok=True), 200
+    return jsonify(ok=True, ts=int(time.time())), 200
 
 @app.get("/debug/env")
 def debug_env():
-    # redact anything that smells like a secret
-    safe = {
-        k: v
-        for k, v in os.environ.items()
-        if not re.search(r"(KEY|SECRET|TOKEN|PASS|PWD|PASSWORD|AUTH)", k, re.I)
-    }
-    extras = {
-        "FLASK_ENV": app.config.get("ENV"),
-        "FLASK_APP": os.getenv("FLASK_APP"),
-        "file_loaded": __file__,
-    }
-    return jsonify(env=safe, extras=extras), 200
+    safe = {}
+    for k, v in os.environ.items():
+        if any(x in k.upper() for x in REDACT_KEYS):
+            safe[k] = "****"
+        else:
+            # keep response small & safe
+            safe[k] = v if len(v) <= 200 else v[:200] + "…"
+    # a few helpful flags if you set them in Render
+    safe["FLASK_APP"] = os.environ.get("FLASK_APP", "")
+    safe["FLASK_ENV"] = os.environ.get("FLASK_ENV", "")
+    return jsonify(safe), 200
 
 @app.get("/routes")
 def list_routes():
-    routes = sorted(rule.rule for rule in app.url_map.iter_rules())
-    return jsonify(routes=routes), 200
+    out = []
+    for rule in app.url_map.iter_rules():
+        # skip static noise if you prefer
+        if rule.endpoint == "static":
+            continue
+        out.append({
+            "rule": str(rule),
+            "methods": sorted(m for m in rule.methods if m not in {"HEAD","OPTIONS"}),
+            "endpoint": rule.endpoint
+        })
+    return jsonify(out), 200
+# ---- /Debug & Inspection Routes ----
 
-
-@app.get("/healthz")
-def healthz():
-    return jsonify(ok=True)
 
 
 if __name__ == "__main__":
