@@ -1,149 +1,129 @@
+# integrations/flask_app.py
 from __future__ import annotations
-import os, json
-from datetime import datetime
+
+import os
+from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
+from flask_cors import CORS
 
-try:
-    from openai import OpenAI
-except Exception:
-    OpenAI = None  # type: ignore
+load_dotenv()
+
+TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
+
+app = Flask(__name__, template_folder=TEMPLATES_DIR)
+CORS(app)
 
 
-def create_app() -> Flask:
-    app = Flask(__name__, template_folder="templates")
-
-    @app.get("/chat")
-    def chat_page():
-        return render_template("chat.html")
-
-    @app.get("/ping")
-    def ping():
-        return jsonify(ok=True, now=datetime.utcnow().isoformat() + "Z")
-
-    # Ultra-minimal echo to prove what the server receives
-    @app.post("/api/echo")
-    def api_echo():
-        body_text = (request.data or b"").decode("utf-8", "ignore")
-        return jsonify(
-            content_type=request.headers.get("Content-Type", ""),
-            is_json=request.is_json,
-            json=request.get_json(silent=True),
-            form={k: v for k, v in request.form.items()},
-            raw_len=len(body_text),
-            raw_sample=body_text[:200],
-        )
-
-    @app.post("/api/chat")
-    def api_chat():
-        content_type = request.headers.get("Content-Type", "")
-        data = request.get_json(silent=True)
-
-        message = None
-
-        # JSON body
-        if isinstance(data, dict):
-            for k in ("message", "text", "prompt", "content", "q", "query"):
-                v = data.get(k)
-                if isinstance(v, str) and v.strip():
-                    message = v.strip()
-                    break
-
-        # Form fallback
-        if not message:
-            for k in ("message", "text", "prompt", "content", "q", "query"):
-                v = request.form.get(k)
-                if v and v.strip():
-                    message = v.strip()
-                    break
-
-        # Raw body fallback
-        if not message and request.data:
-            body = request.data.decode("utf-8", "ignore").strip()
-            if body:
-                if body.startswith("{"):
-                    try:
-                        raw = json.loads(body)
-                        if isinstance(raw, dict):
-                            for k in ("message", "text", "prompt", "content", "q", "query"):
-                                v = raw.get(k)
-                                if isinstance(v, str) and v.strip():
-                                    message = v.strip()
-                                    break
-                    except Exception:
-                        pass
-                if not message:
-                    message = body
-
-        if not message:
-            return jsonify({
-                "error": "Invalid request: expected JSON with 'message'",
-                "received": {
-                    "content_type": content_type,
-                    "is_json": request.is_json,
-                    "json_keys": list(data.keys()) if isinstance(data, dict) else None,
-                    "form_keys": list(request.form.keys()),
-                    "raw_len": len(request.data or b""),
-                    "raw_sample": (request.data or b"")[:160].decode("utf-8", "ignore"),
-                }
-            }), 400
-
-        api_key = os.getenv("OPENAI_API_KEY", "").strip()
-        if not api_key or OpenAI is None:
-            return jsonify(reply=f"(dev echo) You said: {message}")
-
-        try:
-            client = OpenAI(api_key=api_key)
-            model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-            resp = client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": message}],
-                temperature=0.3,
-            )
-            reply = resp.choices[0].message.content or ""
-            return jsonify(reply=reply)
-        except Exception as e:
-            return jsonify(error=f"OpenAI error: {e}"), 500
-# ==========================
-# Debug route for Render env
-# ==========================
-@app.route("/debug/env")
-def debug_env():
-    import os
+# ---------- helpers ----------
+def _safe_env():
+    """Return safe env info (no secrets)."""
     return {
         "openai_key_present": bool(os.getenv("OPENAI_API_KEY")),
-        "flask_env": os.getenv("FLASK_ENV", "not_set"),
-        "other_vars": {k: v for k, v in os.environ.items() if k.startswith("FLASK_")}
+        "database_url_present": bool(os.getenv("DATABASE_URL")),
+        "FLASK_ENV": os.getenv("FLASK_ENV", "production"),
+        "file_loaded": __file__,
     }
 
-    @app.after_request
-    def no_store(resp):
-        resp.headers["Cache-Control"] = "no-store, max-age=0"
-        return resp
 
-    return app
-# ==========================
-# Debug helpers (safe to keep)
-# ==========================
-import os
+def _dev_echo(text: str) -> str:
+    if text.strip().lower() == "ping":
+        return "Pong! How can I assist you today?"
+    return f"Friday: {text}"
+
+
+def _chat_reply(message: str) -> str:
+    """Use OpenAI if key is present; otherwise dev echo."""
+    if not os.getenv("OPENAI_API_KEY"):
+        return _dev_echo(message)
+
+    try:
+        from openai import OpenAI
+
+        client = OpenAI()
+        model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        temperature = float(os.getenv("OPENAI_TEMPERATURE", "0.4"))
+        resp = client.chat.completions.create(
+            model=model,
+            temperature=temperature,
+            messages=[
+                {"role": "system", "content": "You are Friday, a concise, helpful assistant."},
+                {"role": "user", "content": message},
+            ],
+        )
+        return (resp.choices[0].message.content or "").strip()
+    except Exception:
+        # On any error, fall back so the app keeps working.
+        app.logger.exception("OpenAI call failed; falling back to dev echo.")
+        return _dev_echo(message)
+
+
+# ---------- pages ----------
+@app.get("/")
+def root():
+    return render_template("chat.html")
+
+
+@app.get("/chat")
+def chat_page():
+    return render_template("chat.html")
+
+
+# ---------- APIs ----------
+@app.post("/api/chat")
+def api_chat():
+    if not request.is_json:
+        return jsonify(error="Invalid request: expected JSON with 'message'"), 400
+    payload = request.get_json(silent=True) or {}
+    message = payload.get("message")
+    if not isinstance(message, str):
+        return jsonify(error="Invalid request: expected JSON with 'message'"), 400
+
+    reply = _chat_reply(message)
+    return jsonify(reply=reply)
+
+
+@app.post("/api/echo")
+def api_echo():
+    return jsonify(received=request.get_json(silent=True) or {})
+
+
+# --- debug + utility endpoints ---
+import os, re
 from flask import jsonify
 
+@app.get("/debug/health")
+def debug_health():
+    return jsonify(ok=True), 200
+
 @app.get("/debug/env")
-@app.get("/api/debug/env")
 def debug_env():
-    return jsonify({
-        "openai_key_present": bool(os.getenv("OPENAI_API_KEY")),
-        "flask_env": os.getenv("FLASK_ENV", "not_set"),
-    })
+    # redact anything that smells like a secret
+    safe = {
+        k: v
+        for k, v in os.environ.items()
+        if not re.search(r"(KEY|SECRET|TOKEN|PASS|PWD|PASSWORD|AUTH)", k, re.I)
+    }
+    extras = {
+        "FLASK_ENV": app.config.get("ENV"),
+        "FLASK_APP": os.getenv("FLASK_APP"),
+        "file_loaded": __file__,
+    }
+    return jsonify(env=safe, extras=extras), 200
 
-@app.get("/__routes")
-@app.get("/api/__routes")
+@app.get("/routes")
 def list_routes():
-    routes = sorted(str(r.rule) for r in app.url_map.iter_rules())
-    return jsonify({"routes": routes})
+    routes = sorted(rule.rule for rule in app.url_map.iter_rules())
+    return jsonify(routes=routes), 200
 
 
+@app.get("/healthz")
+def healthz():
+    return jsonify(ok=True)
 
-app = create_app()
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", "5000"))
+    app.run(host="0.0.0.0", port=port, debug=os.getenv("FLASK_ENV") == "development")
 
 
 
