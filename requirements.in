@@ -31,3 +31,5 @@ charset-normalizer==3.3.2
 # --- Windows quality-of-life (safe everywhere) ---
 colorama==0.4.6
 
+
+flask-cors>=4.0.0
