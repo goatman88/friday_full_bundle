@@ -103,6 +103,17 @@ def create_app() -> Flask:
             return jsonify(reply=reply)
         except Exception as e:
             return jsonify(error=f"OpenAI error: {e}"), 500
+# ==========================
+# Debug route for Render env
+# ==========================
+@app.route("/debug/env")
+def debug_env():
+    import os
+    return {
+        "openai_key_present": bool(os.getenv("OPENAI_API_KEY")),
+        "flask_env": os.getenv("FLASK_ENV", "not_set"),
+        "other_vars": {k: v for k, v in os.environ.items() if k.startswith("FLASK_")}
+    }
 
     @app.after_request
     def no_store(resp):
