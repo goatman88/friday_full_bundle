@@ -1,136 +1,41 @@
 # integrations/flask_app.py
 from __future__ import annotations
-
-import os
-from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template, request
+import os, json, logging
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 
-load_dotenv()
-
-TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
-
-app = Flask(__name__, template_folder=TEMPLATES_DIR)
+app = Flask(__name__)
 CORS(app)
 
-
-# ---------- helpers ----------
-def _safe_env():
-    """Return safe env info (no secrets)."""
-    return {
-        "openai_key_present": bool(os.getenv("OPENAI_API_KEY")),
-        "database_url_present": bool(os.getenv("DATABASE_URL")),
-        "FLASK_ENV": os.getenv("FLASK_ENV", "production"),
-        "file_loaded": __file__,
-    }
-
-
-def _dev_echo(text: str) -> str:
-    if text.strip().lower() == "ping":
-        return "Pong! How can I assist you today?"
-    return f"Friday: {text}"
-
-
-def _chat_reply(message: str) -> str:
-    """Use OpenAI if key is present; otherwise dev echo."""
-    if not os.getenv("OPENAI_API_KEY"):
-        return _dev_echo(message)
-
-    try:
-        from openai import OpenAI
-
-        client = OpenAI()
-        model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-        temperature = float(os.getenv("OPENAI_TEMPERATURE", "0.4"))
-        resp = client.chat.completions.create(
-            model=model,
-            temperature=temperature,
-            messages=[
-                {"role": "system", "content": "You are Friday, a concise, helpful assistant."},
-                {"role": "user", "content": message},
-            ],
-        )
-        return (resp.choices[0].message.content or "").strip()
-    except Exception:
-        # On any error, fall back so the app keeps working.
-        app.logger.exception("OpenAI call failed; falling back to dev echo.")
-        return _dev_echo(message)
-
-
-# ---------- pages ----------
-@app.get("/")
-def root():
-    return render_template("chat.html")
-
-
-@app.get("/chat")
-def chat_page():
-    return render_template("chat.html")
-
-
-# ---------- APIs ----------
-@app.post("/api/chat")
-def api_chat():
-    if not request.is_json:
-        return jsonify(error="Invalid request: expected JSON with 'message'"), 400
-    payload = request.get_json(silent=True) or {}
-    message = payload.get("message")
-    if not isinstance(message, str):
-        return jsonify(error="Invalid request: expected JSON with 'message'"), 400
-
-    reply = _chat_reply(message)
-    return jsonify(reply=reply)
-
-
-@app.post("/api/echo")
-def api_echo():
-    return jsonify(received=request.get_json(silent=True) or {})
-
-
-# ---- Debug & Inspection Routes ----
-import os, time
-from flask import jsonify
-
-REDACT_KEYS = ("KEY", "SECRET", "TOKEN", "PASS", "PWD", "PASSWORD", "AUTH")
-
 @app.get("/debug/health")
-def debug_health():
-    return jsonify(ok=True, ts=int(time.time())), 200
-
-@app.get("/debug/env")
-def debug_env():
-    safe = {}
-    for k, v in os.environ.items():
-        if any(x in k.upper() for x in REDACT_KEYS):
-            safe[k] = "****"
-        else:
-            # keep response small & safe
-            safe[k] = v if len(v) <= 200 else v[:200] + "…"
-    # a few helpful flags if you set them in Render
-    safe["FLASK_APP"] = os.environ.get("FLASK_APP", "")
-    safe["FLASK_ENV"] = os.environ.get("FLASK_ENV", "")
-    return jsonify(safe), 200
+def health():
+    return jsonify(ok=True)
 
 @app.get("/routes")
 def list_routes():
-    out = []
-    for rule in app.url_map.iter_rules():
-        # skip static noise if you prefer
-        if rule.endpoint == "static":
-            continue
-        out.append({
-            "rule": str(rule),
-            "methods": sorted(m for m in rule.methods if m not in {"HEAD","OPTIONS"}),
-            "endpoint": rule.endpoint
-        })
-    return jsonify(out), 200
-# ---- /Debug & Inspection Routes ----
+    routes = []
+    for r in app.url_map.iter_rules():
+        methods = sorted(m for m in r.methods if m in {"GET","POST","PUT","DELETE"})
+        routes.append({"rule": str(r), "endpoint": r.endpoint, "methods": methods})
+    # also log to stdout so you can see it in Render logs
+    app.logger.info("ROUTES: %s", json.dumps(routes))
+    return jsonify(routes)
 
+@app.post("/api/chat")
+def chat():
+    data = request.get_json(silent=False, force=True) or {}
+    msg = (data.get("message") or "").strip()
+    if not msg:
+        return jsonify(error="Invalid request: expected JSON with 'message'"), 400
+    # dev echo / fallback
+    return jsonify(reply="Pong! How can I assist you today?")
 
-
+# Optional local run (Render uses gunicorn)
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", "5000"))
-    app.run(host="0.0.0.0", port=port, debug=os.getenv("FLASK_ENV") == "development")
+    port = int(os.environ.get("PORT", "5000"))
+    app.run(host="0.0.0.0", port=port, debug=True)
+
+
 
 
 
