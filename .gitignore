@@ -7,3 +7,5 @@ __pycache__/
 
 # Ignore backup files
 *.bak
+
+integrations/app.py
