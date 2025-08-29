@@ -40,4 +40,3 @@ def build_app():
     return app
 
 app = build_app()
-print(">>> BOOTED app.py with commit:", APP_FINGERPRINT, flush=True)
