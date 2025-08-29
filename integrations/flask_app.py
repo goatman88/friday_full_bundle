@@ -1,9 +1,11 @@
 # integrations/flask_app.py
-from __future__ import annotations
-from flask import Flask, jsonify, request
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 
 def create_app() -> Flask:
     app = Flask(__name__)
+    # CORS for any /api/* request; open origins for testing
+    CORS(app, resources={r"/api/*": {"origins": "*"}})
 
     @app.get("/debug/health")
     def health():
@@ -13,37 +15,30 @@ def create_app() -> Flask:
     def list_routes():
         rules = []
         for r in app.url_map.iter_rules():
+            if r.endpoint == "static":
+                continue
             rules.append({
                 "endpoint": r.endpoint,
-                "methods": sorted(m for m in r.methods if m not in {"HEAD", "OPTIONS"}),
-                "rule": str(r)
+                "methods": sorted(list(r.methods)),
+                "rule": str(r),
             })
+        rules.sort(key=lambda x: x["rule"])
         return jsonify(rules), 200
 
     @app.post("/api/chat")
     def chat():
-        try:
-            body = request.get_json(force=True, silent=True) or {}
-            msg = str(body.get("message", "")).strip() or "ping"
-            # echo
-            return jsonify(reply=f"Pong! You said: {msg}"), 200
-        except Exception as e:
-            return jsonify(error=str(e)), 400
-
-    # ---- print URL map on boot so Render logs show routes ----
-    @app.before_first_request
-    def _print_routes():
-        app.logger.info("==== Registered routes ====")
-        for r in app.url_map.iter_rules():
-            app.logger.info("rule=%s  methods=%s  endpoint=%s",
-                            r.rule, sorted(m for m in r.methods if m not in {"HEAD","OPTIONS"}), r.endpoint)
-        app.logger.info("================================")
+        data = request.get_json(silent=True) or {}
+        msg = data.get("message")
+        if not isinstance(msg, str):
+            return jsonify(error="expected JSON with 'message'"), 400
+        # simple echo so you can verify POSTs
+        return jsonify(reply=f"Pong: {msg}"), 200
 
     return app
 
-# Gunicorn can import either `app` OR call factory.
-# Expose `app` for `integrations.flask_app:app`
+# Expose a concrete app instance so our Procfile can use it
 app = create_app()
+
 
 
 
