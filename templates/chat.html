@@ -1,138 +1,33 @@
-<!doctype html>
-<html lang="en">
+﻿<!DOCTYPE html>
+<html>
 <head>
-  <meta charset="utf-8">
+  <meta charset="utf-8" />
   <title>Friday AI</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1">
   <style>
-    :root {
-      --bg:#0b0c10; --panel:#13151a; --muted:#9aa3ad; --text:#e8edf2; --accent:#86c5ff;
-      --ok:#3ac779; --err:#ff6b6b; --ring:#25425e;
-    }
-    * { box-sizing:border-box; }
-    body {
-      margin:0; background:linear-gradient(180deg,#0b0c10,#0e1218 40%,#0b0c10);
-      color:var(--text); font:16px/1.4 system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
-      min-height:100vh; display:grid; place-items:center; padding:24px;
-    }
-    .card {
-      width:min(860px,100%); background:rgba(19,21,26,.85); backdrop-filter:blur(6px);
-      border:1px solid #1f2730; border-radius:18px; box-shadow:0 20px 60px rgba(0,0,0,.45);
-      overflow:hidden;
-    }
-    header { padding:22px 22px 10px; }
-    h1 { margin:0; font-size:28px; }
-    .sub { color:var(--muted); font-size:13px; margin-top:6px; }
-    .log { height:48vh; max-height:520px; overflow:auto; padding:18px 22px 0 22px; }
-    .bubble { margin:10px 0; padding:12px 14px; border-radius:14px; width:fit-content; max-width:90%; }
-    .you { background:#1b2330; border:1px solid #293346; }
-    .bot { background:#141a22; border:1px solid #222b36; }
-    .ts { display:block; color:var(--muted); font-size:12px; margin-bottom:4px; }
-    .error { border-color:#43252b; background:#29181b; color:#ffd8d8; }
-    form { display:flex; gap:10px; padding:16px 16px 18px; background:#0f141b; border-top:1px solid #1b2430; }
-    input[type=text] {
-      flex:1; padding:12px 14px; border-radius:12px; border:1px solid #273140; outline:none;
-      background:#0c1117; color:var(--text); transition:box-shadow .15s,border-color .15s;
-    }
-    input[type=text]:focus { border-color:var(--accent); box-shadow:0 0 0 4px var(--ring); }
-    button {
-      padding:12px 18px; border-radius:12px; border:1px solid #213448; background:#0e1e2c;
-      color:var(--text); cursor:pointer; transition:transform .08s ease, background .15s,border-color .15s;
-    }
-    button:hover { background:#123047; }
-    button:active { transform:translateY(1px); }
-    .hint { color:var(--muted); font-size:12px; padding:0 22px 20px; }
-    .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; margin-left:6px; }
-    .ok { background:#0f2a1b; color:#9dffbe; border:1px solid #1c6a3c; }
-    .no { background:#2a1010; color:#ffc1c1; border:1px solid #6a1c1c; }
-    .small { font-size:12px; }
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:2rem;max-width:760px}
+    #out{white-space:pre-wrap;border:1px solid #ddd;padding:1rem;border-radius:8px;min-height:6rem}
+    button{padding:.5rem 1rem;border-radius:8px;border:1px solid #ccc;cursor:pointer}
+    input{width:70%;padding:.5rem;border-radius:8px;border:1px solid #ccc}
   </style>
 </head>
 <body>
-  <div class="card">
-    <header>
-      <h1>Friday AI <span id="modePill" class="pill small">checking…</span></h1>
-      <div id="sub" class="sub">Say something…</div>
-    </header>
+  <h2>Ask Friday</h2>
+  <p><input id="msg" placeholder="Type a message..." />
+     <button onclick="send()">Send</button></p>
+  <div id="out"></div>
 
-    <div id="log" class="log" aria-live="polite"></div>
-
-    <form id="chatForm" autocomplete="off">
-      <input id="msg" type="text" placeholder="Type a message" />
-      <button type="submit">Send</button>
-    </form>
-    <div class="hint">Posts to <code>/api/chat</code>. If no OpenAI key is set, replies will say <em>(dev echo)</em>.</div>
-  </div>
-
-<script>
-(function () {
-  const log = document.getElementById('log');
-  const form = document.getElementById('chatForm');
-  const input = document.getElementById('msg');
-  const modePill = document.getElementById('modePill');
-  const sub = document.getElementById('sub');
-
-  const ts = () => new Date().toLocaleTimeString();
-  const add = (html, cls='bot') => {
-    const div = document.createElement('div');
-    div.className = `bubble ${cls}`;
-    div.innerHTML = `<span class="ts">${ts()}</span>${html}`;
-    log.appendChild(div);
-    log.scrollTop = log.scrollHeight;
-  };
-
-  async function checkMode() {
-    try {
-      const r = await fetch('/__meta__/debug');
-      const data = await r.json();
-      const on = !!(data?.env?.openai_key_present);
-      modePill.textContent = on ? 'model: ON' : 'model: dev echo';
-      modePill.className = `pill small ${on ? 'ok' : 'no'}`;
-      sub.textContent = on ? 'Connected to model.' : 'Dev echo mode (no key detected).';
-    } catch {
-      modePill.textContent = 'mode: unknown';
-      modePill.className = 'pill small no';
-      sub.textContent = 'Debug endpoint missing; continuing.';
-    }
-  }
-  checkMode();
-
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const message = input.value.trim();
-    if (!message) return;
-    add(`You<br>${escapeHtml(message)}`, 'you');
-    input.value = '';
-    try {
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+  <script>
+    async function send() {
+      const message = document.getElementById("msg").value.trim();
+      if (!message) return;
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message })
       });
-
-      const contentType = res.headers.get('content-type') || '';
-      if (!res.ok) {
-        const text = await res.text();
-        add(`Error: HTTP ${res.status}<br><code>${escapeHtml(text)}</code>`, 'bubble error');
-        return;
-      }
-      if (contentType.includes('application/json')) {
-        const data = await res.json();
-        add(escapeHtml(data.reply ?? JSON.stringify(data)));
-      } else {
-        const text = await res.text();
-        add(escapeHtml(text));
-      }
-    } catch (err) {
-      add(`Network error<br><code>${escapeHtml(String(err))}</code>`, 'bubble error');
+      const data = await res.json();
+      document.getElementById("out").textContent = data.reply ?? JSON.stringify(data, null, 2);
     }
-  });
-
-  function escapeHtml(s) {
-    return s.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-  }
-})();
-</script>
+  </script>
 </body>
 </html>
-
