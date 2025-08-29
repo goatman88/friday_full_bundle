@@ -1,6 +1,9 @@
-.venv/
-venv/
+# Ignore Python cache
 __pycache__/
 *.pyc
-.env
-.env.*
+
+# Ignore virtual environment
+.venv/
+
+# Ignore backup files
+*.bak
