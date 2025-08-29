@@ -1,56 +1,201 @@
 <!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <title>Friday Chat</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <style>
-      body { font-family: system-ui, Arial, sans-serif; margin: 24px; }
-      #chatBox div { margin: 6px 0; }
-      #chatBox b { display: inline-block; min-width: 70px; }
-      #send { margin-left: 8px; }
-    </style>
-  </head>
-  <body>
-    <h2>Friday</h2>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ title or "Friday AI" }}</title>
+  <style>
+    :root{
+      --bg:#0b1020;
+      --panel:#121a34;
+      --accent:#7dd3fc;
+      --accent-2:#a78bfa;
+      --text:#e6eaf5;
+      --muted:#a3acc2;
+      --error:#fda4af;
+      --ok:#86efac;
+      --ring: 0 0 0 3px rgba(125,211,252,.25);
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{
+      margin:0; color:var(--text); background:
+      radial-gradient(1200px 800px at 110% -10%, rgba(124,58,237,.25), transparent 60%),
+      radial-gradient(900px 700px at -10% -20%, rgba(14,165,233,.25), transparent 55%),
+      var(--bg);
+      font: 16px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial, "Apple Color Emoji","Segoe UI Emoji";
+      display:flex; align-items:center; justify-content:center; padding:28px;
+    }
+    .card{
+      width:min(900px, 100%);
+      background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.025));
+      border:1px solid rgba(255,255,255,.08);
+      border-radius:20px;
+      box-shadow:0 10px 35px rgba(0,0,0,.35);
+      overflow:hidden;
+      backdrop-filter: blur(6px);
+    }
+    .head{
+      display:flex; align-items:center; gap:12px;
+      padding:18px 20px; border-bottom:1px solid rgba(255,255,255,.08);
+      background:radial-gradient(120% 280% at 0% 0%, rgba(125,211,252,.12), rgba(167,139,250,.10) 40%, transparent);
+    }
+    .logo{
+      width:36px;height:36px;border-radius:10px;
+      background: conic-gradient(from 220deg, var(--accent), var(--accent-2));
+      box-shadow:0 0 0 2px rgba(255,255,255,.08) inset;
+    }
+    .title{font-weight:700; letter-spacing:.3px}
+    .commit{margin-left:auto; color:var(--muted); font-size:13px}
+    .body{display:grid; grid-template-rows: 1fr auto; height:65vh}
+    .messages{padding:16px; overflow:auto; background:linear-gradient(180deg, rgba(0,0,0,.08), transparent 20%);}
+    .bubble{
+      max-width:78%; padding:12px 14px; border-radius:14px; margin:10px 0;
+      box-shadow:0 8px 20px rgba(0,0,0,.18);
+      white-space:pre-wrap; word-break:break-word;
+    }
+    .me{margin-left:auto; background:#1b2751; border:1px solid rgba(125,211,252,.25)}
+    .ai{background:#151e3d; border:1px solid rgba(167,139,250,.22)}
+    .sys{background:#13211a; border:1px dashed rgba(134,239,172,.35); color:var(--ok)}
+    .err{background:#2a1520; border:1px dashed rgba(253,164,175,.45); color:var(--error)}
+    .input{
+      display:flex; gap:10px; padding:14px; border-top:1px solid rgba(255,255,255,.08);
+      background:linear-gradient(0deg, rgba(0,0,0,.12), transparent);
+    }
+    textarea{
+      flex:1; resize:none; height:48px; max-height:160px;
+      padding:12px 14px; border-radius:12px; color:var(--text);
+      background:#0e1530; border:1px solid rgba(255,255,255,.08);
+      outline:none; transition:border .15s, box-shadow .15s;
+    }
+    textarea:focus{border-color:rgba(125,211,252,.45); box-shadow:var(--ring)}
+    button{
+      height:48px; padding:0 18px; border-radius:12px; border:0; cursor:pointer; color:#0a0f1e;
+      background:linear-gradient(135deg, var(--accent), var(--accent-2));
+      font-weight:700; letter-spacing:.2px;
+      box-shadow: 0 10px 22px rgba(124,58,237,.35), 0 2px 0 rgba(255,255,255,.1) inset;
+      transition: transform .05s ease, box-shadow .15s ease, opacity .15s ease;
+    }
+    button:disabled{opacity:.55; cursor:not-allowed; box-shadow:none}
+    .row{display:flex; align-items:center; gap:8px}
+    .hint{color:var(--muted); font-size:13px}
+    .kbd{border:1px solid rgba(255,255,255,.2); border-bottom-width:2px; padding:.5px 6px; border-radius:6px}
+    .dots{display:inline-flex; gap:4px; margin-left:6px}
+    .dots span{width:6px;height:6px;border-radius:999px;background:rgba(255,255,255,.35); animation:b 1.2s infinite ease-in-out}
+    .dots span:nth-child(2){animation-delay:.15s}
+    .dots span:nth-child(3){animation-delay:.3s}
+    @keyframes b{0%,80%,100%{opacity:.2; transform:translateY(0)} 40%{opacity:1; transform:translateY(-3px)}}
+    .footer{padding:10px 16px; text-align:right; color:var(--muted); font-size:12px}
+    a{color:var(--accent)}
+    .row .hint b{color:#cbd5e1}
+  </style>
+</head>
+<body>
+  <main class="card">
+    <header class="head">
+      <div class="logo" aria-hidden="true"></div>
+      <div class="title">Friday AI</div>
+      <div class="commit">/chat • {{ commit or "" }}</div>
+    </header>
 
-    <div id="chatBox"></div>
+    <section class="body">
+      <div id="messages" class="messages">
+        <div class="bubble ai">Welcome! Ask me anything.</div>
+      </div>
 
-    <div style="margin-top:12px;">
-      <input id="userInput" placeholder="Type a message..." style="width:70%;" />
-      <button id="send" onclick="sendMessage()">Send</button>
+      <form id="form" class="input">
+        <textarea id="text" placeholder="Type a message…" autocomplete="off"></textarea>
+        <button id="send" type="submit" title="Send (Ctrl/⌘+Enter)">Send</button>
+      </form>
+    </section>
+
+    <div class="footer">
+      <span class="hint">
+        Tip: Press <span class="kbd">Ctrl/⌘</span> + <span class="kbd">Enter</span> to send.
+      </span>
     </div>
+  </main>
 
-    <script>
-      async function sendMessage() {
-        const inputEl = document.getElementById("userInput");
-        const chatBox = document.getElementById("chatBox");
-        const text = (inputEl.value || "").trim();
-        if (!text) return;
+  <script>
+  (() => {
+    const el = s => document.querySelector(s);
+    const messages = el('#messages');
+    const form = el('#form');
+    const input = el('#text');
+    const sendBtn = el('#send');
 
-        chatBox.innerHTML += `<div><b>You:</b> ${text}</div>`;
-        inputEl.value = "";
+    const API = `${location.origin}/api/chat`; // relative to same origin
 
-        try {
-          const res = await fetch("/api/chat", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ message: text })
-          });
+    const add = (text, cls='ai') => {
+      const b = document.createElement('div');
+      b.className = `bubble ${cls}`;
+      b.textContent = text;
+      messages.appendChild(b);
+      messages.scrollTop = messages.scrollHeight;
+      return b;
+    };
 
-          const data = await res.json();
-          if (data.reply) {
-            chatBox.innerHTML += `<div><b>Friday:</b> ${data.reply}</div>`;
-          } else {
-            chatBox.innerHTML += `<div><b>Error:</b> ${data.error || "Unknown error"}</div>`;
-          }
-        } catch (err) {
-          chatBox.innerHTML += `<div><b>Error:</b> ${err}</div>`;
-        }
+    const addTyping = () => {
+      const b = document.createElement('div');
+      b.className = 'bubble ai';
+      b.innerHTML = `Thinking <span class="dots"><span></span><span></span><span></span></span>`;
+      messages.appendChild(b);
+      messages.scrollTop = messages.scrollHeight;
+      return b;
+    };
+
+    const setBusy = (v) => {
+      input.disabled = v; sendBtn.disabled = v;
+      if (v) sendBtn.setAttribute('aria-busy','true'); else sendBtn.removeAttribute('aria-busy');
+    };
+
+    const post = async (message) => {
+      const res = await fetch(API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message })
+      });
+      const isJson = res.headers.get('content-type')?.includes('application/json');
+      const data = isJson ? await res.json() : { error: 'not_json', detail: await res.text() };
+      if (!res.ok) throw Object.assign(new Error('HTTP '+res.status), {data, status: res.status});
+      return data;
+    };
+
+    const send = async (message) => {
+      if (!message.trim()) return;
+      add(message, 'me');
+      input.value = '';
+      const typing = addTyping();
+      setBusy(true);
+      try {
+        const data = await post(message);
+        typing.remove();
+        if (data.reply) add(data.reply, 'ai');
+        else if (data.error) add(`Error: ${data.error}\n${data.detail||''}`, 'err');
+        else add('Unexpected response from server.', 'err');
+      } catch (err) {
+        typing.remove();
+        const detail = err?.data?.detail || err.message || 'Network error';
+        add(`Request failed. ${detail}\nCheck /routes and /debug/health.`, 'err');
+      } finally {
+        setBusy(false);
+        input.focus();
       }
-    </script>
-  </body>
+    };
+
+    form.addEventListener('submit', e => { e.preventDefault(); send(input.value); });
+    input.addEventListener('keydown', e => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+        e.preventDefault(); form.requestSubmit();
+      }
+    });
+  })();
+  </script>
+</body>
 </html>
+
+
+
 
 
 
