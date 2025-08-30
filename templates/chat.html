@@ -43,6 +43,8 @@
     button.warn{background:#ef4444}
     button:hover{opacity:.92}
     .themeToggle{cursor:pointer; margin-left:10px; font-size:13px; color:var(--muted)}
+    .row{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
+    .hint{font-size:12px; color:var(--muted)}
   </style>
 </head>
 <body>
@@ -62,15 +64,13 @@
     </div>
   </header>
 
-  <div id="log" class="log"></div>
-
   <div class="meta">
-    <div>
-      <label><input id="stream" type="checkbox" checked> Stream</label>
+    <div class="row">
+      <label class="row"><input id="stream" type="checkbox" checked> Stream</label>
       · Model: <select id="model"></select>
       <span id="commit" style="margin-left:8px"></span>
     </div>
-    <div style="display:flex; gap:8px; align-items:center;">
+    <div class="row">
       <span id="cidLabel" class="pill"></span>
       <button id="newCid" class="secondary">New session</button>
       <button id="clearChat" class="secondary" title="Clear UI and server history for this session">Clear chat</button>
@@ -78,6 +78,8 @@
       <button id="purgeAll" class="warn" title="Admin: purge ALL sessions">Clear ALL</button>
     </div>
   </div>
+
+  <div id="log" class="log"></div>
 
   <footer>
     <input id="msg" type="text" placeholder="Type a message… (Enter to send)" />
@@ -100,15 +102,7 @@
   const purgeAllBtn = document.querySelector("#purgeAll");
   const streamChk = document.querySelector("#stream");
 
-  const reply = await fetch(`${BASE}/api/chat?cid=${cid}`, {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ message: "Hello Friday!" })
-}).then(r => r.json());
-console.log(reply);
-
-
-  // --- Theme persistence ---
+  /* ========== THEME ========== */
   function loadTheme() {
     const t = localStorage.getItem("theme") || "dark";
     appRoot.setAttribute("data-theme", t);
@@ -120,7 +114,7 @@ console.log(reply);
     localStorage.setItem("theme", next);
   }
 
-  // --- Session
+  /* ========== SESSION (CID) ========== */
   function getCid(){
     let c = localStorage.getItem("cid");
     if(!c){ c = crypto.randomUUID(); localStorage.setItem("cid", c); }
@@ -132,7 +126,7 @@ console.log(reply);
     cidLabel.textContent = `cid: ${c.slice(0,8)}…`;
   }
 
-  // --- UI helpers
+  /* ========== UI HELPERS ========== */
   function append(role, text){
     const b = document.createElement("div");
     b.className = `bubble ${role==="user"?"u":"a"}`;
@@ -142,7 +136,7 @@ console.log(reply);
   }
   function clearUI(){ log.innerHTML = ""; }
 
-  // --- Models
+  /* ========== MODELS ========== */
   async function loadModels(){
     try{
       const r = await fetch(`${base}/api/models`);
@@ -167,77 +161,81 @@ console.log(reply);
     }catch(e){ append("assistant", "Model switch error: " + e.message); }
   };
 
-  const url = new URL(`${BASE}/api/chat/stream`);
-url.searchParams.set("cid", cid);
-url.searchParams.set("q", "stream plz");
-const resp = await fetch(url);
-const reader = resp.body.getReader();
-const dec = new TextDecoder();
-let acc = "";
-for(;;){
-  const {value, done} = await reader.read();
-  if (done) break;
-  const chunk = dec.decode(value);
-  chunk.split("\n\n").forEach(line=>{
-    if(line.startsWith("data: ")){
-      const obj = JSON.parse(line.slice(6));
-      if(obj.delta){ acc += obj.delta; }
-      if(obj.done){ console.log("DONE", acc); }
+  /* ========== CORE: NON-STREAM sendMsg() ========== */
+  async function sendMsg(cid, text){
+    const r = await fetch(`${base}/api/chat?cid=${encodeURIComponent(cid)}`,{
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({ message: text })
+    });
+    const j = await r.json();
+    if(j.cid && j.cid !== cid) setCid(j.cid);
+    return j; // { reply, cid }
+  }
+
+  /* ========== CORE: STREAMING sendStream() ========== */
+  async function sendStream(cid, text, onDelta, onDone){
+    const url = new URL(`${base}/api/chat/stream`);
+    url.searchParams.set("cid", cid);
+    url.searchParams.set("q", text);
+    const resp = await fetch(url);
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let acc = "";
+    while(true){
+      const {value, done} = await reader.read();
+      if(done) break;
+      const chunk = dec.decode(value);
+      chunk.split("\n\n").forEach(line=>{
+        if(line.startsWith("data: ")){
+          try{
+            const obj = JSON.parse(line.slice(6));
+            if(obj.delta){ acc += obj.delta; onDelta && onDelta(obj.delta, acc); }
+            if(obj.done){ onDone && onDone(acc); }
+          }catch{}
+        }
+      });
     }
-  });
-}
+  }
 
-
-  // --- Send
+  /* ========== SEND BUTTON HANDLER ========== */
   async function send(){
     const text = msg.value.trim(); if(!text) return;
     append("user", text); msg.value = "";
     const cid = getCid();
 
     if(streamChk.checked){
-      const url = new URL(`${base}/api/chat/stream`);
-      url.searchParams.set("cid", cid);
-      url.searchParams.set("q", text);
-      const resp = await fetch(url);
-      const reader = resp.body.getReader();
-      let acc = "", streamingDiv = null;
-      while(true){
-        const {value, done} = await reader.read(); if(done) break;
-        const chunk = new TextDecoder().decode(value);
-        chunk.split("\n\n").forEach(line=>{
-          if(line.startsWith("data: ")){
-            try{
-              const obj = JSON.parse(line.slice(6));
-              if(obj.delta){
-                acc += obj.delta;
-                if(!streamingDiv){ streamingDiv = document.createElement("div"); streamingDiv.className = "bubble a"; log.appendChild(streamingDiv); }
-                streamingDiv.textContent = acc; log.scrollTop = log.scrollHeight;
-              }
-              if(obj.done){ streamingDiv = null; loadModels(); }
-            }catch{}
-          }
-        });
-      }
+      // streaming path
+      let streamingDiv = document.createElement("div");
+      streamingDiv.className = "bubble a";
+      streamingDiv.textContent = "…";
+      log.appendChild(streamingDiv); log.scrollTop = log.scrollHeight;
+
+      await sendStream(
+        cid,
+        text,
+        (_delta, acc) => { streamingDiv.textContent = acc; log.scrollTop = log.scrollHeight; },
+        (_final) => { /* already in DOM via acc */ }
+      );
     } else {
-      const r = await fetch(`${base}/api/chat?cid=${cid}`,{
-        method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ message: text })
-      });
-      const j = await r.json();
-      if(j.cid && j.cid !== cid) setCid(j.cid);
-      append("assistant", j.reply ?? JSON.stringify(j));
-      loadModels();
+      // non-stream path
+      try{
+        const j = await sendMsg(cid, text);
+        append("assistant", j.reply ?? JSON.stringify(j));
+      }catch(e){
+        append("assistant", "Request failed: " + e.message);
+      }
     }
   }
 
-  // --- Links
+  /* ========== NAV LINKS ========== */
   document.querySelector("#routesLink").onclick = async e => { e.preventDefault(); append("assistant", JSON.stringify(await (await fetch(base+"/routes")).json(), null, 2)); };
   document.querySelector("#healthLink").onclick = async e => { e.preventDefault(); const j = await (await fetch(base+"/debug/health")).json(); commitSpan.textContent = j.commit ? "commit " + j.commit : ""; append("assistant", JSON.stringify(j, null, 2)); };
   document.querySelector("#statsLink").onclick  = async e => { e.preventDefault(); append("assistant", JSON.stringify(await (await fetch(base+"/api/stats")).json(), null, 2)); };
   document.querySelector("#historyLink").onclick= async e => { e.preventDefault(); append("assistant", JSON.stringify(await (await fetch(base+`/api/history?cid=${getCid()}`)).json(), null, 2)); };
   document.querySelector("#exportLink").onclick = async e => { e.preventDefault(); append("assistant", JSON.stringify(await (await fetch(base+`/api/history/export?cid=${getCid()}`)).json(), null, 2)); };
 
-  // --- New session / Clear chat / Download / Purge all
+  /* ========== ACTION BUTTONS ========== */
   newCidBtn.onclick = () => { setCid(crypto.randomUUID()); clearUI(); append("assistant", "Started fresh session."); };
   clearBtn.onclick = async () => {
     const cid = getCid();
@@ -279,7 +277,7 @@ for(;;){
     }
   };
 
-  // --- Boot
+  /* ========== BOOT ========== */
   (function boot(){
     loadTheme();
     getCid(); loadModels();
