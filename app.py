@@ -63,20 +63,18 @@ def _sqlite_init():
     _sqlite.commit()
 
 def _use_sqlite() -> bool:
-    return (_redis is None)  # we prefer Redis if available
+    return (_redis is None)
 
-# In-memory (last fallback)
+# In-memory fallback
 _conversations: Dict[str, List[Dict[str, Any]]] = {}
 
-# Unified helpers (same signature regardless of backend)
+# Unified helpers across backends
 def _rkey(cid: str) -> str: return f"conv:{cid}"
 
 def _load_thread(cid: str) -> List[Dict[str, Any]]:
-    # Redis
     if _redis:
         raw = _redis.get(_rkey(cid))
         return json.loads(raw) if raw else []
-    # SQLite
     if _use_sqlite():
         _sqlite_init()
         cur = _sqlite.execute(
@@ -84,25 +82,21 @@ def _load_thread(cid: str) -> List[Dict[str, Any]]:
         )
         rows = cur.fetchall()
         return [{"role": r[0], "content": r[1], "ts": r[2]} for r in rows]
-    # Memory
     return _conversations.get(cid, [])
 
 def _save_thread(cid: str, msgs: List[Dict[str, Any]]) -> None:
-    # Redis
     if _redis:
         _redis.set(_rkey(cid), json.dumps(msgs))
         return
-    # SQLite
     if _use_sqlite():
         _sqlite_init()
-        with _sqlite:  # transaction
+        with _sqlite:  # tx
             _sqlite.execute("DELETE FROM messages WHERE cid = ?", (cid,))
             _sqlite.executemany(
                 "INSERT INTO messages (cid, role, content, ts) VALUES (?, ?, ?, ?)",
                 [(cid, m["role"], m["content"], float(m.get("ts", time.time()))) for m in msgs]
             )
         return
-    # Memory
     _conversations[cid] = msgs
 
 def _delete_thread(cid: str) -> None:
@@ -147,6 +141,30 @@ def _purge_all() -> Tuple[int, List[str]]:
     purged = list(_conversations.keys())
     _conversations.clear()
     return count, purged
+
+def _put_many(convs: Dict[str, List[Dict[str, Any]]], merge: bool) -> Tuple[int, int]:
+    """
+    Import/restore many conversations.
+    Returns: (num_sessions_written, num_messages_written)
+    """
+    sessions = 0
+    messages = 0
+    if not merge:
+        _purge_all()
+    for cid, msgs in convs.items():
+        # normalize + validate
+        cleaned = []
+        for m in msgs:
+            role = (m.get("role") or "").strip()
+            if role not in ("user", "assistant", "system"):
+                continue
+            content = str(m.get("content", ""))
+            ts = float(m.get("ts", time.time()))
+            cleaned.append({"role": role, "content": content, "ts": ts})
+        _save_thread(cid, cleaned)
+        sessions += 1
+        messages += len(cleaned)
+    return sessions, messages
 
 # ---------------- Optional rate limiting (auto if installed)
 _limiter = None
@@ -380,7 +398,7 @@ def chat_stream():
 
     return Response(gen(), mimetype="text/event-stream")
 
-# ---------------- History (get/export/clear)
+# ---------------- History (get/export/clear/import)
 @app.get("/api/history")
 def get_history():
     cid = _cid_from_request()
@@ -417,6 +435,31 @@ def export_history_file():
     resp.headers["Content-Type"] = "application/json; charset=utf-8"
     resp.headers["Content-Disposition"] = f'attachment; filename="friday_{cid[:8]}_{int(time.time())}.json"'
     return resp
+
+@app.post("/api/history/import")
+def import_history():
+    """
+    Replace a single session (identified by ?cid=... or X-Client-Id) with messages provided.
+    Body: { "messages": [ {role, content, ts?}, ... ] }
+    """
+    cid = _cid_from_request()
+    data = request.get_json(silent=True) or {}
+    msgs = data.get("messages")
+    if not isinstance(msgs, list):
+        return jsonify({"error": "invalid_payload", "detail": "messages must be a list"}), 400
+    # light guardrails
+    if len(msgs) > 2000:
+        return jsonify({"error": "too_many_messages"}), 413
+    cleaned = []
+    for m in msgs:
+        role = (m.get("role") or "").strip()
+        if role not in ("user", "assistant", "system"):
+            continue
+        content = str(m.get("content", ""))
+        ts = float(m.get("ts", time.time()))
+        cleaned.append({"role": role, "content": content, "ts": ts})
+    _save_thread(cid, cleaned)
+    return jsonify({"ok": True, "cid": cid, "count": len(cleaned)})
 
 @app.delete("/api/history")
 def clear_history():
@@ -457,6 +500,73 @@ def admin_purge_all():
     count, purged = _purge_all()
     return jsonify({"ok": True, "purged_count": count, "purged": purged})
 
+@app.get("/api/admin/backup")
+def admin_backup():
+    """Return all sessions as JSON (token required)."""
+    gate = _require_admin()
+    if gate: return gate
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for cid in _all_cids():
+        out[cid] = _load_thread(cid)
+    return jsonify({
+        "ok": True,
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "model": ACTIVE_MODEL,
+        "commit": COMMIT,
+        "sessions": out,
+        "count": len(out),
+        "messages_total": sum(len(v) for v in out.values()),
+    })
+
+@app.get("/api/admin/backup_file")
+def admin_backup_file():
+    """Downloadable backup of all sessions as a JSON file (token required)."""
+    gate = _require_admin()
+    if gate: return gate
+    payload = (admin_backup().json if hasattr(admin_backup(), "json") else None)
+    if payload is None:
+        # fallback: rebuild payload
+        out: Dict[str, List[Dict[str, Any]]] = {}
+        for cid in _all_cids():
+            out[cid] = _load_thread(cid)
+        payload = {
+            "ok": True,
+            "generated_at": datetime.utcnow().isoformat() + "Z",
+            "model": ACTIVE_MODEL,
+            "commit": COMMIT,
+            "sessions": out,
+        }
+    blob = json.dumps(payload, ensure_ascii=False, indent=2)
+    resp = make_response(blob)
+    resp.headers["Content-Type"] = "application/json; charset=utf-8"
+    resp.headers["Content-Disposition"] = f'attachment; filename="friday_backup_{int(time.time())}.json"'
+    return resp
+
+@app.post("/api/admin/restore")
+def admin_restore():
+    """
+    Restore from a backup JSON.
+    Body: { "sessions": { "<cid>": [ {role, content, ts?}, ... ], ... }, "merge": true|false }
+    If merge=false (default), existing data is purged first.
+    """
+    gate = _require_admin()
+    if gate: return gate
+    data = request.get_json(silent=True) or {}
+    sessions = data.get("sessions")
+    merge = bool(data.get("merge", False))
+    if not isinstance(sessions, dict):
+        return jsonify({"error": "invalid_payload", "detail": "sessions must be an object"}), 400
+
+    # size guardrails (keep it sane)
+    if len(sessions) > 5000:
+        return jsonify({"error": "too_many_sessions"}), 413
+    total_msgs = sum(len(v) for v in sessions.values() if isinstance(v, list))
+    if total_msgs > 200000:
+        return jsonify({"error": "too_many_messages"}), 413
+
+    written_sessions, written_msgs = _put_many(sessions, merge=merge)
+    return jsonify({"ok": True, "merge": merge, "sessions_written": written_sessions, "messages_written": written_msgs})
+
 # ---------------- Static passthrough (protected by Basic Auth if configured)
 @app.get("/static/<path:filename>")
 @requires_basic_auth
@@ -481,6 +591,7 @@ def method_not_allowed(_):
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=True)
+
 
 
 
