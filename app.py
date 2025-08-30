@@ -1,48 +1,50 @@
 # app.py
-import os, json, time, uuid, typing
+import os, json, time, uuid
 from datetime import datetime
-from flask import Flask, jsonify, request, render_template, send_from_directory, Response
+from typing import List, Dict, Any, Optional
+
+from flask import (
+    Flask, jsonify, request, render_template, send_from_directory, Response
+)
 from flask_cors import CORS
 
-# ---------- App setup
+# ---------------- App
 app = Flask(__name__, static_folder="static", template_folder="templates")
 CORS(app)
 
-COMMIT = (os.getenv("RENDER_GIT_COMMIT", "")[:7] or os.getenv("COMMIT", "")) or "dev"
+COMMIT = (os.getenv("RENDER_GIT_COMMIT", "")[:7] or os.getenv("COMMIT", "") or "dev")
 OPENAI_KEY = os.getenv("OPENAI_API_KEY", "")
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+AVAILABLE_MODELS = ["gpt-4o", "gpt-4o-mini", "gpt-4.1-mini", "o3-mini"]
+ACTIVE_MODEL = DEFAULT_MODEL if DEFAULT_MODEL in AVAILABLE_MODELS else "gpt-4o-mini"
 
-_active_model = DEFAULT_MODEL
-_available_models = ["gpt-4o", "gpt-4o-mini", "gpt-4.1-mini", "o3-mini"]
-
-# ---------- Optional persistence (Redis) ----------
+# ---------------- Optional Redis persistence (falls back to memory)
 _redis = None
 try:
     from redis import Redis
     if os.getenv("REDIS_URL"):
         _redis = Redis.from_url(os.getenv("REDIS_URL"), decode_responses=True)
 except Exception:
-    _redis = None  # safe fallback
+    _redis = None  # fine, we’ll just use memory
 
 def _rkey(cid: str) -> str:
     return f"conv:{cid}"
 
-def _load_thread(cid: str) -> list[dict]:
+def _load_thread(cid: str) -> List[Dict[str, Any]]:
     if _redis:
         raw = _redis.get(_rkey(cid))
         return json.loads(raw) if raw else []
     return _conversations.get(cid, [])
 
-def _save_thread(cid: str, msgs: list[dict]) -> None:
+def _save_thread(cid: str, msgs: List[Dict[str, Any]]) -> None:
     if _redis:
         _redis.set(_rkey(cid), json.dumps(msgs))
     else:
         _conversations[cid] = msgs
 
-def _all_cids() -> list[str]:
+def _all_cids() -> List[str]:
     if _redis:
-        # SCAN for conv:* (cheap and safe)
-        cids = []
+        cids: List[str] = []
         cursor = 0
         while True:
             cursor, keys = _redis.scan(cursor=cursor, match="conv:*", count=500)
@@ -52,10 +54,10 @@ def _all_cids() -> list[str]:
         return cids
     return list(_conversations.keys())
 
-# In-memory fallback store
-_conversations: dict[str, list[dict]] = {}
+# in-memory fallback
+_conversations: Dict[str, List[Dict[str, Any]]] = {}
 
-# ---------- Optional rate limiting ----------
+# ---------------- Optional rate limiting (auto if installed)
 _limiter = None
 try:
     from flask_limiter import Limiter
@@ -71,17 +73,22 @@ def limit(rule: str):
         return fn
     return deco
 
-# ---------- Security headers (mix of step 7/8)
+# ---------------- Security headers
 @app.after_request
 def _secure(resp):
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["X-Frame-Options"] = "DENY"
     resp.headers["Referrer-Policy"] = "no-referrer"
-    # Keep CSP minimal; expand if you add CDNs
-    resp.headers["Content-Security-Policy"] = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;"
+    # If you later add CDNs/fonts, extend this CSP accordingly
+    resp.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "connect-src 'self';"
+    )
     return resp
 
-# ---------- UI pages
+# ---------------- Pages
 @app.get("/")
 def home():
     return render_template("chat.html", title="Friday AI")
@@ -90,7 +97,7 @@ def home():
 def chat_page():
     return render_template("chat.html", title="Friday AI")
 
-# ---------- Introspection & health
+# ---------------- Introspection
 @app.get("/routes")
 def routes():
     table = []
@@ -104,33 +111,35 @@ def routes():
 
 @app.get("/debug/health")
 def health():
-    return jsonify({"ok": True, "commit": COMMIT})
+    return jsonify({"ok": True, "commit": COMMIT, "model": ACTIVE_MODEL})
 
-# ---------- Model controls
+# ---------------- Models
 @app.get("/api/models")
 def list_models():
-    return jsonify({"active": _active_model, "available": _available_models})
+    return jsonify({"active": ACTIVE_MODEL, "available": AVAILABLE_MODELS})
 
 @app.post("/api/model")
 def set_model():
-    global _active_model
+    global ACTIVE_MODEL
     data = request.get_json(silent=True) or {}
-    want = str(data.get("model", DEFAULT_MODEL))
-    if want not in _available_models:
-        return jsonify({"error": "unknown_model", "available": _available_models}), 400
-    _active_model = want
-    return jsonify({"ok": True, "active": _active_model})
+    name = str(data.get("model", "")).strip()
+    if name not in AVAILABLE_MODELS:
+        return jsonify({"error": "unknown_model", "available": AVAILABLE_MODELS}), 400
+    ACTIVE_MODEL = name
+    return jsonify({"ok": True, "active": ACTIVE_MODEL})
 
-# ---------- Stats (Step 4)
+# ---------------- Stats (Step 4)
 START_TS = int(time.time())
 
 @app.get("/api/stats")
 def stats():
-    total_msgs = sum(len(_load_thread(cid)) for cid in _all_cids())
+    total_msgs = 0
+    for cid in _all_cids():
+        total_msgs += len(_load_thread(cid))
     return jsonify({
         "ok": True,
         "since_epoch": START_TS,
-        "active_model": _active_model,
+        "active_model": ACTIVE_MODEL,
         "num_clients": len(_all_cids()),
         "total_messages": total_msgs,
         "commit": COMMIT,
@@ -138,30 +147,32 @@ def stats():
         "rate_limit_enabled": bool(_limiter),
     })
 
-# ---------- Chat helpers
+# ---------------- Helpers
 def _cid_from_request() -> str:
-    # priority: explicit query -> header -> localStorage default the UI sends -> new guid
+    # priority: explicit query → header → new guid
     cid = request.args.get("cid") or request.headers.get("X-Client-Id")
-    if cid: return cid
-    return str(uuid.uuid4())
+    return cid or (uuid.uuid4().hex)
 
 def _dev_echo(user_msg: str) -> str:
-    return f"(dev echo on {COMMIT}) You said: {user_msg}"
+    return f"(dev echo {COMMIT}) You said: {user_msg}"
 
-def _openai_chat(user_msg: str) -> str:
+def _openai_chat(user_msg: str, history: Optional[List[Dict[str, str]]] = None) -> str:
     from openai import OpenAI
-    client = OpenAI(api_key=OPENAI_KEY)  # sdk will also read env var
+    client = OpenAI(api_key=OPENAI_KEY)
+    messages = [{"role": "system", "content": "You are Friday AI. Be brief, friendly, and helpful."}]
+    if history:
+        for m in history[-16:]:
+            if m["role"] in ("user", "assistant"):
+                messages.append({"role": m["role"], "content": m["content"]})
+    messages.append({"role": "user", "content": user_msg})
     resp = client.chat.completions.create(
-        model=_active_model,
-        messages=[
-            {"role": "system", "content": "You are Friday AI. Be brief, friendly, and helpful."},
-            {"role": "user", "content": user_msg},
-        ],
+        model=ACTIVE_MODEL,
+        messages=messages,
         temperature=0.6,
     )
-    return resp.choices[0].message.content.strip()
+    return (resp.choices[0].message.content or "").strip()
 
-# ---------- Chat API (POST) with history (Step 6) + rate limit (Step 5)
+# ---------------- Chat (POST) w/ history + rate limit
 @app.post("/api/chat")
 @limit("30/minute")
 def api_chat():
@@ -173,29 +184,29 @@ def api_chat():
     cid = _cid_from_request()
     thread = _load_thread(cid)
 
-    # Append user
+    # add user
     thread.append({"role": "user", "content": user_msg, "ts": time.time()})
 
-    # Call model (or echo)
+    # get assistant reply
     try:
         if not OPENAI_KEY:
             reply = _dev_echo(user_msg)
         else:
-            reply = _openai_chat(user_msg)
+            reply = _openai_chat(user_msg, history=thread)
     except Exception as e:
         reply = f"(upstream error) {e!s}"
 
-    # Append assistant
+    # add assistant
     thread.append({"role": "assistant", "content": reply, "ts": time.time()})
     _save_thread(cid, thread)
 
     return jsonify({"reply": reply, "cid": cid})
 
-# ---------- Streaming SSE (Step 8 mix)
+# ---------------- Streaming (SSE)
 @app.get("/api/chat/stream")
 @limit("30/minute")
 def chat_stream():
-    # Accept q from either ?q= or JSON body (for flexibility)
+    # Accept ?q= OR JSON body
     q = request.args.get("q")
     if not q and request.data:
         try:
@@ -215,45 +226,50 @@ def chat_stream():
         def send(obj):
             yield f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
 
-        # dev stream
+        # Dev: simple fake streaming
         if not OPENAI_KEY:
             for chunk in ["(dev echo) ", "You said: ", user_msg]:
                 time.sleep(0.03)
                 yield from send({"delta": chunk})
             yield from send({"done": True})
-        else:
-            from openai import OpenAI
-            client = OpenAI(api_key=OPENAI_KEY)
-            stream = client.chat.completions.create(
-                model=_active_model,
-                messages=[
-                    {"role": "system", "content": "You are Friday AI. Be brief, friendly, and helpful."},
-                    {"role": "user", "content": user_msg},
-                ],
-                temperature=0.6,
-                stream=True,
-            )
-            assembled = []
-            for event in stream:
-                delta = event.choices[0].delta.content or ""
-                if delta:
-                    assembled.append(delta)
-                    yield from send({"delta": delta})
-            reply = "".join(assembled).strip()
-            thread.append({"role": "assistant", "content": reply, "ts": time.time()})
-            _save_thread(cid, thread)
-            yield from send({"done": True})
+            return
+
+        # Real Streaming via OpenAI
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_KEY)
+        messages = [{"role": "system", "content": "You are Friday AI. Be brief, friendly, and helpful."}]
+        for m in thread[-16:]:
+            if m["role"] in ("user", "assistant"):
+                messages.append({"role": m["role"], "content": m["content"]})
+        messages.append({"role": "user", "content": user_msg})
+
+        stream = client.chat.completions.create(
+            model=ACTIVE_MODEL,
+            messages=messages,
+            stream=True,
+            temperature=0.6,
+        )
+        assembled = []
+        for event in stream:
+            delta = event.choices[0].delta.content or ""
+            if delta:
+                assembled.append(delta)
+                yield from send({"delta": delta})
+        reply = "".join(assembled).strip()
+        thread.append({"role": "assistant", "content": reply, "ts": time.time()})
+        _save_thread(cid, thread)
+        yield from send({"done": True})
 
     return Response(gen(), mimetype="text/event-stream")
 
-# ---------- History (Step 6)
+# ---------------- History
 @app.get("/api/history")
 def get_history():
     cid = _cid_from_request()
     msgs = _load_thread(cid)
     if not msgs:
         return jsonify({"error": "no_conversation"}), 404
-    return jsonify({"messages": msgs})
+    return jsonify({"messages": msgs, "cid": cid})
 
 @app.get("/api/history/export")
 def export_history():
@@ -262,18 +278,18 @@ def export_history():
     return jsonify({
         "cid": cid,
         "count": len(msgs),
-        "model": _active_model,
+        "model": ACTIVE_MODEL,
         "commit": COMMIT,
-        "exported_at": int(time.time()),
+        "exported_at": datetime.utcnow().isoformat() + "Z",
         "messages": msgs,
     })
 
-# ---------- Static passthrough
+# ---------------- Static passthrough
 @app.get("/static/<path:filename>")
 def static_files(filename):
     return send_from_directory(app.static_folder, filename)
 
-# ---------- JSON-first errors
+# ---------------- API-friendly errors
 @app.errorhandler(404)
 def not_found(_):
     if request.path.startswith("/api/"):
@@ -289,6 +305,7 @@ def method_not_allowed(_):
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=True)
+
 
 
 
