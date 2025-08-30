@@ -4,6 +4,14 @@ from datetime import datetime
 from flask import Flask, jsonify, request, render_template, send_from_directory, abort
 from flask_cors import CORS
 
+# limiter.py (snippet to copy into app.py after app=CORS(...))
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+limiter = Limiter(get_remote_address, app=app, default_limits=["60/minute"])
+# Per-route example:
+# limiter.limit("20/minute")(api_chat)
+
+
 # ---------------- App setup
 app = Flask(__name__, static_folder="static", template_folder="templates")
 CORS(app)
