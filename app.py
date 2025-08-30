@@ -20,9 +20,14 @@ DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 AVAILABLE_MODELS = ["gpt-4o", "gpt-4o-mini", "gpt-4.1-mini", "o3-mini"]
 ACTIVE_MODEL = DEFAULT_MODEL if DEFAULT_MODEL in AVAILABLE_MODELS else "gpt-4o-mini"
 
+# Security/env
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")        # token for admin APIs
-BASIC_USER   = os.getenv("BASIC_AUTH_USER", "")   # HTTP Basic user (for pages)
-BASIC_PASS   = os.getenv("BASIC_AUTH_PASS", "")   # HTTP Basic pass (for pages)
+BASIC_USER   = os.getenv("BASIC_AUTH_USER", "")   # HTTP Basic user (for protected pages)
+BASIC_PASS   = os.getenv("BASIC_AUTH_PASS", "")   # HTTP Basic pass (for protected pages)
+
+# Optional: allow external CDNs/fonts in CSP. Comma-separated list of origins, e.g.:
+# ASSET_CDN="https://fonts.googleapis.com,https://fonts.gstatic.com"
+ASSET_CDN = [o.strip() for o in os.getenv("ASSET_CDN", "").split(",") if o.strip()]
 
 # ---------------- Optional Redis persistence (falls back to memory)
 _redis = None
@@ -33,8 +38,7 @@ try:
 except Exception:
     _redis = None  # ok, fallback to memory
 
-def _rkey(cid: str) -> str:
-    return f"conv:{cid}"
+def _rkey(cid: str) -> str: return f"conv:{cid}"
 
 def _load_thread(cid: str) -> List[Dict[str, Any]]:
     if _redis:
@@ -43,16 +47,12 @@ def _load_thread(cid: str) -> List[Dict[str, Any]]:
     return _conversations.get(cid, [])
 
 def _save_thread(cid: str, msgs: List[Dict[str, Any]]) -> None:
-    if _redis:
-        _redis.set(_rkey(cid), json.dumps(msgs))
-    else:
-        _conversations[cid] = msgs
+    if _redis: _redis.set(_rkey(cid), json.dumps(msgs))
+    else: _conversations[cid] = msgs
 
 def _delete_thread(cid: str) -> None:
-    if _redis:
-        _redis.delete(_rkey(cid))
-    else:
-        _conversations.pop(cid, None)
+    if _redis: _redis.delete(_rkey(cid))
+    else: _conversations.pop(cid, None)
 
 def _all_cids() -> List[str]:
     if _redis:
@@ -61,8 +61,7 @@ def _all_cids() -> List[str]:
         while True:
             cursor, keys = _redis.scan(cursor=cursor, match="conv:*", count=500)
             cids.extend([k.split(":", 1)[1] for k in keys])
-            if cursor == 0:
-                break
+            if cursor == 0: break
         return cids
     return list(_conversations.keys())
 
@@ -85,7 +84,7 @@ def limit(rule: str):
         return fn
     return deco
 
-# ---------------- Basic Auth (for select pages)
+# ---------------- Basic Auth (for select pages & static when enabled)
 def _basic_auth_enabled() -> bool:
     return bool(BASIC_USER and BASIC_PASS)
 
@@ -112,18 +111,32 @@ def requires_basic_auth(fn):
         return resp
     return wrapper
 
-# ---------------- Security headers
+# ---------------- CSP / Security headers
+def _csp_header() -> str:
+    # Always allow self; optionally allow configured CDNs
+    origins = "'self'"
+    if ASSET_CDN:
+        origins += " " + " ".join(ASSET_CDN)
+    # Inline styles used by our templates → keep 'unsafe-inline' for style-src
+    # Add data: for images & fonts; blob: for potential downloads/streams
+    return (
+        "default-src 'self'; "
+        f"script-src {origins}; "
+        f"style-src {origins} 'unsafe-inline'; "
+        f"img-src {origins} data:; "
+        f"font-src {origins} data:; "
+        f"connect-src {origins}; "
+        "object-src 'none'; "
+        "base-uri 'self'; "
+        "frame-ancestors 'none'"
+    )
+
 @app.after_request
 def _secure(resp):
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["X-Frame-Options"] = "DENY"
     resp.headers["Referrer-Policy"] = "no-referrer"
-    resp.headers["Content-Security-Policy"] = (
-        "default-src 'self'; "
-        "style-src 'self' 'unsafe-inline'; "
-        "img-src 'self' data:; "
-        "connect-src 'self';"
-    )
+    resp.headers["Content-Security-Policy"] = _csp_header()
     return resp
 
 # ---------------- Pages
@@ -141,7 +154,7 @@ def chat_page():
 def admin_page():
     return render_template("admin.html", title="Friday Admin")
 
-# ---------------- Introspection (also protected by Basic Auth if configured)
+# ---------------- Introspection (protected by Basic Auth if configured)
 @app.get("/routes")
 @requires_basic_auth
 def routes():
@@ -365,10 +378,14 @@ def admin_purge_all():
         _delete_thread(cid); purged.append(cid)
     return jsonify({"ok": True, "purged_count": len(purged), "purged": purged})
 
-# ---------------- Static passthrough
+# ---------------- Static passthrough (protected by Basic Auth if configured)
 @app.get("/static/<path:filename>")
+@requires_basic_auth
 def static_files(filename):
-    return send_from_directory(app.static_folder, filename)
+    resp = send_from_directory(app.static_folder, filename)
+    # small perf win: cache immutable assets 1 hour (tune to your needs)
+    resp.headers["Cache-Control"] = "public, max-age=3600"
+    return resp
 
 # ---------------- API-friendly errors
 @app.errorhandler(404)
@@ -386,6 +403,7 @@ def method_not_allowed(_):
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=True)
+
 
 
 
