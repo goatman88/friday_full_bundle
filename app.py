@@ -41,37 +41,64 @@ def health():
 
 # ----------------- API ----------------------
 @app.post("/api/chat")
-def chat_api():
+def api_chat():
+    """
+    Request JSON:
+      { "message": "Hi", "history": [ {"role":"user","content":"..."},
+                                      {"role":"assistant","content":"..."},
+                                      ... ] }   # optional
+    """
     try:
-        data = request.get_json(force=True)
+        data = request.get_json(force=True, silent=False)
     except Exception:
         return jsonify({"error": "Invalid request: expected JSON with 'message'"}), 400
 
     if not isinstance(data, dict) or "message" not in data:
         return jsonify({"error": "Invalid request: expected JSON with 'message'"}), 400
 
-    user_msg = (data.get("message") or "").strip() or "Hello!"
+    user_msg = str(data.get("message", "")).strip() or "Hello!"
+    raw_history = data.get("history") or []
 
-    # Dev echo if no key is set (keeps UI usable)
+    # Normalize & cap history (last 12 messages, user/assistant only)
+    history: list[dict] = []
+    for m in raw_history[-12:]:
+        if not isinstance(m, dict):
+            continue
+        role = (m.get("role") or "").lower()
+        if role not in {"user", "assistant"}:
+            continue
+        content = str(m.get("content") or "").strip()
+        if content:
+            history.append({"role": role, "content": content})
+
+    # Dev echo if running without a key
     if not OPENAI_KEY:
-        return jsonify({"reply": f"Hi there!\n\n(dev echo) You said: {user_msg}"}), 200
+        reply = f"(dev echo) You said: {user_msg}"
+        if history:
+            reply = f"(dev echo w/ history {len(history)} msgs) You said: {user_msg}"
+        return jsonify({"reply": reply}), 200
 
     # Real OpenAI call
     try:
         from openai import OpenAI
         client = OpenAI(api_key=OPENAI_KEY)
+
+        messages = [{"role": "system",
+                     "content": "You are Friday AI. Be brief, friendly, and helpful."}]
+        messages.extend(history)
+        messages.append({"role": "user", "content": user_msg})
+
         resp = client.chat.completions.create(
-            model=MODEL,
-            messages=[
-                {"role": "system", "content": "You are Friday AI. Be brief, friendly, and helpful."},
-                {"role": "user", "content": user_msg},
-            ],
+            model=os.getenv("OPENAI_MODEL", MODEL),
+            messages=messages,
             temperature=0.6,
+            max_tokens=400,
         )
-        text = resp.choices[0].message.content.strip()
+        text = (resp.choices[0].message.content or "").strip()
         return jsonify({"reply": text}), 200
     except Exception as e:
         return jsonify({"error": "upstream_error", "detail": str(e)}), 502
+
 
 # ----------------- STATIC -------------------
 @app.get("/static/<path:filename>")
