@@ -1,26 +1,21 @@
-# virtual envs
-.venv/
-venv/
-ENV/
-
 # Python
 __pycache__/
 *.pyc
 *.pyo
-*.pyd
-*.log
 
-# SQLite
-*.db
+# Virtual env
+.venv/
+env/
+venv/
 
-# OS
+# Local files
+*.bak
 .DS_Store
-Thumbs.db
 
-# Node (if you add any tooling later)
-node_modules/
+# IDE
+.vscode/
+.idea/
 
-# Local env files
-.env
+
 
 
