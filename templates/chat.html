@@ -1,32 +1,173 @@
-﻿<!DOCTYPE html>
-<html>
+<!DOCTYPE html>
+<html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <title>Friday AI</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>{{ title or "Friday AI" }}</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
   <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:2rem;max-width:760px}
-    #out{white-space:pre-wrap;border:1px solid #ddd;padding:1rem;border-radius:8px;min-height:6rem}
-    button{padding:.5rem 1rem;border-radius:8px;border:1px solid #ccc;cursor:pointer}
-    input{width:70%;padding:.5rem;border-radius:8px;border:1px solid #ccc}
+    :root { --bg1:#0f2027; --bg2:#203a43; --bg3:#2c5364; --panel:#1e293b; --panel-dark:#0f172a;
+            --text:#f1f5f9; --bot:#334155; --user:#38bdf8; --userText:#0f172a; }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+         background:linear-gradient(135deg,var(--bg1),var(--bg2),var(--bg3));color:var(--text);
+         min-height:100vh;display:flex;align-items:center;justify-content:center}
+    .chat-wrap{width:min(680px,94vw);height:min(86vh,900px);background:var(--panel);border-radius:16px;
+               display:flex;flex-direction:column;overflow:hidden;box-shadow:0 12px 28px rgba(0,0,0,.45)}
+    .hdr{background:var(--panel-dark);padding:14px 18px;display:flex;gap:10px;align-items:center;
+         border-bottom:1px solid rgba(255,255,255,.06)}
+    .logo{width:28px;height:28px;border-radius:10px;background:linear-gradient(145deg,#67e8f9,#60a5fa)}
+    .title{font-weight:600;color:#7dd3fc}
+    .small{margin-left:auto;opacity:.65;font-size:.85rem}
+    .messages{flex:1;overflow:auto;padding:18px;scroll-behavior:smooth}
+    .bubble{max-width:78%;padding:10px 12px;border-radius:12px;line-height:1.45;margin:0 0 10px;
+            white-space:pre-wrap;word-wrap:break-word;position:relative}
+    .bubble.bot{background:#334155;margin-right:auto;border-bottom-left-radius:6px}
+    .bubble.user{background:var(--user);color:var(--userText);margin-left:auto;border-bottom-right-radius:6px}
+    .msg{display:block;padding-right:38px}
+    .copyBtn{position:absolute;top:6px;right:6px;border:none;border-radius:8px;padding:6px 8px;font-size:12px;
+             background:rgba(255,255,255,.12);color:#e2e8f0;cursor:pointer}
+    .composer{display:flex;gap:10px;padding:12px;background:var(--panel-dark);
+              border-top:1px solid rgba(255,255,255,.06)}
+    input[type="text"]{flex:1;padding:12px 14px;border:none;border-radius:10px;background:#0b1220;color:var(--text)}
+    button.send{border:none;padding:12px 16px;border-radius:10px;font-weight:600;background:var(--user);color:var(--userText)}
+    .typing{display:inline-flex;gap:6px;align-items:center}
+    .dot{width:8px;height:8px;border-radius:50%;background:#cbd5e1;opacity:.7;animation:bounce 1.2s infinite ease-in-out}
+    .dot:nth-child(2){animation-delay:.15s}.dot:nth-child(3){animation-delay:.30s}
+    @keyframes bounce{0%,80%,100%{transform:translateY(0);opacity:.45}40%{transform:translateY(-5px);opacity:1}}
+    .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#0b1220;color:#e2e8f0;
+           border:1px solid rgba(255,255,255,.12);padding:10px 14px;border-radius:10px;opacity:0;pointer-events:none;
+           transition:.25s opacity,.25s transform}
+    .toast.show{opacity:1;transform:translateX(-50%) translateY(-4px)}
+    @media (max-width:520px){.bubble{max-width:90%}}
   </style>
 </head>
 <body>
-  <h2>Ask Friday</h2>
-  <p><input id="msg" placeholder="Type a message..." />
-     <button onclick="send()">Send</button></p>
-  <div id="out"></div>
+  <div class="chat-wrap">
+    <div class="hdr">
+      <div class="logo" aria-hidden="true"></div>
+      <div class="title">Friday AI</div>
+      <div class="small">Press <b>Enter</b> or <b>Ctrl/⌘+Enter</b></div>
+    </div>
+
+    <div id="messages" class="messages" aria-live="polite"></div>
+
+    <form class="composer" onsubmit="handleSubmit(event)">
+      <input id="userInput" type="text" placeholder="Type a message…" autocomplete="off" />
+      <button id="sendBtn" class="send" type="submit">Send</button>
+    </form>
+  </div>
+
+  <div id="toast" class="toast">Copied!</div>
 
   <script>
-    async function send() {
-      const message = document.getElementById("msg").value.trim();
-      if (!message) return;
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message })
-      });
-      const data = await res.json();
-      document.getElementById("out").textContent = data.reply ?? JSON.stringify(data, null, 2);
+    const messagesEl = document.getElementById('messages');
+    const inputEl = document.getElementById('userInput');
+    const sendBtn = document.getElementById('sendBtn');
+    const toastEl = document.getElementById('toast');
+
+    // ---- conversation memory (persist for the tab)
+    let convo = JSON.parse(sessionStorage.getItem('friday_convo') || '[]'); // [{role, content}]
+    const MAX_HISTORY = 12; // last N messages (user+assistant), backend also caps
+
+    function saveConvo() {
+      const trimmed = convo.slice(-MAX_HISTORY);
+      sessionStorage.setItem('friday_convo', JSON.stringify(trimmed));
+    }
+
+    function showToast(text='Copied!') {
+      toastEl.textContent = text;
+      toastEl.classList.add('show');
+      clearTimeout(showToast._t);
+      showToast._t = setTimeout(()=> toastEl.classList.remove('show'), 1200);
+    }
+
+    function appendBubble(text, role='bot') {
+      const div = document.createElement('div');
+      div.className = `bubble ${role}`;
+      const span = document.createElement('span');
+      span.className = 'msg';
+      span.textContent = text;
+      div.appendChild(span);
+
+      if (role === 'bot') {
+        const btn = document.createElement('button');
+        btn.type = 'button'; btn.className = 'copyBtn'; btn.textContent = 'Copy';
+        btn.onclick = async () => {
+          try { await navigator.clipboard.writeText(span.textContent); showToast('Copied'); }
+          catch { showToast('Copy failed'); }
+        };
+        div.appendChild(btn);
+      }
+      messagesEl.appendChild(div);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      return div;
+    }
+
+    function appendTyping() {
+      const shell = document.createElement('div');
+      shell.className = 'bubble bot';
+      const wrap = document.createElement('span');
+      wrap.className = 'typing';
+      wrap.innerHTML = '<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
+      shell.appendChild(wrap);
+      messagesEl.appendChild(shell);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      return shell;
+    }
+
+    async function handleSubmit(e){
+      e && e.preventDefault && e.preventDefault();
+      const text = (inputEl.value || '').trim();
+      if (!text) return;
+
+      appendBubble(text, 'user');
+      convo.push({ role:'user', content:text });
+      saveConvo();
+
+      inputEl.value = ''; inputEl.focus();
+      const typing = appendTyping();
+      sendBtn.disabled = true; inputEl.disabled = true;
+
+      try {
+        // Send only user/assistant turns (no system), trimmed last MAX_HISTORY
+        const payload = {
+          message: text,
+          history: convo.slice(0, -1).slice(-MAX_HISTORY) // exclude the just-sent user msg; backend adds it
+        };
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json().catch(()=> ({}));
+        typing.remove();
+
+        const reply = (data && (data.reply || data.error || 'No reply')) + '';
+        appendBubble(reply, 'bot');
+        convo.push({ role:'assistant', content: reply });
+        saveConvo();
+      } catch {
+        typing.remove();
+        appendBubble('[connection error]', 'bot');
+      } finally {
+        sendBtn.disabled = false; inputEl.disabled = false; inputEl.focus();
+      }
+    }
+
+    // Enter OR Ctrl/⌘+Enter to send
+    inputEl.addEventListener('keydown', (e)=>{
+      const ctrlOrCmd = e.ctrlKey || e.metaKey;
+      if ((e.key === 'Enter' && !e.shiftKey) || (ctrlOrCmd && e.key.toLowerCase() === 'enter')) {
+        e.preventDefault(); handleSubmit();
+      }
+    });
+
+    // Seed UI from stored convo (nice when you refresh)
+    if (convo.length === 0) {
+      appendBubble('Welcome! Ask me anything.', 'bot');
+    } else {
+      for (const m of convo) appendBubble(m.content, m.role === 'user' ? 'user' : 'bot');
     }
   </script>
 </body>
