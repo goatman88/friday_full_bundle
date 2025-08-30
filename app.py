@@ -100,6 +100,15 @@ def api_chat():
     except Exception as e:
         return jsonify({"error": "upstream_error", "detail": str(e)}), 502
 
+# -------- API: Model check
+@app.get("/api/model")
+def api_model():
+    return jsonify({
+        "model": os.getenv("OPENAI_MODEL", MODEL),
+        "commit": COMMIT
+    })
+
+
 
 # ----------------- STATIC -------------------
 @app.get("/static/<path:filename>")
