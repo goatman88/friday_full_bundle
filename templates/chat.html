@@ -5,22 +5,11 @@
   <title>{{ title or "Friday AI" }}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <style>
-    :root {
-      --bg: #0f172a; --card: #0b233b; --ink: #e5e7eb; --muted:#94a3b8; --accent:#60a5fa;
-    }
-    [data-theme="light"] {
-      --bg: #f1f5f9; --card:#fff; --ink:#111; --muted:#444; --accent:#2563eb;
-    }
-
-    html,body {
-      height:100%; margin:0; font:15px/1.45 system-ui,Segoe UI,Roboto,Arial,sans-serif;
-      background:var(--bg); color:var(--ink);
-    }
-    .wrap { display:flex; flex-direction:column; height:100%; }
-    header {
-      background:var(--card); border-bottom:1px solid #143251;
-      padding:10px 16px; display:flex; justify-content:space-between; align-items:center;
-    }
+    :root { --bg:#0f172a; --card:#0b233b; --ink:#e5e7eb; --muted:#94a3b8; --accent:#60a5fa; }
+    [data-theme="light"] { --bg:#f1f5f9; --card:#fff; --ink:#111; --muted:#444; --accent:#2563eb; }
+    html,body{height:100%; margin:0; font:15px/1.45 system-ui,Segoe UI,Roboto,Arial,sans-serif; background:var(--bg); color:var(--ink);}
+    .wrap{display:flex; flex-direction:column; height:100%}
+    header{background:var(--card); border-bottom:1px solid #143251; padding:10px 16px; display:flex; justify-content:space-between; align-items:center}
     .ttl{display:flex; align-items:center; gap:8px; font-weight:700}
     .badge{background:linear-gradient(135deg,#5eead4,#60a5fa); width:28px; height:28px; border-radius:8px}
     .links a{color:var(--muted); text-decoration:none; margin-left:12px}
@@ -31,18 +20,16 @@
     .a{background:#12273f; align-self:flex-start}
     [data-theme="light"] .u{background:#dbeafe; color:#111}
     [data-theme="light"] .a{background:#e2e8f0; color:#111}
-    footer{
-      background:var(--card); border-top:1px solid #143251;
-      padding:12px 16px; display:flex; gap:8px; position:sticky; bottom:0;
-    }
-    input[type=text]{flex:1; padding:12px; border-radius:12px; border:1px solid #183a5b; background:#0e2138; color:var(--ink)}
-    [data-theme="light"] input[type=text]{background:#fff; border:1px solid #ccc}
-    button{background:var(--accent); color:#fff; border:0; padding:12px 16px; border-radius:12px; font-weight:600; cursor:pointer}
-    button:hover{opacity:.9}
-    .meta{font-size:13px; color:var(--muted); display:flex; justify-content:space-between; align-items:center; padding:6px 16px; background:var(--card)}
+    .meta{font-size:13px; color:var(--muted); display:flex; justify-content:space-between; align-items:center; padding:6px 16px; background:var(--card); gap:8px; flex-wrap:wrap}
     select{background:#0e2138; color:var(--ink); border:1px solid #183a5b; border-radius:8px; padding:6px}
     [data-theme="light"] select{background:#fff; border:1px solid #ccc}
     .pill{padding:4px 8px; border:1px solid #183a5b; border-radius:8px; font-size:12px}
+    footer{background:var(--card); border-top:1px solid #143251; padding:12px 16px; display:flex; gap:8px; position:sticky; bottom:0}
+    input[type=text]{flex:1; padding:12px; border-radius:12px; border:1px solid #183a5b; background:#0e2138; color:var(--ink)}
+    [data-theme="light"] input[type=text]{background:#fff; border:1px solid #ccc}
+    button{background:var(--accent); color:#fff; border:0; padding:12px 16px; border-radius:12px; font-weight:600; cursor:pointer}
+    button.secondary{background:transparent; color:var(--muted); border:1px solid #183a5b}
+    button:hover{opacity:.9}
     .themeToggle{cursor:pointer; margin-left:10px; font-size:13px; color:var(--muted)}
   </style>
 </head>
@@ -70,9 +57,10 @@
       · Model: <select id="model"></select>
       <span id="commit"></span>
     </div>
-    <div>
+    <div style="display:flex; gap:8px; align-items:center;">
       <span id="cidLabel" class="pill"></span>
-      <button id="newCid">New session</button>
+      <button id="newCid" class="secondary">New session</button>
+      <button id="clearChat" class="secondary" title="Clear UI and server history for this session">Clear chat</button>
     </div>
   </div>
 
@@ -92,6 +80,7 @@
   const commitSpan = document.querySelector("#commit");
   const cidLabel = document.querySelector("#cidLabel");
   const newCidBtn = document.querySelector("#newCid");
+  const clearBtn = document.querySelector("#clearChat");
   const streamChk = document.querySelector("#stream");
 
   // --- Theme persistence ---
@@ -106,108 +95,133 @@
     localStorage.setItem("theme", next);
   }
 
-  // Session
+  // --- Session
   function getCid(){
     let c = localStorage.getItem("cid");
-    if(!c){ c = crypto.randomUUID(); localStorage.setItem("cid",c); }
+    if(!c){ c = crypto.randomUUID(); localStorage.setItem("cid", c); }
     cidLabel.textContent = `cid: ${c.slice(0,8)}…`;
     return c;
   }
-  function setCid(c){ localStorage.setItem("cid",c); cidLabel.textContent = `cid: ${c.slice(0,8)}…`; }
-
-  // UI
-  function append(role,text){
-    const b=document.createElement("div");
-    b.className=`bubble ${role==="user"?"u":"a"}`;
-    b.textContent=text;
-    log.appendChild(b);
-    log.scrollTop=log.scrollHeight;
+  function setCid(c){
+    localStorage.setItem("cid", c);
+    cidLabel.textContent = `cid: ${c.slice(0,8)}…`;
   }
 
-  // Models
+  // --- UI helpers
+  function append(role, text){
+    const b = document.createElement("div");
+    b.className = `bubble ${role==="user"?"u":"a"}`;
+    b.textContent = text;
+    log.appendChild(b);
+    log.scrollTop = log.scrollHeight;
+  }
+  function clearUI(){
+    log.innerHTML = "";
+  }
+
+  // --- Models
   async function loadModels(){
     try{
-      const r=await fetch(`${base}/api/models`);
-      const j=await r.json();
-      modelSel.innerHTML="";
-      (j.available||[]).forEach(m=>{
-        const o=document.createElement("option");
-        o.value=m; o.textContent=m;
-        if(m===j.active) o.selected=true;
+      const r = await fetch(`${base}/api/models`);
+      const j = await r.json();
+      modelSel.innerHTML = "";
+      (j.available || []).forEach(m=>{
+        const o = document.createElement("option");
+        o.value = m; o.textContent = m;
+        if(m === j.active) o.selected = true;
         modelSel.appendChild(o);
       });
-    }catch{modelSel.innerHTML="<option>(error)</option>";}
+    }catch{ modelSel.innerHTML = "<option>(error)</option>"; }
   }
-  modelSel.onchange=async()=>{
+  modelSel.onchange = async ()=>{
     try{
-      const r=await fetch(`${base}/api/model`,{
-        method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({model:modelSel.value})
+      const r = await fetch(`${base}/api/model`,{
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ model: modelSel.value })
       });
-      const j=await r.json();
-      append("assistant",`Model switched to: ${j.active}`);
-    }catch(e){append("assistant","Model switch error: "+e.message);}
+      const j = await r.json();
+      append("assistant", `Model switched to: ${j.active}`);
+    }catch(e){ append("assistant", "Model switch error: " + e.message); }
   };
 
-  // Send
+  // --- Send
   async function send(){
-    const text=msg.value.trim(); if(!text) return;
-    append("user",text); msg.value="";
-    const cid=getCid();
+    const text = msg.value.trim(); if(!text) return;
+    append("user", text); msg.value = "";
+    const cid = getCid();
 
     if(streamChk.checked){
-      const url=new URL(`${base}/api/chat/stream`);
-      url.searchParams.set("cid",cid); url.searchParams.set("q",text);
-      const resp=await fetch(url);
-      const reader=resp.body.getReader();
-      let acc="",streamingDiv=null;
+      const url = new URL(`${base}/api/chat/stream`);
+      url.searchParams.set("cid", cid);
+      url.searchParams.set("q", text);
+      const resp = await fetch(url);
+      const reader = resp.body.getReader();
+      let acc = "", streamingDiv = null;
       while(true){
-        const {value,done}=await reader.read(); if(done) break;
-        const chunk=new TextDecoder().decode(value);
+        const {value, done} = await reader.read(); if(done) break;
+        const chunk = new TextDecoder().decode(value);
         chunk.split("\n\n").forEach(line=>{
           if(line.startsWith("data: ")){
             try{
-              const obj=JSON.parse(line.slice(6));
+              const obj = JSON.parse(line.slice(6));
               if(obj.delta){
-                acc+=obj.delta;
-                if(!streamingDiv){streamingDiv=document.createElement("div"); streamingDiv.className="bubble a"; log.appendChild(streamingDiv);}
-                streamingDiv.textContent=acc;
-                log.scrollTop=log.scrollHeight;
+                acc += obj.delta;
+                if(!streamingDiv){ streamingDiv = document.createElement("div"); streamingDiv.className = "bubble a"; log.appendChild(streamingDiv); }
+                streamingDiv.textContent = acc; log.scrollTop = log.scrollHeight;
               }
-              if(obj.done){streamingDiv=null; loadModels();}
+              if(obj.done){ streamingDiv = null; loadModels(); }
             }catch{}
           }
         });
       }
     } else {
-      const r=await fetch(`${base}/api/chat?cid=${cid}`,{
-        method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({message:text})
+      const r = await fetch(`${base}/api/chat?cid=${cid}`,{
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ message: text })
       });
-      const j=await r.json();
-      if(j.cid&&j.cid!==cid)setCid(j.cid);
-      append("assistant",j.reply??JSON.stringify(j));
+      const j = await r.json();
+      if(j.cid && j.cid !== cid) setCid(j.cid);
+      append("assistant", j.reply ?? JSON.stringify(j));
       loadModels();
     }
   }
 
-  // Links
-  document.querySelector("#routesLink").onclick=async e=>{e.preventDefault();append("assistant",JSON.stringify(await (await fetch(base+"/routes")).json(),null,2));}
-  document.querySelector("#healthLink").onclick=async e=>{e.preventDefault();const j=await (await fetch(base+"/debug/health")).json();commitSpan.textContent=j.commit?"commit "+j.commit:"";append("assistant",JSON.stringify(j,null,2));}
-  document.querySelector("#statsLink").onclick=async e=>{e.preventDefault();append("assistant",JSON.stringify(await (await fetch(base+"/api/stats")).json(),null,2));}
-  document.querySelector("#historyLink").onclick=async e=>{e.preventDefault();append("assistant",JSON.stringify(await (await fetch(base+`/api/history?cid=${getCid()}`)).json(),null,2));}
-  document.querySelector("#exportLink").onclick=async e=>{e.preventDefault();append("assistant",JSON.stringify(await (await fetch(base+`/api/history/export?cid=${getCid()}`)).json(),null,2));}
-  newCidBtn.onclick=()=>{setCid(crypto.randomUUID());append("assistant","Started fresh session.");}
+  // --- Links
+  document.querySelector("#routesLink").onclick = async e => { e.preventDefault(); append("assistant", JSON.stringify(await (await fetch(base+"/routes")).json(), null, 2)); };
+  document.querySelector("#healthLink").onclick = async e => { e.preventDefault(); const j = await (await fetch(base+"/debug/health")).json(); commitSpan.textContent = j.commit ? "commit " + j.commit : ""; append("assistant", JSON.stringify(j, null, 2)); };
+  document.querySelector("#statsLink").onclick  = async e => { e.preventDefault(); append("assistant", JSON.stringify(await (await fetch(base+"/api/stats")).json(), null, 2)); };
+  document.querySelector("#historyLink").onclick= async e => { e.preventDefault(); append("assistant", JSON.stringify(await (await fetch(base+`/api/history?cid=${getCid()}`)).json(), null, 2)); };
+  document.querySelector("#exportLink").onclick = async e => { e.preventDefault(); append("assistant", JSON.stringify(await (await fetch(base+`/api/history/export?cid=${getCid()}`)).json(), null, 2)); };
 
-  // Boot
-  loadTheme();
-  getCid(); loadModels();
-  fetch(`${base}/debug/health`).then(r=>r.json()).then(j=>{if(j.commit)commitSpan.textContent="commit "+j.commit;});
-  msg.addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();}});
-  sendBtn.onclick=send;
+  // --- New session & Clear chat
+  newCidBtn.onclick = () => { setCid(crypto.randomUUID()); clearUI(); append("assistant", "Started fresh session."); };
+  clearBtn.onclick = async () => {
+    const cid = getCid();
+    const sure = confirm("Clear chat for this session (local log + server history)?");
+    if(!sure) return;
+    try{
+      await fetch(`${base}/api/history?cid=${encodeURIComponent(cid)}`, { method: "DELETE" });
+      clearUI();
+      append("assistant", "Cleared chat history for this session.");
+    }catch(e){
+      clearUI(); // at least clear UI
+      append("assistant", "Cleared UI. Server clear may have failed: " + e.message);
+    }
+  };
+
+  // --- Boot
+  (function boot(){
+    const theme = localStorage.getItem("theme") || "dark";
+    appRoot.setAttribute("data-theme", theme);
+    getCid(); loadModels();
+    fetch(`${base}/debug/health`).then(r=>r.json()).then(j=>{ if(j.commit) commitSpan.textContent = "commit " + j.commit; });
+    msg.addEventListener("keydown", e => { if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); send(); } });
+    sendBtn.onclick = send;
+  })();
 </script>
 </body>
 </html>
+
 
 
 
