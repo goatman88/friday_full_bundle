@@ -12,7 +12,8 @@ CORS(app)
 
 COMMIT = (os.getenv("RENDER_GIT_COMMIT", "")[:7] or os.getenv("COMMIT", ""))
 OPENAI_KEY = os.getenv("OPENAI_API_KEY", "")
-MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")  # was gpt-4o-mini
+
 
 # ----------------- UI PAGES -----------------
 @app.get("/")
