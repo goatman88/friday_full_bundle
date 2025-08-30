@@ -88,135 +88,38 @@
 
   <div id="toast" class="toast">Copied!</div>
 
-  <script>
-    // --- session id (stable per tab)
-    const sessKey = 'friday_session_id';
-    let sessionId = sessionStorage.getItem(sessKey);
-    if (!sessionId) {
-      sessionId = 'sess-' + Math.random().toString(36).slice(2, 10) + '-' + Date.now().toString(36);
-      sessionStorage.setItem(sessKey, sessionId);
-    }
+ <script>
+  // Same-origin by default. For local dev you can append ?dev=1 to the page URL.
+  const dev = new URLSearchParams(location.search).has('dev');
+  const BASE = dev ? 'http://localhost:5000' : '';
 
-    const messagesEl = document.getElementById('messages');
-    const inputEl = document.getElementById('userInput');
-    const sendBtn = document.getElementById('sendBtn');
-    const toastEl = document.getElementById('toast');
-    const modelEl = document.getElementById('model');
-    const sessEl  = document.getElementById('sess');
-    const msgsEl  = document.getElementById('msgs');
+  const API = {
+    chat:    () => `${BASE}/api/chat`,
+    history: () => `${BASE}/api/history`,
+    model:   () => `${BASE}/api/model`,
+    routes:  () => `${BASE}/routes`,
+    health:  () => `${BASE}/debug/health`,
+  };
 
-    // Copy toast
-    function showToast(text='Copied!') {
-      toastEl.textContent = text;
-      toastEl.classList.add('show');
-      clearTimeout(showToast._t);
-      showToast._t = setTimeout(()=> toastEl.classList.remove('show'), 1200);
-    }
-
-    function appendBubble(text, role='bot') {
-      const div = document.createElement('div');
-      div.className = `bubble ${role}`;
-      const span = document.createElement('span');
-      span.className = 'msg'; span.textContent = text;
-      div.appendChild(span);
-
-      if (role === 'bot') {
-        const btn = document.createElement('button');
-        btn.type = 'button'; btn.className = 'copyBtn'; btn.textContent = 'Copy';
-        btn.onclick = async () => {
-          try { await navigator.clipboard.writeText(span.textContent); showToast('Copied'); }
-          catch { showToast('Copy failed'); }
-        };
-        div.appendChild(btn);
-      }
-      messagesEl.appendChild(div);
-      messagesEl.scrollTop = messagesEl.scrollHeight;
-      return div;
-    }
-
-    function appendTyping() {
-      const shell = document.createElement('div');
-      shell.className = 'bubble bot';
-      const wrap = document.createElement('span');
-      wrap.className = 'typing';
-      wrap.innerHTML = '<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
-      shell.appendChild(wrap);
-      messagesEl.appendChild(shell);
-      messagesEl.scrollTop = messagesEl.scrollHeight;
-      return shell;
-    }
-
-    async function refreshModelBadge() {
-      try {
-        const res = await fetch('/api/model', { headers: { 'X-Session-Id': sessionId } });
-        const j = await res.json();
-        modelEl.textContent = `model: ${j.model}`;
-        sessEl.textContent  = `session: ${j.session_id}`;
-        msgsEl.textContent  = `msgs: ${j.messages_in_session}`;
-      } catch {}
-    }
-
-    async function loadHistory() {
-      try {
-        const res = await fetch('/api/history', { headers: { 'X-Session-Id': sessionId } });
-        const j = await res.json();
-        messagesEl.innerHTML = '';
-        if (!j.messages || j.messages.length === 0) {
-          appendBubble('Welcome! Ask me anything.', 'bot');
-        } else {
-          for (const m of j.messages) appendBubble(m.content, m.role === 'user' ? 'user' : 'bot');
-        }
-      } catch {
-        appendBubble('Welcome! Ask me anything.', 'bot');
-      }
-    }
-
-    async function handleSubmit(e){
-      e && e.preventDefault && e.preventDefault();
-      const text = (inputEl.value || '').trim();
-      if (!text) return;
-
-      appendBubble(text, 'user');
-      inputEl.value = ''; inputEl.focus();
-
-      const typing = appendTyping();
-      sendBtn.disabled = true; inputEl.disabled = true;
-
-      try {
-        const res = await fetch('/api/chat', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Session-Id': sessionId
-          },
-          body: JSON.stringify({ message: text })
-        });
-        const data = await res.json().catch(()=> ({}));
-        typing.remove();
-
-        appendBubble((data && (data.reply || data.error || 'No reply')) + '', 'bot');
-      } catch {
-        typing.remove();
-        appendBubble('[connection error]', 'bot');
-      } finally {
-        sendBtn.disabled = false; inputEl.disabled = false; inputEl.focus();
-        refreshModelBadge();
-      }
-    }
-
-    // Keyboard shortcuts
-    inputEl.addEventListener('keydown', (e)=>{
-      const ctrlOrCmd = e.ctrlKey || e.metaKey;
-      if ((e.key === 'Enter' && !e.shiftKey) || (ctrlOrCmd && e.key.toLowerCase() === 'enter')) {
-        e.preventDefault(); handleSubmit();
-      }
+  async function sendChat(msg) {
+    const r = await fetch(API.chat(), {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ message: msg })
     });
+    return r.json();
+  }
 
-    // Boot
-    loadHistory().then(refreshModelBadge);
-    // Optional: keep the badge fresh every 30s
-    setInterval(refreshModelBadge, 30000);
-  </script>
+  async function loadHistory() {
+    const r = await fetch(API.history());
+    return r.ok ? r.json() : [];
+  }
+
+  async function clearHistory() {
+    await fetch(API.history(), { method: 'DELETE' });
+  }
+</script>
+
 </body>
 </html>
 
