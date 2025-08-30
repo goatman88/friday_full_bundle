@@ -1,203 +1,117 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <meta charset="UTF-8" />
   <title>{{ title or "Friday AI" }}</title>
   <style>
-    :root { --bg:#0f172a; --card:#0b233b; --ink:#e5e7eb; --muted:#94a3b8; --accent:#60a5fa; }
-    html,body{height:100%; background:var(--bg); color:var(--ink); font:15px/1.45 system-ui,Segoe UI,Roboto,Arial,sans-serif; margin:0}
-    .wrap{max-width:920px; margin:32px auto; padding:0 16px}
-    .card{background:linear-gradient(180deg,#0f2a46,#0b233b); border:1px solid #143251; border-radius:16px; box-shadow:0 10px 40px rgba(0,0,0,.25)}
-    header{padding:16px 20px; display:flex; align-items:center; justify-content:space-between}
-    .badge{background:linear-gradient(135deg,#5eead4,#60a5fa); width:36px; height:36px; border-radius:10px; margin-right:10px}
-    .ttl{display:flex; align-items:center; gap:8px; font-weight:600}
-    .links a{color:var(--muted); text-decoration:none; margin-left:12px}
-    .links a:hover{color:var(--ink)}
-    .log{height:360px; overflow:auto; padding:16px 20px}
-    .bubble{max-width:72%; padding:10px 12px; border-radius:10px; margin:8px 0; white-space:pre-wrap}
-    .u{background:#0b395b; align-self:flex-end}
-    .a{background:#12273f; align-self:flex-start}
-    .row{display:flex; gap:10px; padding:16px; border-top:1px solid #143251}
-    input[type=text]{flex:1; padding:12px 12px; background:#0e2138; border:1px solid #183a5b; border-radius:12px; color:var(--ink)}
-    button{background:#60a5fa; color:#002244; border:0; padding:12px 16px; border-radius:12px; font-weight:600; cursor:pointer}
-    .meta{font-size:12px; color:var(--muted); padding:0 20px 16px}
-    .flex{display:flex; align-items:center; gap:12px}
-    select{background:#0e2138; color:var(--ink); border:1px solid #183a5b; border-radius:10px; padding:8px}
-    label{font-size:13px; color:var(--muted)}
+    body { font-family: Arial, sans-serif; margin: 0; background: #f4f4f4; }
+    header { background: #111; color: #fff; padding: 10px; text-align: center; }
+    main { max-width: 720px; margin: 20px auto; background: #fff; padding: 20px;
+           border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,.1); }
+    #chat { height: 400px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; }
+    .msg { margin: 8px 0; padding: 8px 12px; border-radius: 6px; }
+    .user { background: #e3f2fd; text-align: right; }
+    .assistant { background: #f1f8e9; text-align: left; }
+    footer { margin-top: 10px; display: flex; gap: 8px; }
+    input[type=text] { flex: 1; padding: 10px; border-radius: 6px; border: 1px solid #ccc; }
+    button { padding: 10px 15px; border: none; border-radius: 6px; background: #1976d2; color: white; cursor: pointer; }
+    button:hover { background: #1565c0; }
+    .small { font-size: 0.85em; color: #555; margin-top: 10px; }
   </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="card">
-    <header>
-      <div class="ttl"><div class="badge"></div> Friday AI</div>
-      <div class="links">
-        <a href="/chat">/chat</a>
-        · <a id="routesLink" href="#">routes</a>
-        · <a id="healthLink" href="#">health</a>
-        · <a id="statsLink" href="#">stats</a>
-        · <a id="historyLink" href="#">history</a>
-        · <a id="exportLink" href="#">export</a>
-      </div>
-    </header>
-
-    <div id="log" class="log" style="display:flex; flex-direction:column;"></div>
-
-    <div class="meta flex" style="justify-content:space-between">
-      <div class="flex">
-        <label class="flex"><input id="stream" type="checkbox" checked> Stream</label>
-        <label>Model:</label>
-        <select id="model"></select>
-        <span id="commit" title="commit"></span>
-      </div>
-      <div class="flex">
-        <label id="cidLabel"></label>
-        <button id="newCid">New session</button>
-      </div>
+  <header>
+    <h2>🤖 Friday AI</h2>
+  </header>
+  <main>
+    <div id="chat"></div>
+    <footer>
+      <input type="text" id="msg" placeholder="Type a message..." />
+      <button onclick="send()">Send</button>
+      <button onclick="toggleStream()">Stream: <span id="streamState">OFF</span></button>
+    </footer>
+    <div class="small">
+      Model: <span id="model"></span> | 
+      <a href="/api/history" target="_blank">History</a> · 
+      <a href="/api/stats" target="_blank">Stats</a>
     </div>
+  </main>
 
-    <div class="row">
-      <input id="msg" type="text" placeholder="Type a message…" />
-      <button id="send">Send</button>
-    </div>
-  </div>
-</div>
+  <script>
+    let streamMode = false;
+    let cid = localStorage.getItem("client_id") || (Math.random().toString(36).slice(2));
+    localStorage.setItem("client_id", cid);
 
-<script>
-  const base = location.origin;
-  const log = document.querySelector('#log');
-  const msg = document.querySelector('#msg');
-  const sendBtn = document.querySelector('#send');
-  const routesLink = document.querySelector('#routesLink');
-  const healthLink = document.querySelector('#healthLink');
-  const statsLink = document.querySelector('#statsLink');
-  const historyLink = document.querySelector('#historyLink');
-  const exportLink = document.querySelector('#exportLink');
-  const streamChk = document.querySelector('#stream');
-  const modelSel = document.querySelector('#model');
-  const commitSpan = document.querySelector('#commit');
-  const cidLabel = document.querySelector('#cidLabel');
-  const newCidBtn = document.querySelector('#newCid');
-
-  function getCid(){
-    let c = localStorage.getItem('cid');
-    if(!c){ c = crypto.randomUUID(); localStorage.setItem('cid', c); }
-    cidLabel.textContent = `cid: ${c.slice(0,8)}…`;
-    return c;
-  }
-  function setCid(c){
-    localStorage.setItem('cid', c);
-    cidLabel.textContent = `cid: ${c.slice(0,8)}…`;
-  }
-
-  function append(role, text){
-    const b = document.createElement('div');
-    b.className = `bubble ${role==='user'?'u':'a'}`;
-    b.textContent = text;
-    log.appendChild(b);
-    log.scrollTop = log.scrollHeight;
-  }
-
-  async function loadModels(){
-    const r = await fetch(`${base}/api/models`);
-    const j = await r.json();
-    modelSel.innerHTML = '';
-    j.available.forEach(m=>{
-      const o = document.createElement('option');
-      o.value = m; o.textContent = m;
-      if(m===j.active) o.selected = true;
-      modelSel.appendChild(o);
-    });
-  }
-
-  modelSel.onchange = async ()=>{
-    const r = await fetch(`${base}/api/model`, {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({model: modelSel.value})
-    });
-    const j = await r.json();
-    append('assistant', `Active model: ${j.active ?? JSON.stringify(j)}`);
-  };
-
-  async function send(){
-    const text = msg.value.trim();
-    if(!text) return;
-    append('user', text);
-    msg.value = '';
-
-    const cid = getCid();
-
-    if(streamChk.checked){
-      const url = new URL(`${base}/api/chat/stream`);
-      url.searchParams.set('cid', cid);
-      url.searchParams.set('q', text);
-
-      const resp = await fetch(url, { method: 'GET' });
-      const reader = resp.body.getReader();
-      let acc = '';
-      while(true){
-        const {value, done} = await reader.read();
-        if(done) break;
-        const chunk = new TextDecoder().decode(value);
-        chunk.split("\n\n").forEach(line=>{
-          if(line.startsWith("data: ")){
-            try{
-              const obj = JSON.parse(line.slice(6));
-              if(obj.delta){ acc += obj.delta; }
-              if(obj.done){
-                append('assistant', acc);
-                acc = '';
-              }
-            }catch{}
-          }
-        });
+    async function fetchModel() {
+      try {
+        let res = await fetch("/api/models");
+        let data = await res.json();
+        document.getElementById("model").innerText = data.active;
+      } catch (e) {
+        document.getElementById("model").innerText = "(error)";
       }
-    } else {
-      const r = await fetch(`${base}/api/chat?cid=${encodeURIComponent(cid)}`, {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({message: text})
-      });
-      const j = await r.json();
-      if(j.cid && j.cid !== cid) setCid(j.cid);
-      append('assistant', j.reply ?? JSON.stringify(j));
     }
-  }
 
-  sendBtn.onclick = send;
-  msg.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ send(); } });
+    function toggleStream() {
+      streamMode = !streamMode;
+      document.getElementById("streamState").innerText = streamMode ? "ON" : "OFF";
+    }
 
-  routesLink.onclick = async (e)=>{ e.preventDefault();
-    const r = await fetch(`${base}/routes`); append('assistant', JSON.stringify(await r.json(), null, 2));
-  };
-  healthLink.onclick = async (e)=>{ e.preventDefault();
-    const r = await fetch(`${base}/debug/health`); const j = await r.json();
-    commitSpan.textContent = j.commit ? `commit ${j.commit}` : '';
-    append('assistant', JSON.stringify(j, null, 2));
-  };
-  statsLink.onclick = async (e)=>{ e.preventDefault();
-    const r = await fetch(`${base}/api/stats`); append('assistant', JSON.stringify(await r.json(), null, 2));
-  };
-  historyLink.onclick = async (e)=>{ e.preventDefault();
-    const r = await fetch(`${base}/api/history?cid=${encodeURIComponent(getCid())}`);
-    append('assistant', JSON.stringify(await r.json(), null, 2));
-  };
-  exportLink.onclick = async (e)=>{ e.preventDefault();
-    const r = await fetch(`${base}/api/history/export?cid=${encodeURIComponent(getCid())}`);
-    append('assistant', JSON.stringify(await r.json(), null, 2));
-  };
-  newCidBtn.onclick = ()=>{ setCid(crypto.randomUUID()); append('assistant', 'Started a fresh session.'); };
+    function append(role, text) {
+      const chat = document.getElementById("chat");
+      const div = document.createElement("div");
+      div.className = "msg " + role;
+      div.textContent = text;
+      chat.appendChild(div);
+      chat.scrollTop = chat.scrollHeight;
+    }
 
-  // Boot
-  getCid();
-  loadModels();
-  // show quick health/commit
-  (async()=>{ try{ const j = await (await fetch(`${base}/debug/health`)).json(); commitSpan.textContent = j.commit?`commit ${j.commit}`:'' }catch{} })();
-</script>
+    async function send() {
+      const input = document.getElementById("msg");
+      const text = input.value.trim();
+      if (!text) return;
+      append("user", text);
+      input.value = "";
+
+      if (streamMode) {
+        const url = `/api/chat/stream?cid=${cid}&q=${encodeURIComponent(text)}`;
+        const evtSource = new EventSource(url);
+        let buffer = "";
+        evtSource.onmessage = (e) => {
+          const data = JSON.parse(e.data);
+          if (data.delta) {
+            buffer += data.delta;
+            if (!document.getElementById("streaming")) {
+              const div = document.createElement("div");
+              div.id = "streaming";
+              div.className = "msg assistant";
+              document.getElementById("chat").appendChild(div);
+            }
+            document.getElementById("streaming").textContent = buffer;
+          }
+          if (data.done) {
+            document.getElementById("streaming").removeAttribute("id");
+            evtSource.close();
+            fetchModel();
+          }
+        };
+      } else {
+        const res = await fetch("/api/chat?cid=" + cid, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: text })
+        });
+        const data = await res.json();
+        append("assistant", data.reply || JSON.stringify(data));
+        fetchModel();
+      }
+    }
+
+    fetchModel();
+  </script>
 </body>
 </html>
+
 
 
 
