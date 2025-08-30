@@ -1,133 +1,160 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>{{ title or "Friday AI" }}</title>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
   <style>
-    :root {
-      --bg1:#0f2027; --bg2:#203a43; --bg3:#2c5364;
-      --panel:#1e293b; --panel-dark:#0f172a;
-      --text:#f1f5f9; --bot:#334155; --user:#38bdf8; --userText:#0f172a;
-      --muted:#94a3b8;
-    }
+    :root { --bg:#0b1221; --panel:#0e172a; --ink:#e2e8f0; --muted:#94a3b8; --brand:#60a5fa; --chip:#1f2a44; }
     *{box-sizing:border-box}
-    body{
-      margin:0; font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
-      background: linear-gradient(135deg, var(--bg1), var(--bg2), var(--bg3));
-      color:var(--text); min-height:100vh; display:flex; align-items:center; justify-content:center;
-    }
-    .chat-wrap{
-      width:min(760px,94vw); height:min(88vh,900px); background:var(--panel);
-      border-radius:16px; display:flex; flex-direction:column; overflow:hidden;
-      box-shadow:0 12px 28px rgba(0,0,0,.45)
-    }
-    .hdr{
-      background: var(--panel-dark); padding: 12px 16px; display:flex; gap:12px; align-items:center;
-      border-bottom:1px solid rgba(255,255,255,.06)
-    }
-    .logo{ width:28px; height:28px; border-radius:10px; background: linear-gradient(145deg,#67e8f9,#60a5fa) }
-    .title{ font-weight:600; color:#7dd3fc }
-    .badge{
-      margin-left:auto; font-size:.85rem; color:#cbd5e1; opacity:.9; display:flex; gap:10px; align-items:center
-    }
-    .badge span{ background:#0b1220; padding:6px 10px; border-radius:8px; border:1px solid rgba(255,255,255,.06) }
-    .messages{ flex:1; overflow:auto; padding:18px; scroll-behavior:smooth }
-    .bubble{
-      max-width:78%; padding:10px 12px; border-radius:12px; line-height:1.48; margin:0 0 10px;
-      white-space:pre-wrap; word-wrap:break-word; position:relative
-    }
-    .bubble.bot{ background:var(--bot); color:var(--text); margin-right:auto; border-bottom-left-radius:6px }
-    .bubble.user{ background:var(--user); color:var(--userText); margin-left:auto; border-bottom-right-radius:6px }
-    .msg{ display:block; padding-right:42px }
-    .copyBtn{
-      position:absolute; top:6px; right:6px; border:none; border-radius:8px; padding:6px 8px; font-size:12px;
-      background:rgba(255,255,255,.12); color:#e2e8f0; cursor:pointer
-    }
-    .composer{ display:flex; gap:10px; padding:12px; background:var(--panel-dark); border-top:1px solid rgba(255,255,255,.06) }
-    input[type="text"]{
-      flex:1; padding:12px 14px; border:none; border-radius:10px; background:#0b1220; color:var(--text)
-    }
-    button.send{
-      border:none; padding:12px 16px; border-radius:10px; font-weight:600; background:var(--user); color:var(--userText);
-      cursor:pointer
-    }
-    /* typing */
-    .typing{ display:inline-flex; gap:6px; align-items:center }
-    .dot{ width:8px; height:8px; border-radius:50%; background:#cbd5e1; opacity:.7; animation:bounce 1.2s infinite ease-in-out }
-    .dot:nth-child(2){ animation-delay:.15s } .dot:nth-child(3){ animation-delay:.30s }
-    @keyframes bounce{ 0%,80%,100%{transform:translateY(0);opacity:.45} 40%{transform:translateY(-5px);opacity:1} }
-    /* toast */
-    .toast{ position:fixed; left:50%; bottom:24px; transform:translateX(-50%); background:#0b1220; color:#e2e8f0;
-      border:1px solid rgba(255,255,255,.12); padding:10px 14px; border-radius:10px; opacity:0; pointer-events:none;
-      transition:.25s opacity,.25s transform }
-    .toast.show{ opacity:1; transform:translateX(-50%) translateY(-4px) }
-    @media (max-width:560px){ .bubble{ max-width:90% } }
+    body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif}
+    header{display:flex;gap:12px;align-items:center;padding:18px 22px;background:var(--panel);border-bottom:1px solid #1f2937;position:sticky;top:0}
+    header .dot{width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,#60a5fa,#34d399)}
+    header h1{font-size:16px;margin:0}
+    header .meta{margin-left:auto;color:var(--muted);font-size:12px}
+    main{max-width:880px;margin:26px auto;padding:0 16px}
+    .card{background:var(--panel);border:1px solid #1f2937;border-radius:18px;box-shadow:0 10px 40px rgba(0,0,0,.35);overflow:hidden}
+    .thread{padding:18px;display:flex;flex-direction:column;gap:12px;min-height:340px}
+    .msg{padding:12px 14px;border-radius:12px;max-width:80%}
+    .msg.user{align-self:flex-end;background:#233a78}
+    .msg.bot{align-self:flex-start;background:#15223d}
+    .typing{color:var(--muted);font-style:italic}
+    form{display:flex;gap:10px;padding:14px;background:#0c172e;border-top:1px solid #1f2937}
+    textarea{flex:1;resize:none;min-height:44px;max-height:140px;padding:12px 14px;border-radius:12px;border:1px solid #2b3a55;background:#0b1221;color:var(--ink)}
+    button{padding:12px 16px;border:0;border-radius:12px;background:var(--brand);color:#0b1221;font-weight:700;cursor:pointer}
+    .toolbar{display:flex;gap:10px;align-items:center;color:var(--muted);font-size:12px;padding:8px 14px;border-top:1px dashed #20304f;background:#0c172e}
+    .chip{background:var(--chip);padding:4px 8px;border-radius:999px;border:1px solid #2b3a55}
+    .right{margin-left:auto}
+    a{color:#8ab4ff;text-decoration:none}
   </style>
 </head>
+
 <body>
-  <div class="chat-wrap">
-    <div class="hdr">
-      <div class="logo" aria-hidden="true"></div>
-      <div class="title">Friday AI</div>
-      <div class="badge">
-        <span id="model">model: …</span>
-        <span id="sess">session: …</span>
-        <span id="msgs">msgs: 0</span>
+  <header>
+    <div class="dot"></div>
+    <h1>Friday AI</h1>
+    <div class="meta"><span id="modelChip" class="chip">model…</span></div>
+  </header>
+
+  <main>
+    <div class="card">
+      <div class="thread" id="thread"></div>
+      <div class="toolbar">
+        <label><input id="streamToggle" type="checkbox" checked> Stream</label>
+        <span class="right"><a href="/api/history" target="_blank">history</a> · <a href="/debug/stats" target="_blank">stats</a> · <a href="/routes" target="_blank">routes</a></span>
       </div>
+      <form id="form">
+        <textarea id="input" placeholder="Type a message…" autofocus></textarea>
+        <button id="sendBtn" type="submit">Send</button>
+      </form>
     </div>
+  </main>
 
-    <div id="messages" class="messages" aria-live="polite"></div>
+  <script>
+    const $ = sel => document.querySelector(sel);
+    const thread = $('#thread');
+    const input = $('#input');
+    const form = $('#form');
+    const streamToggle = $('#streamToggle');
+    const modelChip = $('#modelChip');
 
-    <form class="composer" onsubmit="handleSubmit(event)">
-      <input id="userInput" type="text" placeholder="Type a message…" autocomplete="off" />
-      <button id="sendBtn" class="send" type="submit">Send</button>
-    </form>
-  </div>
+    const el = (cls, text) => {
+      const d = document.createElement('div');
+      d.className = cls;
+      d.textContent = text;
+      return d;
+    };
 
-  <div id="toast" class="toast">Copied!</div>
+    async function hydrate() {
+      // model label
+      try {
+        const m = await fetch('/api/model').then(r=>r.json());
+        modelChip.textContent = m.model + (m.has_key ? '' : ' (dev)');
+      } catch { modelChip.textContent = 'model?'; }
 
-<script>
-  const list = document.getElementById('messages');
-  const form = document.getElementById('chat-form');
-  const input = document.getElementById('chat-input');
-  const clearBtn = document.getElementById('clear');
-
-  function li(text, who) {
-    const el = document.createElement('div');
-    el.className = `bubble ${who}`;
-    el.textContent = text;
-    list.appendChild(el);
-    list.scrollTop = list.scrollHeight;
-  }
-
-  async function bootstrap() {
-    const hist = await loadHistory();
-    if (Array.isArray(hist)) {
-      hist.forEach(m => li(m.content, m.role));
+      // history
+      try {
+        const hist = await fetch('/api/history').then(r=>r.json());
+        hist.forEach(m => {
+          thread.appendChild(el(`msg ${m.role==='user'?'user':'bot'}`, m.content));
+        });
+        thread.scrollTop = thread.scrollHeight;
+      } catch {}
+      if (thread.children.length === 0) {
+        thread.appendChild(el('msg bot', 'Welcome! Ask me anything.'));
+      }
     }
-  }
 
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const msg = input.value.trim();
-    if (!msg) return;
-    input.value = "";
-    li(msg, 'user');
-    const res = await sendChat(msg);
-    li(res.reply ?? (res.error || '…error'), 'assistant');
-  });
+    function pushUser(text){
+      const m = el('msg user', text);
+      thread.appendChild(m);
+      thread.scrollTop = thread.scrollHeight;
+    }
+    function pushBot(text){
+      const m = el('msg bot', text);
+      thread.appendChild(m);
+      thread.scrollTop = thread.scrollHeight;
+      return m;
+    }
 
-  clearBtn?.addEventListener('click', async () => {
-    await clearHistory();
-    list.innerHTML = '';
-  });
+    async function sendMessage(text){
+      pushUser(text);
+      input.value = '';
+      const typing = pushBot('…'); typing.classList.add('typing');
 
-  bootstrap();
-</script>
+      if (streamToggle.checked){
+        const res = await fetch('/api/chat_stream', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({message:text})
+        });
+        typing.textContent = ''; typing.classList.remove('typing');
+        const reader = res.body.getReader();
+        const dec = new TextDecoder();
+        let acc = '';
+        while(true){
+          const {done, value} = await reader.read();
+          if (done) break;
+          const chunk = dec.decode(value, {stream:true});
+          chunk.split('\n\n').forEach(line=>{
+            if (!line.startsWith('data:')) return;
+            const data = JSON.parse(line.slice(5));
+            if (data.type === 'delta'){
+              typing.textContent += data.text;
+            }
+          });
+        }
+        typing.classList.remove('typing');
+      } else {
+        const j = await fetch('/api/chat', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({message:text})
+        }).then(r=>r.json());
+        typing.textContent = j.reply || (j.error ? `[${j.error}]` : '…');
+        typing.classList.remove('typing');
+      }
+      thread.scrollTop = thread.scrollHeight;
+    }
 
+    form.addEventListener('submit', e=>{
+      e.preventDefault();
+      const text = input.value.trim();
+      if(!text) return;
+      sendMessage(text);
+    });
 
+    // Enter to send / Shift+Enter newline
+    input.addEventListener('keydown', e=>{
+      if(e.key==='Enter' && !e.shiftKey){
+        e.preventDefault();
+        form.dispatchEvent(new Event('submit'));
+      }
+    });
+
+    hydrate();
+  </script>
 </body>
 </html>
+
 
