@@ -1,275 +1,204 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"
-  />
-  <title>Friday AI — Chat</title>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>{{ title or "Friday AI" }}</title>
   <style>
-    :root{
-      --bg:#0c1220; --panel:#121a2b; --ink:#e9efff; --muted:#a9b4d6;
-      --accent:#79b8ff; --accent-2:#7c4dff; --chip:#1c2740; --good:#38d39f; --warn:#ffb86b;
-      --radius:14px;
-    }
-    *{box-sizing:border-box}
-    html,body{height:100%}
-    body{
-      margin:0; background:radial-gradient(1200px 800px at 10% -10%, #1a2440 0%, transparent 60%),
-      radial-gradient(1200px 800px at 110% 20%, #1b1635 0%, transparent 60%), var(--bg);
-      color:var(--ink); font:16px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-      display:flex; flex-direction:column; gap:16px;
-    }
-    header{
-      display:flex; align-items:center; justify-content:space-between; gap:16px;
-      padding:16px clamp(14px, 3vw, 28px);
-    }
-    .brand{display:flex; align-items:center; gap:12px}
-    .logo{
-      width:36px; height:36px; border-radius:10px;
-      background:linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
-      box-shadow:0 8px 24px rgba(124,77,255,.35), inset 0 0 20px rgba(255,255,255,.18);
-    }
-    .title{font-weight:700; letter-spacing:.2px}
-    .badge{
-      padding:4px 10px; border-radius:999px; background:var(--chip); color:var(--muted);
-      font-size:12px; border:1px solid rgba(255,255,255,.06)
-    }
-    .row{display:flex; align-items:center; gap:10px; flex-wrap:wrap}
-    .chip{
-      background:var(--chip); color:var(--muted); padding:6px 10px; border-radius:10px; border:1px solid rgba(255,255,255,.06);
-      display:inline-flex; align-items:center; gap:8px;
-    }
-    select, button, input[type="text"], textarea{
-      color:var(--ink); background:#0e1526; border:1px solid rgba(255,255,255,.08); border-radius:10px;
-      padding:10px 12px; font:inherit; outline:none;
-    }
-    select:focus, input:focus, textarea:focus{border-color:rgba(121,184,255,.6); box-shadow:0 0 0 4px rgba(121,184,255,.12)}
-    button{
-      background:linear-gradient(180deg, #79b8ff, #6aaef7);
-      color:#061427; font-weight:700; border:none; padding:12px 16px; border-radius:12px;
-      box-shadow:0 8px 30px rgba(121,184,255,.35); cursor:pointer;
-    }
-    button.secondary{background:#0f182b; color:var(--ink); border:1px solid rgba(255,255,255,.08); box-shadow:none}
-    button:disabled{opacity:.6; cursor:not-allowed}
-    main{flex:1; display:grid; place-items:start center}
-    .card{
-      width:min(960px, 92vw); background:rgba(15,22,40,.75); backdrop-filter: blur(8px);
-      border:1px solid rgba(255,255,255,.06); border-radius:var(--radius); padding:18px; margin-bottom:24px;
-      box-shadow:0 12px 40px rgba(0,0,0,.35), inset 0 0 80px rgba(124,77,255,.06);
-    }
-    .messages{
-      display:flex; flex-direction:column; gap:10px; max-height:55vh; overflow:auto; padding:8px;
-      border-radius:12px; background:rgba(20,28,50,.55); border:1px solid rgba(255,255,255,.05);
-    }
-    .bubble{
-      max-width:80%; padding:10px 12px; border-radius:12px; white-space:pre-wrap;
-      border:1px solid rgba(255,255,255,.06);
-    }
-    .me   {align-self:flex-end; background:#15213c}
-    .bot  {align-self:flex-start; background:#121a2b}
-    .system{align-self:center; background:#0e1526; color:var(--muted); font-size:13px}
-    .grid{
-      display:grid; grid-template-columns:1fr auto; gap:10px; align-items:center; margin-top:14px;
-    }
-    textarea{
-      height:64px; resize:vertical; min-height:56px; max-height:30vh;
-    }
-    .bar{display:flex; gap:10px; align-items:center; flex-wrap:wrap}
-    a.tool{color:var(--muted); text-decoration:none; border-bottom:1px dotted rgba(255,255,255,.2)}
-    .mini{font-size:12px; color:var(--muted)}
-    .right{margin-left:auto}
-    .hidden{display:none}
-    .linklike{cursor:pointer; color:var(--accent)}
+    :root { --bg:#0f172a; --card:#0b233b; --ink:#e5e7eb; --muted:#94a3b8; --accent:#60a5fa; }
+    html,body{height:100%; background:var(--bg); color:var(--ink); font:15px/1.45 system-ui,Segoe UI,Roboto,Arial,sans-serif; margin:0}
+    .wrap{max-width:920px; margin:32px auto; padding:0 16px}
+    .card{background:linear-gradient(180deg,#0f2a46,#0b233b); border:1px solid #143251; border-radius:16px; box-shadow:0 10px 40px rgba(0,0,0,.25)}
+    header{padding:16px 20px; display:flex; align-items:center; justify-content:space-between}
+    .badge{background:linear-gradient(135deg,#5eead4,#60a5fa); width:36px; height:36px; border-radius:10px; margin-right:10px}
+    .ttl{display:flex; align-items:center; gap:8px; font-weight:600}
+    .links a{color:var(--muted); text-decoration:none; margin-left:12px}
+    .links a:hover{color:var(--ink)}
+    .log{height:360px; overflow:auto; padding:16px 20px}
+    .bubble{max-width:72%; padding:10px 12px; border-radius:10px; margin:8px 0; white-space:pre-wrap}
+    .u{background:#0b395b; align-self:flex-end}
+    .a{background:#12273f; align-self:flex-start}
+    .row{display:flex; gap:10px; padding:16px; border-top:1px solid #143251}
+    input[type=text]{flex:1; padding:12px 12px; background:#0e2138; border:1px solid #183a5b; border-radius:12px; color:var(--ink)}
+    button{background:#60a5fa; color:#002244; border:0; padding:12px 16px; border-radius:12px; font-weight:600; cursor:pointer}
+    .meta{font-size:12px; color:var(--muted); padding:0 20px 16px}
+    .flex{display:flex; align-items:center; gap:12px}
+    select{background:#0e2138; color:var(--ink); border:1px solid #183a5b; border-radius:10px; padding:8px}
+    label{font-size:13px; color:var(--muted)}
   </style>
 </head>
 <body>
-  <header>
-    <div class="brand">
-      <div class="logo" aria-hidden="true"></div>
-      <div>
-        <div class="title">Friday AI</div>
-        <div class="mini">Simple chat UI · <span id="commit">…</span></div>
+<div class="wrap">
+  <div class="card">
+    <header>
+      <div class="ttl"><div class="badge"></div> Friday AI</div>
+      <div class="links">
+        <a href="/chat">/chat</a>
+        · <a id="routesLink" href="#">routes</a>
+        · <a id="healthLink" href="#">health</a>
+        · <a id="statsLink" href="#">stats</a>
+        · <a id="historyLink" href="#">history</a>
+        · <a id="exportLink" href="#">export</a>
       </div>
-    </div>
-    <div class="row">
-      <label class="chip">
-        <input id="stream" type="checkbox" checked />
-        Stream
-      </label>
-      <label class="chip">
-        Model
+    </header>
+
+    <div id="log" class="log" style="display:flex; flex-direction:column;"></div>
+
+    <div class="meta flex" style="justify-content:space-between">
+      <div class="flex">
+        <label class="flex"><input id="stream" type="checkbox" checked> Stream</label>
+        <label>Model:</label>
         <select id="model"></select>
-      </label>
-      <a class="chip linklike" id="historyLink">history</a>
-      <a class="chip" href="/routes" target="_blank" rel="noopener">routes</a>
-      <a class="chip" href="/debug/health" target="_blank" rel="noopener">health</a>
-      <a class="chip" href="/api/history/export" target="_blank" rel="noopener">export</a>
-    </div>
-  </header>
-
-  <main>
-    <section class="card" style="width:min(960px,92vw)">
-      <div id="messages" class="messages" aria-live="polite"></div>
-
-      <div class="grid">
-        <textarea id="input" placeholder="Type a message…" autocomplete="off"></textarea>
-        <div class="bar">
-          <button id="send">Send</button>
-          <button id="clear" class="secondary">Clear</button>
-          <span class="mini right">/chat</span>
-        </div>
+        <span id="commit" title="commit"></span>
       </div>
-    </section>
-  </main>
-
-  <!-- History modal (very light-weight) -->
-  <section id="historyModal" class="hidden" aria-modal="true" role="dialog">
-    <div class="card" style="width:min(820px,92vw)">
-      <div class="row" style="justify-content:space-between; margin-bottom:8px">
-        <div class="title">Conversation history</div>
-        <button id="closeHist" class="secondary">Close</button>
+      <div class="flex">
+        <label id="cidLabel"></label>
+        <button id="newCid">New session</button>
       </div>
-      <div id="historyBox" class="messages" style="max-height:50vh"></div>
     </div>
-  </section>
 
-  <script>
-    // --------- helpers
-    const el = (id)=>document.getElementById(id);
-    const msgs = el('messages');
-    const input = el('input');
-    const sendBtn = el('send');
-    const clearBtn= el('clear');
-    const modelSel= el('model');
-    const streamCb= el('stream');
-    const commitEl= el('commit');
+    <div class="row">
+      <input id="msg" type="text" placeholder="Type a message…" />
+      <button id="send">Send</button>
+    </div>
+  </div>
+</div>
 
-    function addBubble(text, cls='bot'){
-      const b = document.createElement('div');
-      b.className = `bubble ${cls}`;
-      b.textContent = text;
-      msgs.appendChild(b);
-      msgs.scrollTop = msgs.scrollHeight;
-    }
+<script>
+  const base = location.origin;
+  const log = document.querySelector('#log');
+  const msg = document.querySelector('#msg');
+  const sendBtn = document.querySelector('#send');
+  const routesLink = document.querySelector('#routesLink');
+  const healthLink = document.querySelector('#healthLink');
+  const statsLink = document.querySelector('#statsLink');
+  const historyLink = document.querySelector('#historyLink');
+  const exportLink = document.querySelector('#exportLink');
+  const streamChk = document.querySelector('#stream');
+  const modelSel = document.querySelector('#model');
+  const commitSpan = document.querySelector('#commit');
+  const cidLabel = document.querySelector('#cidLabel');
+  const newCidBtn = document.querySelector('#newCid');
 
-    function addSystem(line){ addBubble(line, 'system'); }
+  function getCid(){
+    let c = localStorage.getItem('cid');
+    if(!c){ c = crypto.randomUUID(); localStorage.setItem('cid', c); }
+    cidLabel.textContent = `cid: ${c.slice(0,8)}…`;
+    return c;
+  }
+  function setCid(c){
+    localStorage.setItem('cid', c);
+    cidLabel.textContent = `cid: ${c.slice(0,8)}…`;
+  }
 
-    // --------- load boot info (commit, models)
-    async function boot(){
-      try{
-        const h = await fetch('/debug/health').then(r=>r.json());
-        if(h && h.commit) commitEl.textContent = h.commit;
-      }catch{ /* ignore */ }
+  function append(role, text){
+    const b = document.createElement('div');
+    b.className = `bubble ${role==='user'?'u':'a'}`;
+    b.textContent = text;
+    log.appendChild(b);
+    log.scrollTop = log.scrollHeight;
+  }
 
-      try{
-        const data = await fetch('/api/models').then(r=>r.json());
-        const { active, available=[] } = data;
-        modelSel.innerHTML = '';
-        available.forEach(m=>{
-          const opt = document.createElement('option');
-          opt.value = m; opt.textContent = m; if(m===active) opt.selected = true;
-          modelSel.appendChild(opt);
-        });
-        addSystem(`Model: ${active ?? 'dev echo'}`);
-      }catch{
-        addSystem('Model: dev echo (no OPENAI_API_KEY)');
-        modelSel.innerHTML = '<option value="dev-echo" selected>dev-echo</option>';
-        modelSel.disabled = true;
-      }
-    }
-
-    // --------- send chat
-    async function send(){
-      const message = input.value.trim();
-      if(!message) return;
-      input.value='';
-
-      addBubble(message, 'me');
-
-      const body = { message, stream: !!streamCb.checked };
-      try{
-        const res = await fetch('/api/chat', {
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body: JSON.stringify(body)
-        });
-        const data = await res.json();
-        if(!res.ok){
-          addBubble(`Error: ${data?.error || res.status}`, 'system');
-          return;
-        }
-        addBubble(data.reply || '(no reply)', 'bot');
-      }catch(err){
-        addBubble('Network error. Check logs.', 'system');
-      }
-    }
-
-    // --------- set model
-    modelSel.addEventListener('change', async ()=>{
-      const model = modelSel.value;
-      try{
-        const res = await fetch('/api/model', {
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ model })
-        });
-        const data = await res.json();
-        if(res.ok){
-          addSystem(`Switched model → ${data.active || model}`);
-        }else{
-          addSystem(`Failed to set model: ${data.error || res.status}`);
-        }
-      }catch{ addSystem('Failed to set model (network)'); }
+  async function loadModels(){
+    const r = await fetch(`${base}/api/models`);
+    const j = await r.json();
+    modelSel.innerHTML = '';
+    j.available.forEach(m=>{
+      const o = document.createElement('option');
+      o.value = m; o.textContent = m;
+      if(m===j.active) o.selected = true;
+      modelSel.appendChild(o);
     });
+  }
 
-    // --------- history modal
-    const histLink = document.getElementById('historyLink');
-    const modal = document.getElementById('historyModal');
-    const histBox = document.getElementById('historyBox');
-    document.getElementById('closeHist').onclick = ()=> modal.classList.add('hidden');
+  modelSel.onchange = async ()=>{
+    const r = await fetch(`${base}/api/model`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({model: modelSel.value})
+    });
+    const j = await r.json();
+    append('assistant', `Active model: ${j.active ?? JSON.stringify(j)}`);
+  };
 
-    histLink.addEventListener('click', async ()=>{
-      histBox.innerHTML = '';
-      try{
-        const data = await fetch('/api/history').then(r=>r.json());
-        if(Array.isArray(data?.messages) && data.messages.length){
-          data.messages.forEach(m=>{
-            const who = m.role === 'user' ? 'me' : (m.role === 'assistant' ? 'bot' : 'system');
-            const b = document.createElement('div');
-            b.className = `bubble ${who}`;
-            b.textContent = (m.role+': ').padEnd(6,' ') + (m.content ?? '');
-            histBox.appendChild(b);
-          });
-        }else{
-          const b = document.createElement('div');
-          b.className = 'bubble system';
-          b.textContent = 'No history yet.';
-          histBox.appendChild(b);
-        }
-      }catch{
-        const b = document.createElement('div');
-        b.className = 'bubble system';
-        b.textContent = 'Failed to load history.';
-        histBox.appendChild(b);
+  async function send(){
+    const text = msg.value.trim();
+    if(!text) return;
+    append('user', text);
+    msg.value = '';
+
+    const cid = getCid();
+
+    if(streamChk.checked){
+      const url = new URL(`${base}/api/chat/stream`);
+      url.searchParams.set('cid', cid);
+      url.searchParams.set('q', text);
+
+      const resp = await fetch(url, { method: 'GET' });
+      const reader = resp.body.getReader();
+      let acc = '';
+      while(true){
+        const {value, done} = await reader.read();
+        if(done) break;
+        const chunk = new TextDecoder().decode(value);
+        chunk.split("\n\n").forEach(line=>{
+          if(line.startsWith("data: ")){
+            try{
+              const obj = JSON.parse(line.slice(6));
+              if(obj.delta){ acc += obj.delta; }
+              if(obj.done){
+                append('assistant', acc);
+                acc = '';
+              }
+            }catch{}
+          }
+        });
       }
-      modal.classList.remove('hidden');
-    });
+    } else {
+      const r = await fetch(`${base}/api/chat?cid=${encodeURIComponent(cid)}`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({message: text})
+      });
+      const j = await r.json();
+      if(j.cid && j.cid !== cid) setCid(j.cid);
+      append('assistant', j.reply ?? JSON.stringify(j));
+    }
+  }
 
-    // --------- wire UI
-    sendBtn.onclick = send;
-    input.addEventListener('keydown', (e)=>{
-      if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); send(); }
-    });
-    clearBtn.onclick = ()=>{ msgs.innerHTML=''; addSystem('Cleared.'); };
+  sendBtn.onclick = send;
+  msg.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ send(); } });
 
-    // --------- welcome
-    addBubble('Welcome! Ask me anything.', 'bot');
-    boot();
-  </script>
+  routesLink.onclick = async (e)=>{ e.preventDefault();
+    const r = await fetch(`${base}/routes`); append('assistant', JSON.stringify(await r.json(), null, 2));
+  };
+  healthLink.onclick = async (e)=>{ e.preventDefault();
+    const r = await fetch(`${base}/debug/health`); const j = await r.json();
+    commitSpan.textContent = j.commit ? `commit ${j.commit}` : '';
+    append('assistant', JSON.stringify(j, null, 2));
+  };
+  statsLink.onclick = async (e)=>{ e.preventDefault();
+    const r = await fetch(`${base}/api/stats`); append('assistant', JSON.stringify(await r.json(), null, 2));
+  };
+  historyLink.onclick = async (e)=>{ e.preventDefault();
+    const r = await fetch(`${base}/api/history?cid=${encodeURIComponent(getCid())}`);
+    append('assistant', JSON.stringify(await r.json(), null, 2));
+  };
+  exportLink.onclick = async (e)=>{ e.preventDefault();
+    const r = await fetch(`${base}/api/history/export?cid=${encodeURIComponent(getCid())}`);
+    append('assistant', JSON.stringify(await r.json(), null, 2));
+  };
+  newCidBtn.onclick = ()=>{ setCid(crypto.randomUUID()); append('assistant', 'Started a fresh session.'); };
+
+  // Boot
+  getCid();
+  loadModels();
+  // show quick health/commit
+  (async()=>{ try{ const j = await (await fetch(`${base}/debug/health`)).json(); commitSpan.textContent = j.commit?`commit ${j.commit}`:'' }catch{} })();
+</script>
 </body>
 </html>
+
 
 
 
