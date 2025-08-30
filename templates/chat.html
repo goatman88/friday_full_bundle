@@ -137,7 +137,11 @@
         };
         const res = await fetch('/api/chat', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+  "Content-Type": "application/json",
+  "X-Session-Id": sessionId, // ensure you set sessionId once per tab
+},
+
           body: JSON.stringify(payload)
         });
         const data = await res.json().catch(()=> ({}));
