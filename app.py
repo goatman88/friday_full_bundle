@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 from flask import (
-    Flask, jsonify, request, render_template, send_from_directory, Response
+    Flask, jsonify, request, render_template, send_from_directory, Response, make_response
 )
 from flask_cors import CORS
 
@@ -17,6 +17,8 @@ OPENAI_KEY = os.getenv("OPENAI_API_KEY", "")
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 AVAILABLE_MODELS = ["gpt-4o", "gpt-4o-mini", "gpt-4.1-mini", "o3-mini"]
 ACTIVE_MODEL = DEFAULT_MODEL if DEFAULT_MODEL in AVAILABLE_MODELS else "gpt-4o-mini"
+
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")  # <— set this in Render
 
 # ---------------- Optional Redis persistence (falls back to memory)
 _redis = None
@@ -85,7 +87,6 @@ def _secure(resp):
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["X-Frame-Options"] = "DENY"
     resp.headers["Referrer-Policy"] = "no-referrer"
-    # If you later add CDNs/fonts, extend this CSP accordingly
     resp.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
         "style-src 'self' 'unsafe-inline'; "
@@ -110,7 +111,7 @@ def routes():
     for rule in app.url_map.iter_rules():
         table.append({
             "endpoint": rule.endpoint,
-            "methods": sorted(m for m in rule.methods if m in {"GET", "POST", "OPTIONS", "DELETE"}),
+            "methods": sorted(m for m in rule.methods if m in {"GET","POST","OPTIONS","DELETE"}),
             "rule": str(rule),
         })
     return jsonify(sorted(table, key=lambda r: r["rule"]))
@@ -139,9 +140,7 @@ START_TS = int(time.time())
 
 @app.get("/api/stats")
 def stats():
-    total_msgs = 0
-    for cid in _all_cids():
-        total_msgs += len(_load_thread(cid))
+    total_msgs = sum(len(_load_thread(cid)) for cid in _all_cids())
     return jsonify({
         "ok": True,
         "since_epoch": START_TS,
@@ -158,6 +157,14 @@ def _cid_from_request() -> str:
     # priority: explicit query → header → new guid
     cid = request.args.get("cid") or request.headers.get("X-Client-Id")
     return cid or (uuid.uuid4().hex)
+
+def _require_admin() -> Optional[Response]:
+    if not ADMIN_TOKEN:
+        return make_response(jsonify({"error": "admin_disabled"}), 403)
+    tok = request.headers.get("X-Admin-Token") or request.args.get("token")
+    if tok != ADMIN_TOKEN:
+        return make_response(jsonify({"error": "unauthorized"}), 401)
+    return None
 
 def _dev_echo(user_msg: str) -> str:
     return f"(dev echo {COMMIT}) You said: {user_msg}"
@@ -189,30 +196,21 @@ def api_chat():
 
     cid = _cid_from_request()
     thread = _load_thread(cid)
-
-    # add user
     thread.append({"role": "user", "content": user_msg, "ts": time.time()})
 
-    # get assistant reply
     try:
-        if not OPENAI_KEY:
-            reply = _dev_echo(user_msg)
-        else:
-            reply = _openai_chat(user_msg, history=thread)
+        reply = _dev_echo(user_msg) if not OPENAI_KEY else _openai_chat(user_msg, history=thread)
     except Exception as e:
         reply = f"(upstream error) {e!s}"
 
-    # add assistant
     thread.append({"role": "assistant", "content": reply, "ts": time.time()})
     _save_thread(cid, thread)
-
     return jsonify({"reply": reply, "cid": cid})
 
 # ---------------- Streaming (SSE)
 @app.get("/api/chat/stream")
 @limit("30/minute")
 def chat_stream():
-    # Accept ?q= OR JSON body
     q = request.args.get("q")
     if not q and request.data:
         try:
@@ -229,18 +227,13 @@ def chat_stream():
     _save_thread(cid, thread)
 
     def gen():
-        def send(obj):
-            yield f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
+        def send(obj): yield f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
 
-        # Dev: simple fake streaming
         if not OPENAI_KEY:
             for chunk in ["(dev echo) ", "You said: ", user_msg]:
-                time.sleep(0.03)
-                yield from send({"delta": chunk})
-            yield from send({"done": True})
-            return
+                time.sleep(0.03); yield from send({"delta": chunk})
+            yield from send({"done": True}); return
 
-        # Real Streaming via OpenAI
         from openai import OpenAI
         client = OpenAI(api_key=OPENAI_KEY)
         messages = [{"role": "system", "content": "You are Friday AI. Be brief, friendly, and helpful."}]
@@ -249,18 +242,12 @@ def chat_stream():
                 messages.append({"role": m["role"], "content": m["content"]})
         messages.append({"role": "user", "content": user_msg})
 
-        stream = client.chat.completions.create(
-            model=ACTIVE_MODEL,
-            messages=messages,
-            stream=True,
-            temperature=0.6,
-        )
+        stream = client.chat.completions.create(model=ACTIVE_MODEL, messages=messages, stream=True, temperature=0.6)
         assembled = []
         for event in stream:
             delta = event.choices[0].delta.content or ""
             if delta:
-                assembled.append(delta)
-                yield from send({"delta": delta})
+                assembled.append(delta); yield from send({"delta": delta})
         reply = "".join(assembled).strip()
         thread.append({"role": "assistant", "content": reply, "ts": time.time()})
         _save_thread(cid, thread)
@@ -268,7 +255,7 @@ def chat_stream():
 
     return Response(gen(), mimetype="text/event-stream")
 
-# ---------------- History
+# ---------------- History (get/export/clear)
 @app.get("/api/history")
 def get_history():
     cid = _cid_from_request()
@@ -290,12 +277,54 @@ def export_history():
         "messages": msgs,
     })
 
-# NEW: Clear current cid’s history (used by “Clear Chat” in UI)
+# downloadable file attachment (for the UI "Download" button)
+@app.get("/api/history/export_file")
+def export_history_file():
+    cid = _cid_from_request()
+    payload = {
+        "cid": cid,
+        "model": ACTIVE_MODEL,
+        "commit": COMMIT,
+        "exported_at": datetime.utcnow().isoformat() + "Z",
+        "messages": _load_thread(cid),
+    }
+    blob = json.dumps(payload, ensure_ascii=False, indent=2)
+    resp = make_response(blob)
+    resp.headers["Content-Type"] = "application/json; charset=utf-8"
+    resp.headers["Content-Disposition"] = f'attachment; filename="friday_{cid[:8]}_{int(time.time())}.json"'
+    return resp
+
 @app.delete("/api/history")
 def clear_history():
     cid = _cid_from_request()
     _delete_thread(cid)
     return jsonify({"ok": True, "cid": cid})
+
+# ---------------- ADMIN (token-protected) ----------------
+@app.get("/api/admin/cids")
+def admin_cids():
+    gate = _require_admin()
+    if gate: return gate
+    return jsonify({"ok": True, "cids": _all_cids(), "count": len(_all_cids())})
+
+@app.delete("/api/admin/purge")
+def admin_purge_one():
+    gate = _require_admin()
+    if gate: return gate
+    cid = request.args.get("cid")
+    if not cid:
+        return jsonify({"error": "missing_cid"}), 400
+    _delete_thread(cid)
+    return jsonify({"ok": True, "purged": cid})
+
+@app.delete("/api/admin/purge_all")
+def admin_purge_all():
+    gate = _require_admin()
+    if gate: return gate
+    purged = []
+    for cid in _all_cids():
+        _delete_thread(cid); purged.append(cid)
+    return jsonify({"ok": True, "purged_count": len(purged), "purged": purged})
 
 # ---------------- Static passthrough
 @app.get("/static/<path:filename>")
@@ -318,6 +347,7 @@ def method_not_allowed(_):
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=True)
+
 
 
 
