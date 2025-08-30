@@ -1,7 +1,7 @@
 # app.py
-import os, json, time, uuid, base64
+import os, json, time, uuid, base64, sqlite3
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from functools import wraps
 
 from flask import (
@@ -16,43 +16,104 @@ CORS(app)
 
 COMMIT = (os.getenv("RENDER_GIT_COMMIT", "")[:7] or os.getenv("COMMIT", "") or "dev")
 OPENAI_KEY = os.getenv("OPENAI_API_KEY", "")
-DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-AVAILABLE_MODELS = ["gpt-4o", "gpt-4o-mini", "gpt-4.1-mini", "o3-mini"]
-ACTIVE_MODEL = DEFAULT_MODEL if DEFAULT_MODEL in AVAILABLE_MODELS else "gpt-4o-mini"
+
+# Models: allow override via CSV in OPENAI_MODELS; else sane defaults
+_default_models = ["gpt-4.1", "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini", "o3-mini"]
+_env_models = [m.strip() for m in os.getenv("OPENAI_MODELS", "").split(",") if m.strip()]
+AVAILABLE_MODELS = _env_models or _default_models
+DEFAULT_MODEL = os.getenv("OPENAI_MODEL", AVAILABLE_MODELS[0])
+ACTIVE_MODEL = DEFAULT_MODEL if DEFAULT_MODEL in AVAILABLE_MODELS else AVAILABLE_MODELS[0]
 
 # Security/env
-ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")        # token for admin APIs
-BASIC_USER   = os.getenv("BASIC_AUTH_USER", "")   # HTTP Basic user (for protected pages)
-BASIC_PASS   = os.getenv("BASIC_AUTH_PASS", "")   # HTTP Basic pass (for protected pages)
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
+BASIC_USER   = os.getenv("BASIC_AUTH_USER", "")
+BASIC_PASS   = os.getenv("BASIC_AUTH_PASS", "")
 
-# Optional: allow external CDNs/fonts in CSP. Comma-separated list of origins, e.g.:
-# ASSET_CDN="https://fonts.googleapis.com,https://fonts.gstatic.com"
+# Optional: allow external CDNs/fonts in CSP (comma-separated origins)
 ASSET_CDN = [o.strip() for o in os.getenv("ASSET_CDN", "").split(",") if o.strip()]
 
-# ---------------- Optional Redis persistence (falls back to memory)
+# ---------------- Storage backends (Redis ➜ SQLite ➜ Memory)
+# Redis (optional)
 _redis = None
 try:
     from redis import Redis
     if os.getenv("REDIS_URL"):
         _redis = Redis.from_url(os.getenv("REDIS_URL"), decode_responses=True)
 except Exception:
-    _redis = None  # ok, fallback to memory
+    _redis = None
 
+# SQLite (fallback if no Redis)
+DB_PATH = os.getenv("SQLITE_PATH", "friday.db")
+_sqlite = None
+
+def _sqlite_init():
+    global _sqlite
+    if _sqlite is not None:
+        return
+    _sqlite = sqlite3.connect(DB_PATH, check_same_thread=False)
+    _sqlite.execute("""
+        CREATE TABLE IF NOT EXISTS messages (
+            cid TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            ts REAL NOT NULL
+        )
+    """)
+    _sqlite.execute("CREATE INDEX IF NOT EXISTS idx_messages_cid ON messages(cid)")
+    _sqlite.commit()
+
+def _use_sqlite() -> bool:
+    return (_redis is None)  # we prefer Redis if available
+
+# In-memory (last fallback)
+_conversations: Dict[str, List[Dict[str, Any]]] = {}
+
+# Unified helpers (same signature regardless of backend)
 def _rkey(cid: str) -> str: return f"conv:{cid}"
 
 def _load_thread(cid: str) -> List[Dict[str, Any]]:
+    # Redis
     if _redis:
         raw = _redis.get(_rkey(cid))
         return json.loads(raw) if raw else []
+    # SQLite
+    if _use_sqlite():
+        _sqlite_init()
+        cur = _sqlite.execute(
+            "SELECT role, content, ts FROM messages WHERE cid = ? ORDER BY ts ASC", (cid,)
+        )
+        rows = cur.fetchall()
+        return [{"role": r[0], "content": r[1], "ts": r[2]} for r in rows]
+    # Memory
     return _conversations.get(cid, [])
 
 def _save_thread(cid: str, msgs: List[Dict[str, Any]]) -> None:
-    if _redis: _redis.set(_rkey(cid), json.dumps(msgs))
-    else: _conversations[cid] = msgs
+    # Redis
+    if _redis:
+        _redis.set(_rkey(cid), json.dumps(msgs))
+        return
+    # SQLite
+    if _use_sqlite():
+        _sqlite_init()
+        with _sqlite:  # transaction
+            _sqlite.execute("DELETE FROM messages WHERE cid = ?", (cid,))
+            _sqlite.executemany(
+                "INSERT INTO messages (cid, role, content, ts) VALUES (?, ?, ?, ?)",
+                [(cid, m["role"], m["content"], float(m.get("ts", time.time()))) for m in msgs]
+            )
+        return
+    # Memory
+    _conversations[cid] = msgs
 
 def _delete_thread(cid: str) -> None:
-    if _redis: _redis.delete(_rkey(cid))
-    else: _conversations.pop(cid, None)
+    if _redis:
+        _redis.delete(_rkey(cid)); return
+    if _use_sqlite():
+        _sqlite_init()
+        with _sqlite:
+            _sqlite.execute("DELETE FROM messages WHERE cid = ?", (cid,))
+        return
+    _conversations.pop(cid, None)
 
 def _all_cids() -> List[str]:
     if _redis:
@@ -63,10 +124,29 @@ def _all_cids() -> List[str]:
             cids.extend([k.split(":", 1)[1] for k in keys])
             if cursor == 0: break
         return cids
+    if _use_sqlite():
+        _sqlite_init()
+        cur = _sqlite.execute("SELECT DISTINCT cid FROM messages ORDER BY cid ASC")
+        return [row[0] for row in cur.fetchall()]
     return list(_conversations.keys())
 
-# in-memory fallback
-_conversations: Dict[str, List[Dict[str, Any]]] = {}
+def _purge_all() -> Tuple[int, List[str]]:
+    if _redis:
+        keys = _redis.keys("conv:*")
+        count = len(keys)
+        if count: _redis.delete(*keys)
+        return count, [k.split(":",1)[1] for k in keys]
+    if _use_sqlite():
+        _sqlite_init()
+        cur = _sqlite.execute("SELECT DISTINCT cid FROM messages")
+        cids = [r[0] for r in cur.fetchall()]
+        with _sqlite:
+            _sqlite.execute("DELETE FROM messages")
+        return len(cids), cids
+    count = len(_conversations)
+    purged = list(_conversations.keys())
+    _conversations.clear()
+    return count, purged
 
 # ---------------- Optional rate limiting (auto if installed)
 _limiter = None
@@ -113,12 +193,9 @@ def requires_basic_auth(fn):
 
 # ---------------- CSP / Security headers
 def _csp_header() -> str:
-    # Always allow self; optionally allow configured CDNs
     origins = "'self'"
     if ASSET_CDN:
         origins += " " + " ".join(ASSET_CDN)
-    # Inline styles used by our templates → keep 'unsafe-inline' for style-src
-    # Add data: for images & fonts; blob: for potential downloads/streams
     return (
         "default-src 'self'; "
         f"script-src {origins}; "
@@ -170,7 +247,11 @@ def routes():
 @app.get("/debug/health")
 @requires_basic_auth
 def health():
-    return jsonify({"ok": True, "commit": COMMIT, "model": ACTIVE_MODEL})
+    store = "redis" if _redis else ("sqlite" if _use_sqlite() else "memory")
+    return jsonify({
+        "ok": True, "commit": COMMIT, "model": ACTIVE_MODEL,
+        "store": store, "db_path": DB_PATH if _use_sqlite() else None
+    })
 
 # ---------------- Models
 @app.get("/api/models")
@@ -201,12 +282,12 @@ def stats():
         "total_messages": total_msgs,
         "commit": COMMIT,
         "has_redis": bool(_redis),
+        "has_sqlite": _use_sqlite(),
         "rate_limit_enabled": bool(_limiter),
     })
 
 # ---------------- Helpers
 def _cid_from_request() -> str:
-    # priority: explicit query → header → new guid
     cid = request.args.get("cid") or request.headers.get("X-Client-Id")
     return cid or (uuid.uuid4().hex)
 
@@ -321,7 +402,6 @@ def export_history():
         "messages": msgs,
     })
 
-# downloadable file attachment (used by UI "Download")
 @app.get("/api/history/export_file")
 def export_history_file():
     cid = _cid_from_request()
@@ -357,7 +437,8 @@ def _require_admin() -> Optional[Response]:
 def admin_cids():
     gate = _require_admin()
     if gate: return gate
-    return jsonify({"ok": True, "cids": _all_cids(), "count": len(_all_cids())})
+    cids = _all_cids()
+    return jsonify({"ok": True, "cids": cids, "count": len(cids)})
 
 @app.delete("/api/admin/purge")
 def admin_purge_one():
@@ -373,17 +454,14 @@ def admin_purge_one():
 def admin_purge_all():
     gate = _require_admin()
     if gate: return gate
-    purged = []
-    for cid in _all_cids():
-        _delete_thread(cid); purged.append(cid)
-    return jsonify({"ok": True, "purged_count": len(purged), "purged": purged})
+    count, purged = _purge_all()
+    return jsonify({"ok": True, "purged_count": count, "purged": purged})
 
 # ---------------- Static passthrough (protected by Basic Auth if configured)
 @app.get("/static/<path:filename>")
 @requires_basic_auth
 def static_files(filename):
     resp = send_from_directory(app.static_folder, filename)
-    # small perf win: cache immutable assets 1 hour (tune to your needs)
     resp.headers["Cache-Control"] = "public, max-age=3600"
     return resp
 
@@ -403,6 +481,7 @@ def method_not_allowed(_):
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=True)
+
 
 
 
