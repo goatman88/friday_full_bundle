@@ -46,6 +46,7 @@
       · <a id="statsLink" href="#">stats</a>
       · <a id="historyLink" href="#">history</a>
       · <a id="exportLink" href="#">export</a>
+      · <a href="/admin" target="_blank" title="Admin Panel">admin</a>
       <span class="themeToggle" onclick="toggleTheme()">🌓 Theme</span>
     </div>
   </header>
@@ -196,7 +197,7 @@
   document.querySelector("#historyLink").onclick= async e => { e.preventDefault(); append("assistant", JSON.stringify(await (await fetch(base+`/api/history?cid=${getCid()}`)).json(), null, 2)); };
   document.querySelector("#exportLink").onclick = async e => { e.preventDefault(); append("assistant", JSON.stringify(await (await fetch(base+`/api/history/export?cid=${getCid()}`)).json(), null, 2)); };
 
-  // --- New session & Clear chat
+  // --- New session / Clear chat / Download / Purge all
   newCidBtn.onclick = () => { setCid(crypto.randomUUID()); clearUI(); append("assistant", "Started fresh session."); };
   clearBtn.onclick = async () => {
     const cid = getCid();
@@ -211,8 +212,6 @@
       append("assistant", "Cleared UI. Server clear may have failed: " + e.message);
     }
   };
-
-  // --- Download current session
   downloadBtn.onclick = async () => {
     const cid = getCid();
     const res = await fetch(`${base}/api/history/export_file?cid=${encodeURIComponent(cid)}`);
@@ -225,8 +224,6 @@
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
   };
-
-  // --- Admin: purge ALL sessions
   purgeAllBtn.onclick = async () => {
     const tok = prompt("Admin token (required to purge ALL sessions):");
     if(!tok) return;
@@ -244,8 +241,7 @@
 
   // --- Boot
   (function boot(){
-    const theme = localStorage.getItem("theme") || "dark";
-    appRoot.setAttribute("data-theme", theme);
+    loadTheme();
     getCid(); loadModels();
     fetch(`${base}/debug/health`).then(r=>r.json()).then(j=>{ if(j.commit) commitSpan.textContent = "commit " + j.commit; });
     msg.addEventListener("keydown", e => { if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); send(); } });
@@ -254,6 +250,7 @@
 </script>
 </body>
 </html>
+
 
 
 
