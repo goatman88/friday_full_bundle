@@ -1,10 +1,12 @@
-Flask>=3.0
-flask-cors>=4.0
-gunicorn>=21.2
-python-dotenv>=1.0
-openai>=1.42.0
-flask-limiter>=3.5.0
-redis>=5.0.4
+flask==3.0.3
+gunicorn==23.0.0
+openai==1.40.0
+redis==5.0.8
+flask-limiter==3.8.0
+flask-cors==4.0.0
+python-dotenv==1.0.1
+requests==2.32.3
+
 
 
 
