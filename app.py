@@ -1,102 +1,42 @@
 # app.py
-import os, json, time, uuid, sqlite3, pathlib
+import os, json, time
 from datetime import datetime
-from flask import Flask, jsonify, request, render_template, send_from_directory, abort
+from typing import List, Dict, Any
+from flask import Flask, jsonify, request, render_template, send_from_directory
 from flask_cors import CORS
 
-# limiter.py (snippet to copy into app.py after app=CORS(...))
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
-limiter = Limiter(get_remote_address, app=app, default_limits=["60/minute"])
-# Per-route example:
-# limiter.limit("20/minute")(api_chat)
+# ----- Optional rate limiting (never break deploys)
+class _NoopLimiter:
+    def __init__(self, *_, **__): pass
+    def init_app(self, *_args, **_kwargs): pass
+    def limit(self, *_a, **_k):
+        def deco(fn): return fn
+        return deco
 
+try:
+    # pip package: Flask-Limiter ; import name: flask_limiter
+    from flask_limiter import Limiter
+    from flask_limiter.util import get_remote_address
+    LimiterClass = Limiter
+    limiter = LimiterClass(get_remote_address, default_limits=["60/minute"])
+except Exception:
+    limiter = _NoopLimiter()
 
-# ---------------- App setup
+# ----- App
 app = Flask(__name__, static_folder="static", template_folder="templates")
 CORS(app)
+if hasattr(limiter, "init_app"):
+    limiter.init_app(app)
 
-# Observability logger
-import logging
-logging.basicConfig(level=logging.INFO)
-log = logging.getLogger("friday")
-
-# Flags
 COMMIT = os.getenv("RENDER_GIT_COMMIT", "")[:7] or os.getenv("COMMIT", "")
 OPENAI_KEY = os.getenv("OPENAI_API_KEY", "")
-DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
-ACTIVE_MODEL = {"name": DEFAULT_MODEL}  # mutable holder for /api/model
+DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
-# Optional: Bearer auth for /api/*
-API_KEY = os.getenv("FRIDAY_API_KEY", "").strip()
+# In-memory chat history per visitor (cookie/session-less demo)
+# For production, back this with a DB keyed by a real user/session id.
+HISTORY: List[Dict[str, Any]] = []
 
-# ---------------- SQLite persistence
-DB_PATH = pathlib.Path("data.db")
-
-def db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-def init_db():
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with db() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                conv_id TEXT NOT NULL,
-                role TEXT NOT NULL,
-                content TEXT NOT NULL,
-                ts DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-def save_msg(conv_id: str, role: str, content: str):
-    with db() as conn:
-        conn.execute("INSERT INTO messages (conv_id,role,content) VALUES (?,?,?)",
-                     (conv_id, role, content))
-
-def load_history(conv_id: str, limit: int = 50):
-    with db() as conn:
-        rows = conn.execute(
-            "SELECT role,content,ts FROM messages WHERE conv_id=? ORDER BY id DESC LIMIT ?",
-            (conv_id, limit)
-        ).fetchall()
-    # reverse to oldest -> newest
-    return list(reversed([dict(r) for r in rows]))
-
-init_db()
-
-# ---------------- Helpers
-def conv_id_from_req() -> str:
-    return request.headers.get("X-Conv-Id", request.args.get("conv_id", "default")).strip() or "default"
-
-def require_key():
-    if not request.path.startswith("/api/"):
-        return
-    if not API_KEY:
-        return
-    token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
-    if token != API_KEY:
-        abort(401)
-
-@app.before_request
-def _start():
-    request._t0 = time.time()
-    request._rid = uuid.uuid4().hex[:8]
-    require_key()
-
-@app.after_request
-def _end(resp):
-    try:
-        ms = int((time.time() - getattr(request, "_t0", time.time())) * 1000)
-        log.info("rid=%s %s %s -> %s %dms",
-                 getattr(request, "_rid", "-"),
-                 request.method, request.path, resp.status, ms)
-    finally:
-        return resp
-
-# ---------------- Pages (UI)
+# ----- UI
 @app.get("/")
 def home():
     return render_template("chat.html", title="Friday AI")
@@ -105,161 +45,143 @@ def home():
 def chat_page():
     return render_template("chat.html", title="Friday AI")
 
-# ---------------- Debug & routing
+# ----- Observability
 @app.get("/routes")
 def routes():
     table = []
     for rule in app.url_map.iter_rules():
         table.append({
             "endpoint": rule.endpoint,
-            "methods": sorted(m for m in rule.methods if m in {"GET", "POST", "OPTIONS"}),
+            "methods": sorted(m for m in rule.methods if m in {"GET","POST","OPTIONS"}),
             "rule": str(rule),
         })
-    table = sorted(table, key=lambda r: r["rule"])
+    table.sort(key=lambda r: r["rule"])
     return jsonify(table)
 
 @app.get("/debug/health")
 def health():
-    return jsonify({"ok": True, "commit": COMMIT, "model": ACTIVE_MODEL["name"]})
+    return jsonify({"ok": True, "commit": COMMIT})
 
-# ---------------- Models
+# ----- Models
 AVAILABLE_MODELS = ["gpt-4o", "gpt-4o-mini", "gpt-4.1-mini", "o3-mini"]
+ACTIVE_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
 
 @app.get("/api/models")
 def list_models():
-    return jsonify({"active": ACTIVE_MODEL["name"], "available": AVAILABLE_MODELS})
+    return jsonify({"active": ACTIVE_MODEL, "available": AVAILABLE_MODELS})
 
 @app.post("/api/model")
+@limiter.limit("15/minute")
 def set_model():
+    global ACTIVE_MODEL
     data = request.get_json(silent=True) or {}
-    name = str(data.get("model", "")).strip()
-    if name not in AVAILABLE_MODELS:
-        return jsonify({"error": "unknown_model", "available": AVAILABLE_MODELS}), 400
-    ACTIVE_MODEL["name"] = name
-    return jsonify({"ok": True, "active": name})
+    model = str(data.get("model", "")).strip()
+    if not model:
+        return jsonify({"error": "missing_model"}), 400
+    if model not in AVAILABLE_MODELS:
+        return jsonify({"error": "unknown_model", "allowed": AVAILABLE_MODELS}), 400
+    ACTIVE_MODEL = model
+    return jsonify({"ok": True, "active": ACTIVE_MODEL})
 
-# ---------------- Chat API (POST)
+# ----- Chat API (JSON)
+def _dev_echo(user_msg: str) -> str:
+    return f"Pong! (dev echo)\nYou said: {user_msg}"
+
+def _openai_chat_sync(message: str, model: str) -> str:
+    from openai import OpenAI
+    client = OpenAI(api_key=OPENAI_KEY)
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": "You are Friday AI. Be brief, friendly, and helpful."},
+            {"role": "user", "content": message},
+        ],
+        temperature=0.6,
+    )
+    return (resp.choices[0].message.content or "").strip()
+
 @app.post("/api/chat")
+@limiter.limit("60/minute")
 def api_chat():
-    # Expect JSON: { "message": "..." }
-    try:
-        data = request.get_json(force=True, silent=False)
-    except Exception:
-        return jsonify({"error": "invalid_json", "hint": "Send JSON body with 'message'"}), 400
-
+    data = request.get_json(force=True, silent=False)
     if not isinstance(data, dict) or "message" not in data:
-        return jsonify({"error": "invalid_json", "hint": "Send JSON body with 'message'"}), 400
+        return jsonify({"error": "expected_json_with_message"}), 400
 
     user_msg = str(data.get("message", "")).strip() or "Hello!"
-    conv_id = conv_id_from_req()
+    HISTORY.append({"role": "user", "content": user_msg, "ts": time.time()})
 
-    # Build history
-    history = load_history(conv_id)
-    messages = [{"role": "system", "content": "You are Friday AI. Be brief, friendly, and helpful."}]
-    messages += [{"role": m["role"], "content": m["content"]} for m in history]
-    messages.append({"role": "user", "content": user_msg})
-
-    # No key -> dev echo so UI still works
-    if not OPENAI_KEY:
-        reply = f"Hello! (dev echo on)\nYou said: {user_msg}"
-        save_msg(conv_id, "user", user_msg)
-        save_msg(conv_id, "assistant", reply)
-        return jsonify({"reply": reply})
-
-    # Real OpenAI call
     try:
-        from openai import OpenAI
-        client = OpenAI(api_key=OPENAI_KEY)
-        resp = client.chat.completions.create(
-            model=ACTIVE_MODEL["name"],
-            messages=messages,
-            temperature=0.6,
-        )
-        text = (resp.choices[0].message.content or "").strip()
-        save_msg(conv_id, "user", user_msg)
-        save_msg(conv_id, "assistant", text)
-        return jsonify({"reply": text})
+        if not OPENAI_KEY:
+            reply = _dev_echo(user_msg)
+        else:
+            reply = _openai_chat_sync(user_msg, ACTIVE_MODEL)
+        HISTORY.append({"role": "assistant", "content": reply, "ts": time.time()})
+        return jsonify({"reply": reply})
     except Exception as e:
         return jsonify({"error": "upstream_error", "detail": str(e)}), 502
 
-# ---------------- Streaming (SSE)
-@app.get("/api/chat/stream")
+# ----- Stream (Server-Sent Events style over fetch/readable)
+@app.post("/api/chat/stream")
+@limiter.limit("60/minute")
 def chat_stream():
-    user_msg = request.args.get("q", "").strip()
-    if not user_msg:
-        return jsonify({"error": "missing_q"}), 400
-    conv_id = conv_id_from_req()
+    data = request.get_json(force=True, silent=False)
+    if not isinstance(data, dict) or "message" not in data:
+        return jsonify({"error": "expected_json_with_message"}), 400
+    user_msg = str(data.get("message", "")).strip() or "Hello!"
 
-    # Dev echo path
+    # If no key, stream a tiny fake response
+    def _fake_stream():
+        chunks = ["Thinking", " …", "\nOkay! ", "Here’s ", "your ", "answer."]
+        for c in chunks:
+            yield c
+            time.sleep(0.15)
+
     if not OPENAI_KEY:
-        def gen_echo():
-            yield "event: start\ndata: {}\n\n"
-            for chunk in ["Hello", " (dev)", " echo"] :
-                time.sleep(0.05)
-                yield f"data: {chunk}\n\n"
-            yield "event: end\ndata: {}\n\n"
-        return app.response_class(gen_echo(), mimetype="text/event-stream")
+        return app.response_class(_fake_stream(), mimetype="text/plain")
 
-    from openai import OpenAI
-    client = OpenAI(api_key=OPENAI_KEY)
-
-    history = load_history(conv_id)
-    messages = [{"role": "system", "content": "You are Friday AI. Be brief, friendly, and helpful."}]
-    messages += [{"role": m["role"], "content": m["content"]} for m in history]
-    messages.append({"role": "user", "content": user_msg})
-
-    def gen():
-        yield "event: start\ndata: {}\n\n"
-        acc = []
+    # Real streaming
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_KEY)
         stream = client.chat.completions.create(
-            model=ACTIVE_MODEL["name"],
-            messages=messages,
-            stream=True,
+            model=ACTIVE_MODEL,
+            messages=[
+                {"role": "system", "content": "You are Friday AI. Be brief, friendly, and helpful."},
+                {"role": "user", "content": user_msg},
+            ],
             temperature=0.6,
+            stream=True,
         )
-        for evt in stream:
-            delta = evt.choices[0].delta.content or ""
-            if delta:
-                acc.append(delta)
-                yield f"data: {delta}\n\n"
-        text = "".join(acc).strip()
-        save_msg(conv_id, "user", user_msg)
-        save_msg(conv_id, "assistant", text)
-        yield "event: end\ndata: {}\n\n"
+        def gen():
+            for chunk in stream:
+                piece = chunk.choices[0].delta.content or ""
+                if piece:
+                    yield piece
+        return app.response_class(gen(), mimetype="text/plain")
+    except Exception as e:
+        return jsonify({"error": "upstream_error", "detail": str(e)}), 502
 
-    return app.response_class(gen(), mimetype="text/event-stream")
-
-# ---------------- History endpoints
+# ----- History API
 @app.get("/api/history")
 def get_history():
-    conv_id = conv_id_from_req()
-    msgs = load_history(conv_id)
-    if not msgs:
+    if not HISTORY:
         return jsonify({"error": "no_conversation"}), 404
-    return jsonify({"messages": [{"role": m["role"], "content": m["content"], "ts": m["ts"]} for m in msgs]})
+    return jsonify({"messages": HISTORY})
 
 @app.get("/api/history/export")
 def export_history():
-    conv_id = conv_id_from_req()
-    msgs = load_history(conv_id)
-    if not msgs:
-        return "No conversation.", 200, {"Content-Type": "text/plain; charset=utf-8"}
-    lines = []
-    for m in msgs:
-        ts = m.get("ts", "")
-        lines.append(f"[{ts}] {m['role']}: {m['content']}")
-    body = "\n".join(lines)
-    return body, 200, {
-        "Content-Type": "text/plain; charset=utf-8",
-        "Content-Disposition": f'attachment; filename="history-{conv_id}.txt"',
-    }
+    return jsonify({
+        "exported_at": datetime.utcnow().isoformat() + "Z",
+        "count": len(HISTORY),
+        "messages": HISTORY,
+    })
 
-# ---------------- Static passthrough
+# ----- Static passthrough
 @app.get("/static/<path:filename>")
 def static_files(filename):
     return send_from_directory(app.static_folder, filename)
 
-# ---------------- Error handlers
+# ----- Errors
 @app.errorhandler(404)
 def not_found(_):
     if request.path.startswith("/api/"):
@@ -276,11 +198,6 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=True)
 
-
-# --- Entrypoint --------------------------------------------------------------
-if __name__ == "__main__":
-    port = int(os.getenv("PORT", "5000"))
-    app.run(host="0.0.0.0", port=port, debug=True)
 
 
 
