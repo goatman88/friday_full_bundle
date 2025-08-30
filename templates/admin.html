@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>{{ title or "Friday Admin" }}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <style>
+    :root { --bg:#0f172a; --card:#0b233b; --ink:#e5e7eb; --muted:#94a3b8; --accent:#60a5fa; }
+    html,body{margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 system-ui,Segoe UI,Roboto,Arial}
+    .wrap{max-width:960px; margin:28px auto; padding:0 16px}
+    .card{background:linear-gradient(180deg,#0f2a46,#0b233b); border:1px solid #143251; border-radius:12px; padding:16px}
+    h1{margin:0 0 8px 0}
+    .row{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
+    input,button{padding:10px 12px; border-radius:10px; border:1px solid #183a5b; background:#0e2138; color:var(--ink)}
+    button{background:var(--accent); border:0; font-weight:700; cursor:pointer}
+    button.secondary{background:transparent; color:var(--muted); border:1px solid #183a5b}
+    button.warn{background:#ef4444}
+    table{width:100%; border-collapse:collapse; margin-top:12px}
+    th,td{border-bottom:1px solid #183a5b; padding:8px; text-align:left}
+    .muted{color:var(--muted)}
+    .pill{border:1px solid #183a5b; padding:4px 8px; border-radius:10px}
+    .pad{padding:8px 0}
+    .grid{display:grid; grid-template-columns: 1fr 1fr; gap:16px}
+    @media (max-width:800px){ .grid{grid-template-columns:1fr} }
+    a, a:visited{color:#9ecbff}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <h1>Friday Admin</h1>
+      <div>
+        <a href="/chat">← Back to Chat</a>
+      </div>
+    </div>
+    <div class="row pad">
+      <label class="pill">Token:
+        <input id="tok" type="password" placeholder="Enter ADMIN_TOKEN" style="margin-left:8px; width:240px">
+      </label>
+      <button id="saveTok" class="secondary">Save</button>
+      <span id="tokStat" class="muted"></span>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h3 style="margin-top:0">Stats</h3>
+        <div class="row">
+          <button id="refreshStats">Refresh</button>
+        </div>
+        <pre id="stats" class="muted" style="white-space:pre-wrap"></pre>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-top:0">Sessions</h3>
+        <div class="row">
+          <button id="refreshCids">Refresh</button>
+          <button id="purgeAll" class="warn">Purge ALL</button>
+        </div>
+        <table>
+          <thead><tr><th>CID</th><th>Actions</th></tr></thead>
+          <tbody id="cidTable"><tr><td colspan="2" class="muted">No data</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  const base = location.origin;
+  const tokInput = document.getElementById('tok');
+  const saveTokBtn = document.getElementById('saveTok');
+  const tokStat = document.getElementById('tokStat');
+  const statsPre = document.getElementById('stats');
+  const refreshStatsBtn = document.getElementById('refreshStats');
+  const refreshCidsBtn = document.getElementById('refreshCids');
+  const purgeAllBtn = document.getElementById('purgeAll');
+  const cidTable = document.getElementById('cidTable');
+
+  // token persistence (local only)
+  function loadToken(){
+    const t = localStorage.getItem('ADMIN_TOKEN') || '';
+    tokInput.value = t;
+    tokStat.textContent = t ? 'token loaded (stored locally)' : 'no token saved';
+  }
+  function saveToken(){
+    localStorage.setItem('ADMIN_TOKEN', tokInput.value.trim());
+    loadToken();
+  }
+
+  function hdrs(){
+    const t = tokInput.value.trim();
+    return t ? { "X-Admin-Token": t } : {};
+  }
+
+  async function fetchStats(){
+    try{
+      const r = await fetch(`${base}/api/stats`);
+      const j = await r.json();
+      statsPre.textContent = JSON.stringify(j, null, 2);
+    }catch(e){ statsPre.textContent = 'Stats error: ' + e.message; }
+  }
+
+  async function fetchCids(){
+    cidTable.innerHTML = `<tr><td colspan="2" class="muted">Loading…</td></tr>`;
+    try{
+      const r = await fetch(`${base}/api/admin/cids`, { headers: hdrs() });
+      const j = await r.json();
+      if(!r.ok){ cidTable.innerHTML = `<tr><td colspan="2">Error: ${j.error||r.status}</td></tr>`; return; }
+      const cids = j.cids || [];
+      if(!cids.length){ cidTable.innerHTML = `<tr><td colspan="2" class="muted">No sessions</td></tr>`; return; }
+      cidTable.innerHTML = "";
+      cids.forEach(cid=>{
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td class="muted">${cid}</td>
+          <td>
+            <button data-cid="${cid}" class="secondary">Purge</button>
+            <a href="/api/history?cid=${encodeURIComponent(cid)}" target="_blank">View</a>
+            <a href="/api/history/export_file?cid=${encodeURIComponent(cid)}">Download</a>
+          </td>
+        `;
+        cidTable.appendChild(tr);
+      });
+      // bind purge buttons
+      [...cidTable.querySelectorAll('button[data-cid]')].forEach(btn=>{
+        btn.onclick = async ()=>{
+          const cid = btn.getAttribute('data-cid');
+          if(!confirm(`Purge session ${cid}?`)) return;
+          const r = await fetch(`${base}/api/admin/purge?cid=${encodeURIComponent(cid)}`, {
+            method: 'DELETE', headers: hdrs()
+          });
+          const j = await r.json();
+          if(!r.ok){ alert('Purge failed: ' + (j.error||r.status)); return; }
+          fetchCids();
+        };
+      });
+    }catch(e){
+      cidTable.innerHTML = `<tr><td colspan="2">Error: ${e.message}</td></tr>`;
+    }
+  }
+
+  async function purgeAll(){
+    if(!confirm('This will purge ALL sessions on the server. Continue?')) return;
+    const r = await fetch(`${base}/api/admin/purge_all`, { method:'DELETE', headers: hdrs() });
+    const j = await r.json();
+    if(!r.ok){ alert('Admin purge failed: ' + (j.error||r.status)); return; }
+    alert(`Purged ${j.purged_count} sessions`);
+    fetchCids();
+  }
+
+  // wire up
+  saveTokBtn.onclick = saveToken;
+  refreshStatsBtn.onclick = fetchStats;
+  refreshCidsBtn.onclick = fetchCids;
+  purgeAllBtn.onclick = purgeAll;
+
+  // boot
+  loadToken();
+  fetchStats();
+  fetchCids();
+</script>
+</body>
+</html>
