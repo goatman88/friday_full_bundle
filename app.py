@@ -1,34 +1,94 @@
 # app.py
-import os, json, time
+import os, json, time, uuid, sqlite3, pathlib
 from datetime import datetime
-from collections import deque
-from flask import (
-    Flask, jsonify, request, render_template,
-    send_from_directory, Response
-)
+from flask import Flask, jsonify, request, render_template, send_from_directory, abort
 from flask_cors import CORS
 
-# --- App setup ---------------------------------------------------------------
-# If your chat.html is in /templates, change template_folder="templates"
-app = Flask(__name__, static_folder="static", template_folder="integrations/templates")
+# ---------------- App setup
+app = Flask(__name__, static_folder="static", template_folder="templates")
 CORS(app)
 
-COMMIT = (os.getenv("RENDER_GIT_COMMIT", "") or os.getenv("COMMIT", ""))[:7]
+# Observability logger
+import logging
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("friday")
+
+# Flags
+COMMIT = os.getenv("RENDER_GIT_COMMIT", "")[:7] or os.getenv("COMMIT", "")
 OPENAI_KEY = os.getenv("OPENAI_API_KEY", "")
-DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")  # nicer than 4o-mini
-AVAILABLE_MODELS = [
-    "gpt-4o", "gpt-4o-mini", "gpt-4.1-mini", "o3-mini"
-]
+DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
+ACTIVE_MODEL = {"name": DEFAULT_MODEL}  # mutable holder for /api/model
 
-# simple in-memory history (per app instance)
-HISTORY_MAX = 200
-HISTORY: deque[dict] = deque(maxlen=HISTORY_MAX)
+# Optional: Bearer auth for /api/*
+API_KEY = os.getenv("FRIDAY_API_KEY", "").strip()
 
-# active model is mutable at runtime
-ACTIVE_MODEL = DEFAULT_MODEL
+# ---------------- SQLite persistence
+DB_PATH = pathlib.Path("data.db")
 
+def db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
-# --- Pages -------------------------------------------------------------------
+def init_db():
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with db() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                conv_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                ts DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+def save_msg(conv_id: str, role: str, content: str):
+    with db() as conn:
+        conn.execute("INSERT INTO messages (conv_id,role,content) VALUES (?,?,?)",
+                     (conv_id, role, content))
+
+def load_history(conv_id: str, limit: int = 50):
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT role,content,ts FROM messages WHERE conv_id=? ORDER BY id DESC LIMIT ?",
+            (conv_id, limit)
+        ).fetchall()
+    # reverse to oldest -> newest
+    return list(reversed([dict(r) for r in rows]))
+
+init_db()
+
+# ---------------- Helpers
+def conv_id_from_req() -> str:
+    return request.headers.get("X-Conv-Id", request.args.get("conv_id", "default")).strip() or "default"
+
+def require_key():
+    if not request.path.startswith("/api/"):
+        return
+    if not API_KEY:
+        return
+    token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    if token != API_KEY:
+        abort(401)
+
+@app.before_request
+def _start():
+    request._t0 = time.time()
+    request._rid = uuid.uuid4().hex[:8]
+    require_key()
+
+@app.after_request
+def _end(resp):
+    try:
+        ms = int((time.time() - getattr(request, "_t0", time.time())) * 1000)
+        log.info("rid=%s %s %s -> %s %dms",
+                 getattr(request, "_rid", "-"),
+                 request.method, request.path, resp.status, ms)
+    finally:
+        return resp
+
+# ---------------- Pages (UI)
 @app.get("/")
 def home():
     return render_template("chat.html", title="Friday AI")
@@ -37,123 +97,161 @@ def home():
 def chat_page():
     return render_template("chat.html", title="Friday AI")
 
-
-# --- Observability -----------------------------------------------------------
+# ---------------- Debug & routing
 @app.get("/routes")
 def routes():
     table = []
     for rule in app.url_map.iter_rules():
         table.append({
             "endpoint": rule.endpoint,
-            "methods": sorted(m for m in rule.methods if m in {"GET","POST","OPTIONS"}),
+            "methods": sorted(m for m in rule.methods if m in {"GET", "POST", "OPTIONS"}),
             "rule": str(rule),
         })
-    return jsonify(sorted(table, key=lambda r: r["rule"]))
+    table = sorted(table, key=lambda r: r["rule"])
+    return jsonify(table)
 
 @app.get("/debug/health")
 def health():
-    return jsonify({"ok": True, "commit": COMMIT or None})
+    return jsonify({"ok": True, "commit": COMMIT, "model": ACTIVE_MODEL["name"]})
 
+# ---------------- Models
+AVAILABLE_MODELS = ["gpt-4o", "gpt-4o-mini", "gpt-4.1-mini", "o3-mini"]
 
-# --- API: chat ---------------------------------------------------------------
-def _openai_client():
-    if not OPENAI_KEY:
-        return None
-    from openai import OpenAI
-    return OpenAI(api_key=OPENAI_KEY)
+@app.get("/api/models")
+def list_models():
+    return jsonify({"active": ACTIVE_MODEL["name"], "available": AVAILABLE_MODELS})
 
+@app.post("/api/model")
+def set_model():
+    data = request.get_json(silent=True) or {}
+    name = str(data.get("model", "")).strip()
+    if name not in AVAILABLE_MODELS:
+        return jsonify({"error": "unknown_model", "available": AVAILABLE_MODELS}), 400
+    ACTIVE_MODEL["name"] = name
+    return jsonify({"ok": True, "active": name})
+
+# ---------------- Chat API (POST)
 @app.post("/api/chat")
 def api_chat():
-    """JSON: { message, stream? }"""
+    # Expect JSON: { "message": "..." }
     try:
-        data = request.get_json(force=True)
-        message = (data.get("message") or "").strip()
-        stream = bool(data.get("stream"))
+        data = request.get_json(force=True, silent=False)
     except Exception:
-        return jsonify({"error":"invalid_request","detail":"Expected JSON body"}), 400
+        return jsonify({"error": "invalid_json", "hint": "Send JSON body with 'message'"}), 400
 
-    if not message:
-        return jsonify({"error":"empty_message"}), 400
+    if not isinstance(data, dict) or "message" not in data:
+        return jsonify({"error": "invalid_json", "hint": "Send JSON body with 'message'"}), 400
 
-    # record user turn
-    HISTORY.append({
-        "ts": time.time(),
-        "role": "user",
-        "content": message,
-    })
+    user_msg = str(data.get("message", "")).strip() or "Hello!"
+    conv_id = conv_id_from_req()
 
-    # Dev echo path if no key
+    # Build history
+    history = load_history(conv_id)
+    messages = [{"role": "system", "content": "You are Friday AI. Be brief, friendly, and helpful."}]
+    messages += [{"role": m["role"], "content": m["content"]} for m in history]
+    messages.append({"role": "user", "content": user_msg})
+
+    # No key -> dev echo so UI still works
     if not OPENAI_KEY:
-        reply = f"Pong! (dev echo) You said: {message}"
-        HISTORY.append({"ts": time.time(), "role": "assistant", "content": reply})
+        reply = f"Hello! (dev echo on)\nYou said: {user_msg}"
+        save_msg(conv_id, "user", user_msg)
+        save_msg(conv_id, "assistant", reply)
         return jsonify({"reply": reply})
 
     # Real OpenAI call
     try:
-        client = _openai_client()
-        # We’re using non-stream first; UI’s stream flag is future-proofed
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_KEY)
         resp = client.chat.completions.create(
-            model=ACTIVE_MODEL,
-            messages=[
-                {"role":"system","content":"You are Friday AI. Be concise, warm, and helpful."},
-                *[{"role":m["role"],"content":m["content"]}
-                  for m in list(HISTORY)[-20:] if m["role"] in ("user","assistant")],
-                {"role":"user","content":message},
-            ],
+            model=ACTIVE_MODEL["name"],
+            messages=messages,
             temperature=0.6,
         )
-        reply = (resp.choices[0].message.content or "").strip()
+        text = (resp.choices[0].message.content or "").strip()
+        save_msg(conv_id, "user", user_msg)
+        save_msg(conv_id, "assistant", text)
+        return jsonify({"reply": text})
     except Exception as e:
-        return jsonify({"error":"upstream_error","detail":str(e)}), 502
+        return jsonify({"error": "upstream_error", "detail": str(e)}), 502
 
-    HISTORY.append({"ts": time.time(), "role":"assistant", "content": reply})
-    return jsonify({"reply": reply})
+# ---------------- Streaming (SSE)
+@app.get("/api/chat/stream")
+def chat_stream():
+    user_msg = request.args.get("q", "").strip()
+    if not user_msg:
+        return jsonify({"error": "missing_q"}), 400
+    conv_id = conv_id_from_req()
 
+    # Dev echo path
+    if not OPENAI_KEY:
+        def gen_echo():
+            yield "event: start\ndata: {}\n\n"
+            for chunk in ["Hello", " (dev)", " echo"] :
+                time.sleep(0.05)
+                yield f"data: {chunk}\n\n"
+            yield "event: end\ndata: {}\n\n"
+        return app.response_class(gen_echo(), mimetype="text/event-stream")
 
-# --- API: models -------------------------------------------------------------
-@app.get("/api/models")
-def list_models():
-    active = ACTIVE_MODEL if OPENAI_KEY else None
-    return jsonify({"active": active, "available": AVAILABLE_MODELS})
+    from openai import OpenAI
+    client = OpenAI(api_key=OPENAI_KEY)
 
-@app.post("/api/model")
-def set_model():
-    global ACTIVE_MODEL
-    try:
-        desired = (request.get_json(force=True).get("model") or "").strip()
-    except Exception:
-        return jsonify({"error":"invalid_request"}), 400
+    history = load_history(conv_id)
+    messages = [{"role": "system", "content": "You are Friday AI. Be brief, friendly, and helpful."}]
+    messages += [{"role": m["role"], "content": m["content"]} for m in history]
+    messages.append({"role": "user", "content": user_msg})
 
-    if desired not in AVAILABLE_MODELS:
-        return jsonify({"error":"unsupported_model","available":AVAILABLE_MODELS}), 400
+    def gen():
+        yield "event: start\ndata: {}\n\n"
+        acc = []
+        stream = client.chat.completions.create(
+            model=ACTIVE_MODEL["name"],
+            messages=messages,
+            stream=True,
+            temperature=0.6,
+        )
+        for evt in stream:
+            delta = evt.choices[0].delta.content or ""
+            if delta:
+                acc.append(delta)
+                yield f"data: {delta}\n\n"
+        text = "".join(acc).strip()
+        save_msg(conv_id, "user", user_msg)
+        save_msg(conv_id, "assistant", text)
+        yield "event: end\ndata: {}\n\n"
 
-    ACTIVE_MODEL = desired
-    return jsonify({"active": ACTIVE_MODEL})
+    return app.response_class(gen(), mimetype="text/event-stream")
 
-
-# --- API: history ------------------------------------------------------------
+# ---------------- History endpoints
 @app.get("/api/history")
 def get_history():
-    msgs = [{"role":m["role"], "content":m["content"], "ts":m["ts"]} for m in list(HISTORY)]
-    return jsonify({"messages": msgs})
+    conv_id = conv_id_from_req()
+    msgs = load_history(conv_id)
+    if not msgs:
+        return jsonify({"error": "no_conversation"}), 404
+    return jsonify({"messages": [{"role": m["role"], "content": m["content"], "ts": m["ts"]} for m in msgs]})
 
 @app.get("/api/history/export")
 def export_history():
-    def _lines():
-        for m in HISTORY:
-            yield json.dumps(m, ensure_ascii=False) + "\n"
-    fname = f"friday_history_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}Z.ndjson"
-    headers = {"Content-Disposition": f'attachment; filename="{fname}"'}
-    return Response(_lines(), mimetype="application/x-ndjson", headers=headers)
+    conv_id = conv_id_from_req()
+    msgs = load_history(conv_id)
+    if not msgs:
+        return "No conversation.", 200, {"Content-Type": "text/plain; charset=utf-8"}
+    lines = []
+    for m in msgs:
+        ts = m.get("ts", "")
+        lines.append(f"[{ts}] {m['role']}: {m['content']}")
+    body = "\n".join(lines)
+    return body, 200, {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Content-Disposition": f'attachment; filename="history-{conv_id}.txt"',
+    }
 
-
-# --- Static passthrough ------------------------------------------------------
+# ---------------- Static passthrough
 @app.get("/static/<path:filename>")
 def static_files(filename):
     return send_from_directory(app.static_folder, filename)
 
-
-# --- API error pages ---------------------------------------------------------
+# ---------------- Error handlers
 @app.errorhandler(404)
 def not_found(_):
     if request.path.startswith("/api/"):
@@ -165,6 +263,10 @@ def method_not_allowed(_):
     if request.path.startswith("/api/"):
         return jsonify({"error": "method_not_allowed", "path": request.path}), 405
     return "Method Not Allowed", 405
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", "5000"))
+    app.run(host="0.0.0.0", port=port, debug=True)
 
 
 # --- Entrypoint --------------------------------------------------------------
