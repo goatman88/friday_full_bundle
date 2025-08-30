@@ -29,6 +29,7 @@
     [data-theme="light"] input[type=text]{background:#fff; border:1px solid #ccc}
     button{background:var(--accent); color:#fff; border:0; padding:12px 16px; border-radius:12px; font-weight:600; cursor:pointer}
     button.secondary{background:transparent; color:var(--muted); border:1px solid #183a5b}
+    button.warn{background:#ef4444}
     button:hover{opacity:.9}
     .themeToggle{cursor:pointer; margin-left:10px; font-size:13px; color:var(--muted)}
   </style>
@@ -61,6 +62,8 @@
       <span id="cidLabel" class="pill"></span>
       <button id="newCid" class="secondary">New session</button>
       <button id="clearChat" class="secondary" title="Clear UI and server history for this session">Clear chat</button>
+      <button id="downloadChat" class="secondary" title="Download this session as JSON">Download</button>
+      <button id="purgeAll" class="warn" title="Admin: purge ALL sessions">Clear ALL</button>
     </div>
   </div>
 
@@ -81,6 +84,8 @@
   const cidLabel = document.querySelector("#cidLabel");
   const newCidBtn = document.querySelector("#newCid");
   const clearBtn = document.querySelector("#clearChat");
+  const downloadBtn = document.querySelector("#downloadChat");
+  const purgeAllBtn = document.querySelector("#purgeAll");
   const streamChk = document.querySelector("#stream");
 
   // --- Theme persistence ---
@@ -115,9 +120,7 @@
     log.appendChild(b);
     log.scrollTop = log.scrollHeight;
   }
-  function clearUI(){
-    log.innerHTML = "";
-  }
+  function clearUI(){ log.innerHTML = ""; }
 
   // --- Models
   async function loadModels(){
@@ -204,8 +207,38 @@
       clearUI();
       append("assistant", "Cleared chat history for this session.");
     }catch(e){
-      clearUI(); // at least clear UI
+      clearUI();
       append("assistant", "Cleared UI. Server clear may have failed: " + e.message);
+    }
+  };
+
+  // --- Download current session
+  downloadBtn.onclick = async () => {
+    const cid = getCid();
+    const res = await fetch(`${base}/api/history/export_file?cid=${encodeURIComponent(cid)}`);
+    if(!res.ok){ append("assistant", "Download failed."); return; }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const stamp = new Date().toISOString().replace(/[:.]/g,"-");
+    a.href = url; a.download = `friday_${cid.slice(0,8)}_${stamp}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  // --- Admin: purge ALL sessions
+  purgeAllBtn.onclick = async () => {
+    const tok = prompt("Admin token (required to purge ALL sessions):");
+    if(!tok) return;
+    if(!confirm("This will clear ALL sessions on the server. Continue?")) return;
+    try{
+      const r = await fetch(`${base}/api/admin/purge_all`, { method:"DELETE", headers: { "X-Admin-Token": tok } });
+      const j = await r.json();
+      if(!r.ok){ append("assistant", "Admin purge failed: " + (j.error||r.status)); return; }
+      clearUI();
+      append("assistant", `Purged ${j.purged_count} sessions.`);
+    }catch(e){
+      append("assistant", "Admin purge error: " + e.message);
     }
   };
 
@@ -221,6 +254,7 @@
 </script>
 </body>
 </html>
+
 
 
 
