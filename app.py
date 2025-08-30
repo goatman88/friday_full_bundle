@@ -175,6 +175,21 @@ def export_history():
         "count": len(HISTORY),
         "messages": HISTORY,
     })
+ # ---- Simple stats
+START_TS = int(time.time())
+
+@app.get("/api/stats")
+def stats():
+    total_msgs = sum(len(v) for v in _conversations.values())
+    return jsonify({
+        "ok": True,
+        "since_epoch": START_TS,
+        "active_model": _active_model,
+        "num_clients": len(_conversations),
+        "total_messages": total_msgs,
+        "commit": COMMIT,
+    })
+   
 
 # ----- Static passthrough
 @app.get("/static/<path:filename>")
