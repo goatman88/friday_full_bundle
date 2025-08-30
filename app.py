@@ -8,6 +8,40 @@ from flask import (
 )
 from flask_cors import CORS
 
+import base64
+from functools import wraps
+
+BASIC_USER = os.getenv("BASIC_AUTH_USER", "")
+BASIC_PASS = os.getenv("BASIC_AUTH_PASS", "")
+
+def _basic_auth_enabled() -> bool:
+    return bool(BASIC_USER and BASIC_PASS)
+
+def _check_basic_auth(auth_header: str) -> bool:
+    # Expect "Basic base64(user:pass)"
+    if not auth_header or not auth_header.startswith("Basic "):
+        return False
+    try:
+        raw = base64.b64decode(auth_header.split(" ", 1)[1]).decode("utf-8")
+        user, pwd = raw.split(":", 1)
+        return (user == BASIC_USER) and (pwd == BASIC_PASS)
+    except Exception:
+        return False
+
+def requires_basic_auth(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not _basic_auth_enabled():
+            return fn(*args, **kwargs)  # gate is Off if creds not configured
+        auth = request.headers.get("Authorization", "")
+        if _check_basic_auth(auth):
+            return fn(*args, **kwargs)
+        resp = make_response("Unauthorized", 401)
+        resp.headers["WWW-Authenticate"] = 'Basic realm="Friday Admin", charset="UTF-8"'
+        return resp
+    return wrapper
+
+
 # ---------------- App
 app = Flask(__name__, static_folder="static", template_folder="templates")
 CORS(app)
