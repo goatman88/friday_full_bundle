@@ -3,112 +3,202 @@
 <head>
   <meta charset="UTF-8" />
   <title>{{ title or "Friday AI" }}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <style>
-    body { font-family: Arial, sans-serif; margin: 0; background: #f4f4f4; }
-    header { background: #111; color: #fff; padding: 10px; text-align: center; }
-    main { max-width: 720px; margin: 20px auto; background: #fff; padding: 20px;
-           border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,.1); }
-    #chat { height: 400px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; }
-    .msg { margin: 8px 0; padding: 8px 12px; border-radius: 6px; }
-    .user { background: #e3f2fd; text-align: right; }
-    .assistant { background: #f1f8e9; text-align: left; }
-    footer { margin-top: 10px; display: flex; gap: 8px; }
-    input[type=text] { flex: 1; padding: 10px; border-radius: 6px; border: 1px solid #ccc; }
-    button { padding: 10px 15px; border: none; border-radius: 6px; background: #1976d2; color: white; cursor: pointer; }
-    button:hover { background: #1565c0; }
-    .small { font-size: 0.85em; color: #555; margin-top: 10px; }
+    :root {
+      --bg: #0f172a; --card: #0b233b; --ink: #e5e7eb; --muted:#94a3b8; --accent:#60a5fa;
+    }
+    [data-theme="light"] {
+      --bg: #f1f5f9; --card:#fff; --ink:#111; --muted:#444; --accent:#2563eb;
+    }
+
+    html,body {
+      height:100%; margin:0; font:15px/1.45 system-ui,Segoe UI,Roboto,Arial,sans-serif;
+      background:var(--bg); color:var(--ink);
+    }
+    .wrap { display:flex; flex-direction:column; height:100%; }
+    header {
+      background:var(--card); border-bottom:1px solid #143251;
+      padding:10px 16px; display:flex; justify-content:space-between; align-items:center;
+    }
+    .ttl{display:flex; align-items:center; gap:8px; font-weight:700}
+    .badge{background:linear-gradient(135deg,#5eead4,#60a5fa); width:28px; height:28px; border-radius:8px}
+    .links a{color:var(--muted); text-decoration:none; margin-left:12px}
+    .links a:hover{color:var(--accent)}
+    .log{flex:1; overflow:auto; padding:20px; display:flex; flex-direction:column; gap:10px}
+    .bubble{max-width:72%; padding:10px 14px; border-radius:12px; white-space:pre-wrap}
+    .u{background:#0b395b; align-self:flex-end; color:#fff}
+    .a{background:#12273f; align-self:flex-start}
+    [data-theme="light"] .u{background:#dbeafe; color:#111}
+    [data-theme="light"] .a{background:#e2e8f0; color:#111}
+    footer{
+      background:var(--card); border-top:1px solid #143251;
+      padding:12px 16px; display:flex; gap:8px; position:sticky; bottom:0;
+    }
+    input[type=text]{flex:1; padding:12px; border-radius:12px; border:1px solid #183a5b; background:#0e2138; color:var(--ink)}
+    [data-theme="light"] input[type=text]{background:#fff; border:1px solid #ccc}
+    button{background:var(--accent); color:#fff; border:0; padding:12px 16px; border-radius:12px; font-weight:600; cursor:pointer}
+    button:hover{opacity:.9}
+    .meta{font-size:13px; color:var(--muted); display:flex; justify-content:space-between; align-items:center; padding:6px 16px; background:var(--card)}
+    select{background:#0e2138; color:var(--ink); border:1px solid #183a5b; border-radius:8px; padding:6px}
+    [data-theme="light"] select{background:#fff; border:1px solid #ccc}
+    .pill{padding:4px 8px; border:1px solid #183a5b; border-radius:8px; font-size:12px}
+    .themeToggle{cursor:pointer; margin-left:10px; font-size:13px; color:var(--muted)}
   </style>
 </head>
 <body>
+<div class="wrap" data-theme="dark" id="appRoot">
+
   <header>
-    <h2>🤖 Friday AI</h2>
-  </header>
-  <main>
-    <div id="chat"></div>
-    <footer>
-      <input type="text" id="msg" placeholder="Type a message..." />
-      <button onclick="send()">Send</button>
-      <button onclick="toggleStream()">Stream: <span id="streamState">OFF</span></button>
-    </footer>
-    <div class="small">
-      Model: <span id="model"></span> | 
-      <a href="/api/history" target="_blank">History</a> · 
-      <a href="/api/stats" target="_blank">Stats</a>
+    <div class="ttl"><div class="badge"></div> Friday AI</div>
+    <div class="links">
+      <a href="/chat">/chat</a>
+      · <a id="routesLink" href="#">routes</a>
+      · <a id="healthLink" href="#">health</a>
+      · <a id="statsLink" href="#">stats</a>
+      · <a id="historyLink" href="#">history</a>
+      · <a id="exportLink" href="#">export</a>
+      <span class="themeToggle" onclick="toggleTheme()">🌓 Theme</span>
     </div>
-  </main>
+  </header>
 
-  <script>
-    let streamMode = false;
-    let cid = localStorage.getItem("client_id") || (Math.random().toString(36).slice(2));
-    localStorage.setItem("client_id", cid);
+  <div id="log" class="log"></div>
 
-    async function fetchModel() {
-      try {
-        let res = await fetch("/api/models");
-        let data = await res.json();
-        document.getElementById("model").innerText = data.active;
-      } catch (e) {
-        document.getElementById("model").innerText = "(error)";
-      }
-    }
+  <div class="meta">
+    <div>
+      <label><input id="stream" type="checkbox" checked> Stream</label>
+      · Model: <select id="model"></select>
+      <span id="commit"></span>
+    </div>
+    <div>
+      <span id="cidLabel" class="pill"></span>
+      <button id="newCid">New session</button>
+    </div>
+  </div>
 
-    function toggleStream() {
-      streamMode = !streamMode;
-      document.getElementById("streamState").innerText = streamMode ? "ON" : "OFF";
-    }
+  <footer>
+    <input id="msg" type="text" placeholder="Type a message…" />
+    <button id="send">Send</button>
+  </footer>
+</div>
 
-    function append(role, text) {
-      const chat = document.getElementById("chat");
-      const div = document.createElement("div");
-      div.className = "msg " + role;
-      div.textContent = text;
-      chat.appendChild(div);
-      chat.scrollTop = chat.scrollHeight;
-    }
+<script>
+  const base = location.origin;
+  const appRoot = document.querySelector("#appRoot");
+  const log = document.querySelector("#log");
+  const msg = document.querySelector("#msg");
+  const sendBtn = document.querySelector("#send");
+  const modelSel = document.querySelector("#model");
+  const commitSpan = document.querySelector("#commit");
+  const cidLabel = document.querySelector("#cidLabel");
+  const newCidBtn = document.querySelector("#newCid");
+  const streamChk = document.querySelector("#stream");
 
-    async function send() {
-      const input = document.getElementById("msg");
-      const text = input.value.trim();
-      if (!text) return;
-      append("user", text);
-      input.value = "";
+  // Theme toggle
+  function toggleTheme(){
+    const current = appRoot.getAttribute("data-theme");
+    appRoot.setAttribute("data-theme", current==="light"?"dark":"light");
+  }
 
-      if (streamMode) {
-        const url = `/api/chat/stream?cid=${cid}&q=${encodeURIComponent(text)}`;
-        const evtSource = new EventSource(url);
-        let buffer = "";
-        evtSource.onmessage = (e) => {
-          const data = JSON.parse(e.data);
-          if (data.delta) {
-            buffer += data.delta;
-            if (!document.getElementById("streaming")) {
-              const div = document.createElement("div");
-              div.id = "streaming";
-              div.className = "msg assistant";
-              document.getElementById("chat").appendChild(div);
-            }
-            document.getElementById("streaming").textContent = buffer;
+  // Session
+  function getCid(){
+    let c = localStorage.getItem("cid");
+    if(!c){ c = crypto.randomUUID(); localStorage.setItem("cid",c); }
+    cidLabel.textContent = `cid: ${c.slice(0,8)}…`;
+    return c;
+  }
+  function setCid(c){ localStorage.setItem("cid",c); cidLabel.textContent = `cid: ${c.slice(0,8)}…`; }
+
+  // UI
+  function append(role,text){
+    const b=document.createElement("div");
+    b.className=`bubble ${role==="user"?"u":"a"}`;
+    b.textContent=text;
+    log.appendChild(b);
+    log.scrollTop=log.scrollHeight;
+  }
+
+  // Models
+  async function loadModels(){
+    try{
+      const r=await fetch(`${base}/api/models`);
+      const j=await r.json();
+      modelSel.innerHTML="";
+      (j.available||[]).forEach(m=>{
+        const o=document.createElement("option");
+        o.value=m; o.textContent=m;
+        if(m===j.active) o.selected=true;
+        modelSel.appendChild(o);
+      });
+    }catch{modelSel.innerHTML="<option>(error)</option>";}
+  }
+  modelSel.onchange=async()=>{
+    try{
+      const r=await fetch(`${base}/api/model`,{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({model:modelSel.value})
+      });
+      const j=await r.json();
+      append("assistant",`Model switched to: ${j.active}`);
+    }catch(e){append("assistant","Model switch error: "+e.message);}
+  };
+
+  // Send
+  async function send(){
+    const text=msg.value.trim(); if(!text) return;
+    append("user",text); msg.value="";
+    const cid=getCid();
+
+    if(streamChk.checked){
+      const url=new URL(`${base}/api/chat/stream`);
+      url.searchParams.set("cid",cid); url.searchParams.set("q",text);
+      const resp=await fetch(url);
+      const reader=resp.body.getReader();
+      let acc="",streamingDiv=null;
+      while(true){
+        const {value,done}=await reader.read(); if(done) break;
+        const chunk=new TextDecoder().decode(value);
+        chunk.split("\n\n").forEach(line=>{
+          if(line.startsWith("data: ")){
+            try{
+              const obj=JSON.parse(line.slice(6));
+              if(obj.delta){
+                acc+=obj.delta;
+                if(!streamingDiv){streamingDiv=document.createElement("div"); streamingDiv.className="bubble a"; log.appendChild(streamingDiv);}
+                streamingDiv.textContent=acc;
+                log.scrollTop=log.scrollHeight;
+              }
+              if(obj.done){streamingDiv=null; loadModels();}
+            }catch{}
           }
-          if (data.done) {
-            document.getElementById("streaming").removeAttribute("id");
-            evtSource.close();
-            fetchModel();
-          }
-        };
-      } else {
-        const res = await fetch("/api/chat?cid=" + cid, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: text })
         });
-        const data = await res.json();
-        append("assistant", data.reply || JSON.stringify(data));
-        fetchModel();
       }
+    } else {
+      const r=await fetch(`${base}/api/chat?cid=${cid}`,{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({message:text})
+      });
+      const j=await r.json();
+      if(j.cid&&j.cid!==cid)setCid(j.cid);
+      append("assistant",j.reply??JSON.stringify(j));
+      loadModels();
     }
+  }
 
-    fetchModel();
-  </script>
+  // Links
+  document.querySelector("#routesLink").onclick=async e=>{e.preventDefault();append("assistant",JSON.stringify(await (await fetch(base+"/routes")).json(),null,2));}
+  document.querySelector("#healthLink").onclick=async e=>{e.preventDefault();const j=await (await fetch(base+"/debug/health")).json();commitSpan.textContent=j.commit?"commit "+j.commit:"";append("assistant",JSON.stringify(j,null,2));}
+  document.querySelector("#statsLink").onclick=async e=>{e.preventDefault();append("assistant",JSON.stringify(await (await fetch(base+"/api/stats")).json(),null,2));}
+  document.querySelector("#historyLink").onclick=async e=>{e.preventDefault();append("assistant",JSON.stringify(await (await fetch(base+`/api/history?cid=${getCid()}`)).json(),null,2));}
+  document.querySelector("#exportLink").onclick=async e=>{e.preventDefault();append("assistant",JSON.stringify(await (await fetch(base+`/api/history/export?cid=${getCid()}`)).json(),null,2));}
+  newCidBtn.onclick=()=>{setCid(crypto.randomUUID());append("assistant","Started fresh session.");}
+
+  // Boot
+  getCid(); loadModels();
+  fetch(`${base}/debug/health`).then(r=>r.json()).then(j=>{if(j.commit)commitSpan.textContent="commit "+j.commit;});
+  msg.addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();}});
+  sendBtn.onclick=send;
+</script>
 </body>
 </html>
 
