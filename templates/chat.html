@@ -47,7 +47,7 @@
   </style>
 </head>
 <body>
-<div class="wrap" data-theme="dark" id="appRoot">
+<div class="wrap" id="appRoot">
 
   <header>
     <div class="ttl"><div class="badge"></div> Friday AI</div>
@@ -94,10 +94,16 @@
   const newCidBtn = document.querySelector("#newCid");
   const streamChk = document.querySelector("#stream");
 
-  // Theme toggle
-  function toggleTheme(){
+  // --- Theme persistence ---
+  function loadTheme() {
+    const t = localStorage.getItem("theme") || "dark";
+    appRoot.setAttribute("data-theme", t);
+  }
+  function toggleTheme() {
     const current = appRoot.getAttribute("data-theme");
-    appRoot.setAttribute("data-theme", current==="light"?"dark":"light");
+    const next = current === "light" ? "dark" : "light";
+    appRoot.setAttribute("data-theme", next);
+    localStorage.setItem("theme", next);
   }
 
   // Session
@@ -194,6 +200,7 @@
   newCidBtn.onclick=()=>{setCid(crypto.randomUUID());append("assistant","Started fresh session.");}
 
   // Boot
+  loadTheme();
   getCid(); loadModels();
   fetch(`${base}/debug/health`).then(r=>r.json()).then(j=>{if(j.commit)commitSpan.textContent="commit "+j.commit;});
   msg.addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();}});
@@ -201,6 +208,7 @@
 </script>
 </body>
 </html>
+
 
 
 
