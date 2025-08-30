@@ -11,43 +11,55 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
 
   <style>
-    :root { --bg:#0f172a; --card:#0b233b; --ink:#e5e7eb; --muted:#94a3b8; --accent:#60a5fa; }
+    :root { --bg:#0f172a; --card:#0b233b; --ink:#e5e7eb; --muted:#94a3b8; --accent:#60a5fa; --border:#143251; }
     html,body{
       margin:0; background:var(--bg); color:var(--ink);
       font:14px/1.5 "Inter", system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
       text-rendering:optimizeLegibility; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
     }
-    .wrap{max-width:980px; margin:28px auto; padding:0 16px}
-    .card{background:linear-gradient(180deg,#0f2a46,#0b233b); border:1px solid #143251; border-radius:12px; padding:16px}
-    h1{margin:0 0 8px 0; letter-spacing:.2px}
+    .wrap{max-width:1100px; margin:28px auto; padding:0 16px}
+    .card{background:linear-gradient(180deg,#0f2a46,#0b233b); border:1px solid var(--border); border-radius:12px; padding:16px}
+    h1,h2,h3{margin:0 0 8px 0; letter-spacing:.2px}
     .row{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
-    input,button{padding:10px 12px; border-radius:10px; border:1px solid #183a5b; background:#0e2138; color:var(--ink); font-family:inherit}
+    .grid{display:grid; grid-template-columns: 1.1fr .9fr; gap:16px}
+    @media (max-width:1000px){ .grid{grid-template-columns:1fr} }
+    input,button,select{
+      padding:10px 12px; border-radius:10px; border:1px solid #183a5b;
+      background:#0e2138; color:var(--ink); font-family:inherit
+    }
     button{background:var(--accent); border:0; font-weight:700; cursor:pointer; letter-spacing:.2px}
     button.secondary{background:transparent; color:var(--muted); border:1px solid #183a5b}
     button.warn{background:#ef4444}
     button:hover{opacity:.92}
     table{width:100%; border-collapse:collapse; margin-top:12px}
-    th,td{border-bottom:1px solid #183a5b; padding:8px; text-align:left}
+    th,td{border-bottom:1px solid #183a5b; padding:8px; text-align:left; vertical-align:top}
     .muted{color:var(--muted)}
     .pill{border:1px solid #183a5b; padding:6px 10px; border-radius:999px}
     .pad{padding:8px 0}
-    .grid{display:grid; grid-template-columns: 1fr 1fr; gap:16px}
-    @media (max-width:800px){ .grid{grid-template-columns:1fr} }
+    .hint{font-size:12px; color:var(--muted)}
+    .monaco{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace}
+    .box{background:#0e2138; border:1px dashed #274b70; border-radius:10px; padding:10px}
     a, a:visited{color:#9ecbff; text-decoration:none}
     a:hover{text-decoration:underline}
+    .badge{background:linear-gradient(135deg,#5eead4,#60a5fa); width:28px; height:28px; border-radius:8px; margin-right:8px}
   </style>
 </head>
 <body>
 <div class="wrap">
   <div class="card">
     <div class="row" style="justify-content:space-between">
-      <h1>Friday Admin</h1>
-      <div>
+      <div class="row">
+        <div class="badge"></div>
+        <h1>Friday Admin</h1>
+      </div>
+      <div class="row">
         <a href="/chat">← Back to Chat</a>
       </div>
     </div>
+
+    <!-- ===== Token ===== -->
     <div class="row pad">
-      <label class="pill">Token:
+      <label class="pill">Admin Token:
         <input id="tok" type="password" placeholder="Enter ADMIN_TOKEN" style="margin-left:8px; width:260px">
       </label>
       <button id="saveTok" class="secondary">Save</button>
@@ -55,42 +67,70 @@
     </div>
 
     <div class="grid">
+      <!-- ===== Left column ===== -->
       <div class="card">
-        <h3 style="margin-top:0">Stats</h3>
+        <h3 style="margin-top:0">Server</h3>
         <div class="row">
-          <button id="refreshStats">Refresh</button>
+          <button id="refreshStats">Refresh Stats</button>
+          <button id="refreshCids" class="secondary">List Sessions</button>
         </div>
-        <pre id="stats" class="muted" style="white-space:pre-wrap"></pre>
-      </div>
+        <div class="row" style="gap:12px; margin-top:10px">
+          <span class="pill" id="commit"></span>
+          <span class="pill" id="store"></span>
+          <span class="pill" id="model"></span>
+        </div>
+        <pre id="stats" class="muted monaco" style="white-space:pre-wrap; margin-top:10px"></pre>
 
-      <div class="card">
-        <h3 style="margin-top:0">Sessions</h3>
+        <h3>Sessions</h3>
         <div class="row">
-          <button id="refreshCids">Refresh</button>
           <button id="purgeAll" class="warn">Purge ALL</button>
         </div>
         <table>
-          <thead><tr><th>CID</th><th>Actions</th></tr></thead>
+          <thead><tr><th style="width:60%">CID</th><th>Actions</th></tr></thead>
           <tbody id="cidTable"><tr><td colspan="2" class="muted">No data</td></tr></tbody>
         </table>
       </div>
-    </div>
 
+      <!-- ===== Right column ===== -->
+      <div class="card">
+        <h3 style="margin-top:0">Backup & Restore</h3>
+
+        <div class="row">
+          <button id="downloadBackup">⬇ Download Full Backup</button>
+          <button id="viewBackup" class="secondary">👀 View Backup JSON</button>
+        </div>
+        <div id="backupPreview" class="box monaco" style="margin-top:10px; max-height:220px; overflow:auto; display:none"></div>
+
+        <div class="row" style="margin-top:12px">
+          <label class="row"><input id="mergeToggle" type="checkbox"> Merge (unchecked = Replace all)</label>
+        </div>
+
+        <div class="box" id="dropZone" style="margin-top:10px; text-align:center; padding:18px">
+          <div class="muted" style="margin-bottom:6px">Drag & drop a backup JSON here</div>
+          <div class="muted">or</div>
+          <input id="filePick" type="file" accept="application/json" style="margin-top:8px">
+        </div>
+
+        <div class="row" style="margin-top:10px">
+          <button id="restoreBtn">Restore</button>
+          <span id="restoreStat" class="muted"></span>
+        </div>
+
+        <div class="hint" style="margin-top:10px">
+          Tips: backup file comes from <code>/api/admin/backup_file</code>. Restore accepts the exact JSON from backup.
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
 <script>
   const base = location.origin;
-  const tokInput = document.getElementById('tok');
-  const saveTokBtn = document.getElementById('saveTok');
-  const tokStat = document.getElementById('tokStat');
-  const statsPre = document.getElementById('stats');
-  const refreshStatsBtn = document.getElementById('refreshStats');
-  const refreshCidsBtn = document.getElementById('refreshCids');
-  const purgeAllBtn = document.getElementById('purgeAll');
-  const cidTable = document.getElementById('cidTable');
 
-  // token persistence (local only)
+  // --- token persistence (local only)
+  const tokInput = document.getElementById('tok');
+  const tokStat  = document.getElementById('tokStat');
+  const saveTokBtn = document.getElementById('saveTok');
   function loadToken(){
     const t = localStorage.getItem('ADMIN_TOKEN') || '';
     tokInput.value = t;
@@ -100,20 +140,47 @@
     localStorage.setItem('ADMIN_TOKEN', tokInput.value.trim());
     loadToken();
   }
-
+  saveTokBtn.onclick = saveToken;
   function hdrs(){
     const t = tokInput.value.trim();
     return t ? { "X-Admin-Token": t } : {};
   }
 
+  // --- widgets
+  const statsPre = document.getElementById('stats');
+  const refreshStatsBtn = document.getElementById('refreshStats');
+  const refreshCidsBtn = document.getElementById('refreshCids');
+  const purgeAllBtn = document.getElementById('purgeAll');
+  const cidTable = document.getElementById('cidTable');
+
+  const commitPill = document.getElementById('commit');
+  const storePill  = document.getElementById('store');
+  const modelPill  = document.getElementById('model');
+
+  // Backup/restore
+  const downloadBackupBtn = document.getElementById('downloadBackup');
+  const viewBackupBtn = document.getElementById('viewBackup');
+  const backupPreview = document.getElementById('backupPreview');
+  const dropZone = document.getElementById('dropZone');
+  const filePick = document.getElementById('filePick');
+  const restoreBtn = document.getElementById('restoreBtn');
+  const restoreStat = document.getElementById('restoreStat');
+  const mergeToggle = document.getElementById('mergeToggle');
+
+  /* ========== Server Stats ========== */
   async function fetchStats(){
     try{
       const r = await fetch(`${base}/api/stats`);
       const j = await r.json();
       statsPre.textContent = JSON.stringify(j, null, 2);
+      modelPill.textContent = "model: " + (j.active_model || "(n/a)");
+      commitPill.textContent = j.commit ? ("commit " + j.commit) : "";
+      storePill.textContent = j.has_redis ? "store: redis" : (j.has_sqlite ? "store: sqlite" : "store: memory");
     }catch(e){ statsPre.textContent = 'Stats error: ' + e.message; }
   }
+  refreshStatsBtn.onclick = fetchStats;
 
+  /* ========== Sessions Table ========== */
   async function fetchCids(){
     cidTable.innerHTML = `<tr><td colspan="2" class="muted">Loading…</td></tr>`;
     try{
@@ -152,26 +219,109 @@
       cidTable.innerHTML = `<tr><td colspan="2">Error: ${e.message}</td></tr>`;
     }
   }
+  refreshCidsBtn.onclick = fetchCids;
 
-  async function purgeAll(){
-    if(!confirm('This will purge ALL sessions on the server. Continue?')) return;
+  purgeAllBtn.onclick = async () => {
+    if(!confirm("This will purge ALL sessions on the server. Continue?")) return;
     const r = await fetch(`${base}/api/admin/purge_all`, { method:'DELETE', headers: hdrs() });
     const j = await r.json();
     if(!r.ok){ alert('Admin purge failed: ' + (j.error||r.status)); return; }
     alert(`Purged ${j.purged_count} sessions`);
     fetchCids();
+  };
+
+  /* ========== Backup (download/view) ========== */
+  downloadBackupBtn.onclick = async () => {
+    try{
+      const res = await fetch(`${base}/api/admin/backup_file`, { headers: hdrs() });
+      if(!res.ok){ const j = await res.json().catch(()=>({})); alert("Download failed: " + (j.error||res.status)); return; }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const stamp = new Date().toISOString().replace(/[:.]/g,"-");
+      a.href = url; a.download = `friday_backup_${stamp}.json`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    }catch(e){ alert("Backup error: " + e.message); }
+  };
+
+  viewBackupBtn.onclick = async () => {
+    try{
+      backupPreview.style.display = "block";
+      backupPreview.textContent = "Loading…";
+      const res = await fetch(`${base}/api/admin/backup`, { headers: hdrs() });
+      const j = await res.json();
+      if(!res.ok){ backupPreview.textContent = "Error: " + (j.error||res.status); return; }
+      backupPreview.textContent = JSON.stringify(j, null, 2);
+    }catch(e){ backupPreview.textContent = "Error: " + e.message; }
+  };
+
+  /* ========== Restore (file input + drag & drop) ========== */
+  let restorePayload = null;
+
+  filePick.addEventListener("change", async (e)=>{
+    const f = e.target.files?.[0]; if(!f) return;
+    const text = await f.text();
+    try{
+      restorePayload = JSON.parse(text);
+      restoreStat.textContent = `Loaded file (${f.name}), size ${text.length.toLocaleString()} bytes`;
+    }catch(err){
+      restorePayload = null;
+      restoreStat.textContent = "Invalid JSON in file.";
+    }
+  });
+
+  ;["dragenter","dragover"].forEach(evt=>{
+    dropZone.addEventListener(evt, e=>{ e.preventDefault(); e.stopPropagation(); dropZone.style.borderColor="#60a5fa"; });
+  });
+  ;["dragleave","drop"].forEach(evt=>{
+    dropZone.addEventListener(evt, e=>{ e.preventDefault(); e.stopPropagation(); dropZone.style.borderColor="#274b70"; });
+  });
+  dropZone.addEventListener("drop", async (e)=>{
+    const f = e.dataTransfer.files?.[0]; if(!f) return;
+    const text = await f.text();
+    try{
+      restorePayload = JSON.parse(text);
+      restoreStat.textContent = `Loaded file (${f.name}), size ${text.length.toLocaleString()} bytes`;
+    }catch(err){
+      restorePayload = null;
+      restoreStat.textContent = "Invalid JSON in file.";
+    }
+  });
+
+  restoreBtn.onclick = async () => {
+    if(!restorePayload){ alert("Pick or drop a backup JSON first."); return; }
+    const merge = !!mergeToggle.checked;
+    // If payload is the /backup shape, it has { sessions: {...} }
+    const body = restorePayload.sessions ? { merge, sessions: restorePayload.sessions } : { merge, sessions: restorePayload };
+    restoreStat.textContent = "Restoring…";
+    try{
+      const r = await fetch(`${base}/api/admin/restore`,{
+        method:"POST",
+        headers: { "Content-Type":"application/json", ...hdrs() },
+        body: JSON.stringify(body)
+      });
+      const j = await r.json();
+      if(!r.ok){ restoreStat.textContent = "Restore failed: " + (j.error||r.status); return; }
+      restoreStat.textContent = `OK — sessions_written=${j.sessions_written}, messages_written=${j.messages_written}, merge=${j.merge}`;
+      fetchCids();
+    }catch(e){
+      restoreStat.textContent = "Restore error: " + e.message;
+    }
+  };
+
+  /* ========== Boot ========== */
+  (function boot(){
+    loadToken();
+    fetchStats();
+    fetchCids();
+  })();
+
+  function loadToken(){
+    const t = localStorage.getItem('ADMIN_TOKEN') || '';
+    tokInput.value = t;
+    tokStat.textContent = t ? 'token loaded (stored locally)' : 'no token saved';
   }
-
-  // wire up
-  saveTokBtn.onclick = saveToken;
-  refreshStatsBtn.onclick = fetchStats;
-  refreshCidsBtn.onclick = fetchCids;
-  purgeAllBtn.onclick = purgeAll;
-
-  // boot
-  loadToken();
-  fetchStats();
-  fetchCids();
 </script>
 </body>
 </html>
