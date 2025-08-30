@@ -100,6 +100,14 @@
   const purgeAllBtn = document.querySelector("#purgeAll");
   const streamChk = document.querySelector("#stream");
 
+  const reply = await fetch(`${BASE}/api/chat?cid=${cid}`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ message: "Hello Friday!" })
+}).then(r => r.json());
+console.log(reply);
+
+
   // --- Theme persistence ---
   function loadTheme() {
     const t = localStorage.getItem("theme") || "dark";
@@ -158,6 +166,27 @@
       append("assistant", `Model switched to: ${j.active}`);
     }catch(e){ append("assistant", "Model switch error: " + e.message); }
   };
+
+  const url = new URL(`${BASE}/api/chat/stream`);
+url.searchParams.set("cid", cid);
+url.searchParams.set("q", "stream plz");
+const resp = await fetch(url);
+const reader = resp.body.getReader();
+const dec = new TextDecoder();
+let acc = "";
+for(;;){
+  const {value, done} = await reader.read();
+  if (done) break;
+  const chunk = dec.decode(value);
+  chunk.split("\n\n").forEach(line=>{
+    if(line.startsWith("data: ")){
+      const obj = JSON.parse(line.slice(6));
+      if(obj.delta){ acc += obj.delta; }
+      if(obj.done){ console.log("DONE", acc); }
+    }
+  });
+}
+
 
   // --- Send
   async function send(){
