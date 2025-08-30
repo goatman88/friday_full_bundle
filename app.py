@@ -1,46 +1,14 @@
 # app.py
-import os, json, time, uuid
+import os, json, time, uuid, base64
 from datetime import datetime
 from typing import List, Dict, Any, Optional
-
-from flask import (
-    Flask, jsonify, request, render_template, send_from_directory, Response, make_response
-)
-from flask_cors import CORS
-
-import base64
 from functools import wraps
 
-BASIC_USER = os.getenv("BASIC_AUTH_USER", "")
-BASIC_PASS = os.getenv("BASIC_AUTH_PASS", "")
-
-def _basic_auth_enabled() -> bool:
-    return bool(BASIC_USER and BASIC_PASS)
-
-def _check_basic_auth(auth_header: str) -> bool:
-    # Expect "Basic base64(user:pass)"
-    if not auth_header or not auth_header.startswith("Basic "):
-        return False
-    try:
-        raw = base64.b64decode(auth_header.split(" ", 1)[1]).decode("utf-8")
-        user, pwd = raw.split(":", 1)
-        return (user == BASIC_USER) and (pwd == BASIC_PASS)
-    except Exception:
-        return False
-
-def requires_basic_auth(fn):
-    @wraps(fn)
-    def wrapper(*args, **kwargs):
-        if not _basic_auth_enabled():
-            return fn(*args, **kwargs)  # gate is Off if creds not configured
-        auth = request.headers.get("Authorization", "")
-        if _check_basic_auth(auth):
-            return fn(*args, **kwargs)
-        resp = make_response("Unauthorized", 401)
-        resp.headers["WWW-Authenticate"] = 'Basic realm="Friday Admin", charset="UTF-8"'
-        return resp
-    return wrapper
-
+from flask import (
+    Flask, jsonify, request, render_template, send_from_directory,
+    Response, make_response
+)
+from flask_cors import CORS
 
 # ---------------- App
 app = Flask(__name__, static_folder="static", template_folder="templates")
@@ -52,7 +20,9 @@ DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 AVAILABLE_MODELS = ["gpt-4o", "gpt-4o-mini", "gpt-4.1-mini", "o3-mini"]
 ACTIVE_MODEL = DEFAULT_MODEL if DEFAULT_MODEL in AVAILABLE_MODELS else "gpt-4o-mini"
 
-ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")  # <— set this in Render
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")        # token for admin APIs
+BASIC_USER   = os.getenv("BASIC_AUTH_USER", "")   # HTTP Basic user (for pages)
+BASIC_PASS   = os.getenv("BASIC_AUTH_PASS", "")   # HTTP Basic pass (for pages)
 
 # ---------------- Optional Redis persistence (falls back to memory)
 _redis = None
@@ -61,7 +31,7 @@ try:
     if os.getenv("REDIS_URL"):
         _redis = Redis.from_url(os.getenv("REDIS_URL"), decode_responses=True)
 except Exception:
-    _redis = None  # fine, we’ll just use memory
+    _redis = None  # ok, fallback to memory
 
 def _rkey(cid: str) -> str:
     return f"conv:{cid}"
@@ -115,6 +85,33 @@ def limit(rule: str):
         return fn
     return deco
 
+# ---------------- Basic Auth (for select pages)
+def _basic_auth_enabled() -> bool:
+    return bool(BASIC_USER and BASIC_PASS)
+
+def _check_basic_auth(auth_header: str) -> bool:
+    if not auth_header or not auth_header.startswith("Basic "):
+        return False
+    try:
+        raw = base64.b64decode(auth_header.split(" ", 1)[1]).decode("utf-8")
+        user, pwd = raw.split(":", 1)
+        return (user == BASIC_USER) and (pwd == BASIC_PASS)
+    except Exception:
+        return False
+
+def requires_basic_auth(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not _basic_auth_enabled():
+            return fn(*args, **kwargs)  # gate OFF if creds not configured
+        auth = request.headers.get("Authorization", "")
+        if _check_basic_auth(auth):
+            return fn(*args, **kwargs)
+        resp = make_response("Unauthorized", 401)
+        resp.headers["WWW-Authenticate"] = 'Basic realm="Friday Admin", charset="UTF-8"'
+        return resp
+    return wrapper
+
 # ---------------- Security headers
 @app.after_request
 def _secure(resp):
@@ -138,8 +135,15 @@ def home():
 def chat_page():
     return render_template("chat.html", title="Friday AI")
 
-# ---------------- Introspection
+# --- Admin Panel page (HTML UI) — protected by Basic Auth if configured
+@app.get("/admin")
+@requires_basic_auth
+def admin_page():
+    return render_template("admin.html", title="Friday Admin")
+
+# ---------------- Introspection (also protected by Basic Auth if configured)
 @app.get("/routes")
+@requires_basic_auth
 def routes():
     table = []
     for rule in app.url_map.iter_rules():
@@ -151,6 +155,7 @@ def routes():
     return jsonify(sorted(table, key=lambda r: r["rule"]))
 
 @app.get("/debug/health")
+@requires_basic_auth
 def health():
     return jsonify({"ok": True, "commit": COMMIT, "model": ACTIVE_MODEL})
 
@@ -191,14 +196,6 @@ def _cid_from_request() -> str:
     # priority: explicit query → header → new guid
     cid = request.args.get("cid") or request.headers.get("X-Client-Id")
     return cid or (uuid.uuid4().hex)
-
-def _require_admin() -> Optional[Response]:
-    if not ADMIN_TOKEN:
-        return make_response(jsonify({"error": "admin_disabled"}), 403)
-    tok = request.headers.get("X-Admin-Token") or request.args.get("token")
-    if tok != ADMIN_TOKEN:
-        return make_response(jsonify({"error": "unauthorized"}), 401)
-    return None
 
 def _dev_echo(user_msg: str) -> str:
     return f"(dev echo {COMMIT}) You said: {user_msg}"
@@ -241,7 +238,7 @@ def api_chat():
     _save_thread(cid, thread)
     return jsonify({"reply": reply, "cid": cid})
 
-# ---------------- Streaming (SSE)
+# ---------------- Streaming (SSE via fetch)
 @app.get("/api/chat/stream")
 @limit("30/minute")
 def chat_stream():
@@ -311,7 +308,7 @@ def export_history():
         "messages": msgs,
     })
 
-# downloadable file attachment (for the UI "Download" button)
+# downloadable file attachment (used by UI "Download")
 @app.get("/api/history/export_file")
 def export_history_file():
     cid = _cid_from_request()
@@ -334,7 +331,15 @@ def clear_history():
     _delete_thread(cid)
     return jsonify({"ok": True, "cid": cid})
 
-# ---------------- ADMIN (token-protected) ----------------
+# ---------------- ADMIN (token-protected APIs)
+def _require_admin() -> Optional[Response]:
+    if not ADMIN_TOKEN:
+        return make_response(jsonify({"error": "admin_disabled"}), 403)
+    tok = request.headers.get("X-Admin-Token") or request.args.get("token")
+    if tok != ADMIN_TOKEN:
+        return make_response(jsonify({"error": "unauthorized"}), 401)
+    return None
+
 @app.get("/api/admin/cids")
 def admin_cids():
     gate = _require_admin()
@@ -381,6 +386,7 @@ def method_not_allowed(_):
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=True)
+
 
 
 
