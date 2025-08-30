@@ -1,37 +1,14 @@
-# Friday AI
+# Friday AI — Flask Starter
 
-Friday AI is a lightweight Flask + OpenAI chatbot web app, deployed on Render.
+Chat UI + persistent history (Redis/SQLite/memory), admin panel, backup/restore, moderation, image gen, and file uploads.
 
-## Features
-- Chat endpoint with streaming (SSE)
-- Persistent conversation history (Redis or in-memory fallback)
-- Model switching (`/api/models` + `/api/model`)
-- Usage stats (`/api/stats`)
-- Exportable history (`/api/history/export`)
-- Security headers + optional rate limiting
+## Quick Start (Local)
 
-## Endpoints
+```bash
+python3 -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+export OPENAI_API_KEY=sk-xxx
+export ADMIN_TOKEN=super-secure
+export ASSET_CDN="https://fonts.googleapis.com,https://fonts.gstatic.com"
+python app.py
 
-- `/chat` — Web UI  
-- `/api/chat` — POST a message  
-- `/api/chat/stream` — SSE streaming chat  
-- `/api/history` — conversation history  
-- `/api/history/export` — export full thread  
-- `/api/models` — list available models  
-- `/api/model` — set active model  
-- `/api/stats` — runtime stats  
-- `/routes` — list all routes  
-- `/debug/health` — health/commit info  
-
-## Deploy
-
-1. Set env vars in Render:
-   - `OPENAI_API_KEY`
-   - `OPENAI_MODEL` (default: `gpt-4o-mini`)
-   - `REDIS_URL` (optional, for persistent history)
-
-2. Push to GitHub:
-   ```bash
-   git add .
-   git commit -m "Initial deploy"
-   git push origin main
