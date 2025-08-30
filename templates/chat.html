@@ -1,160 +1,275 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>{{ title or "Friday AI" }}</title>
+  <meta charset="utf-8" />
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"
+  />
+  <title>Friday AI — Chat</title>
   <style>
-    :root { --bg:#0b1221; --panel:#0e172a; --ink:#e2e8f0; --muted:#94a3b8; --brand:#60a5fa; --chip:#1f2a44; }
+    :root{
+      --bg:#0c1220; --panel:#121a2b; --ink:#e9efff; --muted:#a9b4d6;
+      --accent:#79b8ff; --accent-2:#7c4dff; --chip:#1c2740; --good:#38d39f; --warn:#ffb86b;
+      --radius:14px;
+    }
     *{box-sizing:border-box}
-    body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif}
-    header{display:flex;gap:12px;align-items:center;padding:18px 22px;background:var(--panel);border-bottom:1px solid #1f2937;position:sticky;top:0}
-    header .dot{width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,#60a5fa,#34d399)}
-    header h1{font-size:16px;margin:0}
-    header .meta{margin-left:auto;color:var(--muted);font-size:12px}
-    main{max-width:880px;margin:26px auto;padding:0 16px}
-    .card{background:var(--panel);border:1px solid #1f2937;border-radius:18px;box-shadow:0 10px 40px rgba(0,0,0,.35);overflow:hidden}
-    .thread{padding:18px;display:flex;flex-direction:column;gap:12px;min-height:340px}
-    .msg{padding:12px 14px;border-radius:12px;max-width:80%}
-    .msg.user{align-self:flex-end;background:#233a78}
-    .msg.bot{align-self:flex-start;background:#15223d}
-    .typing{color:var(--muted);font-style:italic}
-    form{display:flex;gap:10px;padding:14px;background:#0c172e;border-top:1px solid #1f2937}
-    textarea{flex:1;resize:none;min-height:44px;max-height:140px;padding:12px 14px;border-radius:12px;border:1px solid #2b3a55;background:#0b1221;color:var(--ink)}
-    button{padding:12px 16px;border:0;border-radius:12px;background:var(--brand);color:#0b1221;font-weight:700;cursor:pointer}
-    .toolbar{display:flex;gap:10px;align-items:center;color:var(--muted);font-size:12px;padding:8px 14px;border-top:1px dashed #20304f;background:#0c172e}
-    .chip{background:var(--chip);padding:4px 8px;border-radius:999px;border:1px solid #2b3a55}
+    html,body{height:100%}
+    body{
+      margin:0; background:radial-gradient(1200px 800px at 10% -10%, #1a2440 0%, transparent 60%),
+      radial-gradient(1200px 800px at 110% 20%, #1b1635 0%, transparent 60%), var(--bg);
+      color:var(--ink); font:16px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+      display:flex; flex-direction:column; gap:16px;
+    }
+    header{
+      display:flex; align-items:center; justify-content:space-between; gap:16px;
+      padding:16px clamp(14px, 3vw, 28px);
+    }
+    .brand{display:flex; align-items:center; gap:12px}
+    .logo{
+      width:36px; height:36px; border-radius:10px;
+      background:linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
+      box-shadow:0 8px 24px rgba(124,77,255,.35), inset 0 0 20px rgba(255,255,255,.18);
+    }
+    .title{font-weight:700; letter-spacing:.2px}
+    .badge{
+      padding:4px 10px; border-radius:999px; background:var(--chip); color:var(--muted);
+      font-size:12px; border:1px solid rgba(255,255,255,.06)
+    }
+    .row{display:flex; align-items:center; gap:10px; flex-wrap:wrap}
+    .chip{
+      background:var(--chip); color:var(--muted); padding:6px 10px; border-radius:10px; border:1px solid rgba(255,255,255,.06);
+      display:inline-flex; align-items:center; gap:8px;
+    }
+    select, button, input[type="text"], textarea{
+      color:var(--ink); background:#0e1526; border:1px solid rgba(255,255,255,.08); border-radius:10px;
+      padding:10px 12px; font:inherit; outline:none;
+    }
+    select:focus, input:focus, textarea:focus{border-color:rgba(121,184,255,.6); box-shadow:0 0 0 4px rgba(121,184,255,.12)}
+    button{
+      background:linear-gradient(180deg, #79b8ff, #6aaef7);
+      color:#061427; font-weight:700; border:none; padding:12px 16px; border-radius:12px;
+      box-shadow:0 8px 30px rgba(121,184,255,.35); cursor:pointer;
+    }
+    button.secondary{background:#0f182b; color:var(--ink); border:1px solid rgba(255,255,255,.08); box-shadow:none}
+    button:disabled{opacity:.6; cursor:not-allowed}
+    main{flex:1; display:grid; place-items:start center}
+    .card{
+      width:min(960px, 92vw); background:rgba(15,22,40,.75); backdrop-filter: blur(8px);
+      border:1px solid rgba(255,255,255,.06); border-radius:var(--radius); padding:18px; margin-bottom:24px;
+      box-shadow:0 12px 40px rgba(0,0,0,.35), inset 0 0 80px rgba(124,77,255,.06);
+    }
+    .messages{
+      display:flex; flex-direction:column; gap:10px; max-height:55vh; overflow:auto; padding:8px;
+      border-radius:12px; background:rgba(20,28,50,.55); border:1px solid rgba(255,255,255,.05);
+    }
+    .bubble{
+      max-width:80%; padding:10px 12px; border-radius:12px; white-space:pre-wrap;
+      border:1px solid rgba(255,255,255,.06);
+    }
+    .me   {align-self:flex-end; background:#15213c}
+    .bot  {align-self:flex-start; background:#121a2b}
+    .system{align-self:center; background:#0e1526; color:var(--muted); font-size:13px}
+    .grid{
+      display:grid; grid-template-columns:1fr auto; gap:10px; align-items:center; margin-top:14px;
+    }
+    textarea{
+      height:64px; resize:vertical; min-height:56px; max-height:30vh;
+    }
+    .bar{display:flex; gap:10px; align-items:center; flex-wrap:wrap}
+    a.tool{color:var(--muted); text-decoration:none; border-bottom:1px dotted rgba(255,255,255,.2)}
+    .mini{font-size:12px; color:var(--muted)}
     .right{margin-left:auto}
-    a{color:#8ab4ff;text-decoration:none}
+    .hidden{display:none}
+    .linklike{cursor:pointer; color:var(--accent)}
   </style>
 </head>
-
 <body>
   <header>
-    <div class="dot"></div>
-    <h1>Friday AI</h1>
-    <div class="meta"><span id="modelChip" class="chip">model…</span></div>
+    <div class="brand">
+      <div class="logo" aria-hidden="true"></div>
+      <div>
+        <div class="title">Friday AI</div>
+        <div class="mini">Simple chat UI · <span id="commit">…</span></div>
+      </div>
+    </div>
+    <div class="row">
+      <label class="chip">
+        <input id="stream" type="checkbox" checked />
+        Stream
+      </label>
+      <label class="chip">
+        Model
+        <select id="model"></select>
+      </label>
+      <a class="chip linklike" id="historyLink">history</a>
+      <a class="chip" href="/routes" target="_blank" rel="noopener">routes</a>
+      <a class="chip" href="/debug/health" target="_blank" rel="noopener">health</a>
+      <a class="chip" href="/api/history/export" target="_blank" rel="noopener">export</a>
+    </div>
   </header>
 
   <main>
-    <div class="card">
-      <div class="thread" id="thread"></div>
-      <div class="toolbar">
-        <label><input id="streamToggle" type="checkbox" checked> Stream</label>
-        <span class="right"><a href="/api/history" target="_blank">history</a> · <a href="/debug/stats" target="_blank">stats</a> · <a href="/routes" target="_blank">routes</a></span>
+    <section class="card" style="width:min(960px,92vw)">
+      <div id="messages" class="messages" aria-live="polite"></div>
+
+      <div class="grid">
+        <textarea id="input" placeholder="Type a message…" autocomplete="off"></textarea>
+        <div class="bar">
+          <button id="send">Send</button>
+          <button id="clear" class="secondary">Clear</button>
+          <span class="mini right">/chat</span>
+        </div>
       </div>
-      <form id="form">
-        <textarea id="input" placeholder="Type a message…" autofocus></textarea>
-        <button id="sendBtn" type="submit">Send</button>
-      </form>
-    </div>
+    </section>
   </main>
 
+  <!-- History modal (very light-weight) -->
+  <section id="historyModal" class="hidden" aria-modal="true" role="dialog">
+    <div class="card" style="width:min(820px,92vw)">
+      <div class="row" style="justify-content:space-between; margin-bottom:8px">
+        <div class="title">Conversation history</div>
+        <button id="closeHist" class="secondary">Close</button>
+      </div>
+      <div id="historyBox" class="messages" style="max-height:50vh"></div>
+    </div>
+  </section>
+
   <script>
-    const $ = sel => document.querySelector(sel);
-    const thread = $('#thread');
-    const input = $('#input');
-    const form = $('#form');
-    const streamToggle = $('#streamToggle');
-    const modelChip = $('#modelChip');
+    // --------- helpers
+    const el = (id)=>document.getElementById(id);
+    const msgs = el('messages');
+    const input = el('input');
+    const sendBtn = el('send');
+    const clearBtn= el('clear');
+    const modelSel= el('model');
+    const streamCb= el('stream');
+    const commitEl= el('commit');
 
-    const el = (cls, text) => {
-      const d = document.createElement('div');
-      d.className = cls;
-      d.textContent = text;
-      return d;
-    };
+    function addBubble(text, cls='bot'){
+      const b = document.createElement('div');
+      b.className = `bubble ${cls}`;
+      b.textContent = text;
+      msgs.appendChild(b);
+      msgs.scrollTop = msgs.scrollHeight;
+    }
 
-    async function hydrate() {
-      // model label
-      try {
-        const m = await fetch('/api/model').then(r=>r.json());
-        modelChip.textContent = m.model + (m.has_key ? '' : ' (dev)');
-      } catch { modelChip.textContent = 'model?'; }
+    function addSystem(line){ addBubble(line, 'system'); }
 
-      // history
-      try {
-        const hist = await fetch('/api/history').then(r=>r.json());
-        hist.forEach(m => {
-          thread.appendChild(el(`msg ${m.role==='user'?'user':'bot'}`, m.content));
+    // --------- load boot info (commit, models)
+    async function boot(){
+      try{
+        const h = await fetch('/debug/health').then(r=>r.json());
+        if(h && h.commit) commitEl.textContent = h.commit;
+      }catch{ /* ignore */ }
+
+      try{
+        const data = await fetch('/api/models').then(r=>r.json());
+        const { active, available=[] } = data;
+        modelSel.innerHTML = '';
+        available.forEach(m=>{
+          const opt = document.createElement('option');
+          opt.value = m; opt.textContent = m; if(m===active) opt.selected = true;
+          modelSel.appendChild(opt);
         });
-        thread.scrollTop = thread.scrollHeight;
-      } catch {}
-      if (thread.children.length === 0) {
-        thread.appendChild(el('msg bot', 'Welcome! Ask me anything.'));
+        addSystem(`Model: ${active ?? 'dev echo'}`);
+      }catch{
+        addSystem('Model: dev echo (no OPENAI_API_KEY)');
+        modelSel.innerHTML = '<option value="dev-echo" selected>dev-echo</option>';
+        modelSel.disabled = true;
       }
     }
 
-    function pushUser(text){
-      const m = el('msg user', text);
-      thread.appendChild(m);
-      thread.scrollTop = thread.scrollHeight;
-    }
-    function pushBot(text){
-      const m = el('msg bot', text);
-      thread.appendChild(m);
-      thread.scrollTop = thread.scrollHeight;
-      return m;
-    }
+    // --------- send chat
+    async function send(){
+      const message = input.value.trim();
+      if(!message) return;
+      input.value='';
 
-    async function sendMessage(text){
-      pushUser(text);
-      input.value = '';
-      const typing = pushBot('…'); typing.classList.add('typing');
+      addBubble(message, 'me');
 
-      if (streamToggle.checked){
-        const res = await fetch('/api/chat_stream', {
+      const body = { message, stream: !!streamCb.checked };
+      try{
+        const res = await fetch('/api/chat', {
           method:'POST',
           headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({message:text})
+          body: JSON.stringify(body)
         });
-        typing.textContent = ''; typing.classList.remove('typing');
-        const reader = res.body.getReader();
-        const dec = new TextDecoder();
-        let acc = '';
-        while(true){
-          const {done, value} = await reader.read();
-          if (done) break;
-          const chunk = dec.decode(value, {stream:true});
-          chunk.split('\n\n').forEach(line=>{
-            if (!line.startsWith('data:')) return;
-            const data = JSON.parse(line.slice(5));
-            if (data.type === 'delta'){
-              typing.textContent += data.text;
-            }
-          });
+        const data = await res.json();
+        if(!res.ok){
+          addBubble(`Error: ${data?.error || res.status}`, 'system');
+          return;
         }
-        typing.classList.remove('typing');
-      } else {
-        const j = await fetch('/api/chat', {
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({message:text})
-        }).then(r=>r.json());
-        typing.textContent = j.reply || (j.error ? `[${j.error}]` : '…');
-        typing.classList.remove('typing');
+        addBubble(data.reply || '(no reply)', 'bot');
+      }catch(err){
+        addBubble('Network error. Check logs.', 'system');
       }
-      thread.scrollTop = thread.scrollHeight;
     }
 
-    form.addEventListener('submit', e=>{
-      e.preventDefault();
-      const text = input.value.trim();
-      if(!text) return;
-      sendMessage(text);
+    // --------- set model
+    modelSel.addEventListener('change', async ()=>{
+      const model = modelSel.value;
+      try{
+        const res = await fetch('/api/model', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ model })
+        });
+        const data = await res.json();
+        if(res.ok){
+          addSystem(`Switched model → ${data.active || model}`);
+        }else{
+          addSystem(`Failed to set model: ${data.error || res.status}`);
+        }
+      }catch{ addSystem('Failed to set model (network)'); }
     });
 
-    // Enter to send / Shift+Enter newline
-    input.addEventListener('keydown', e=>{
-      if(e.key==='Enter' && !e.shiftKey){
-        e.preventDefault();
-        form.dispatchEvent(new Event('submit'));
+    // --------- history modal
+    const histLink = document.getElementById('historyLink');
+    const modal = document.getElementById('historyModal');
+    const histBox = document.getElementById('historyBox');
+    document.getElementById('closeHist').onclick = ()=> modal.classList.add('hidden');
+
+    histLink.addEventListener('click', async ()=>{
+      histBox.innerHTML = '';
+      try{
+        const data = await fetch('/api/history').then(r=>r.json());
+        if(Array.isArray(data?.messages) && data.messages.length){
+          data.messages.forEach(m=>{
+            const who = m.role === 'user' ? 'me' : (m.role === 'assistant' ? 'bot' : 'system');
+            const b = document.createElement('div');
+            b.className = `bubble ${who}`;
+            b.textContent = (m.role+': ').padEnd(6,' ') + (m.content ?? '');
+            histBox.appendChild(b);
+          });
+        }else{
+          const b = document.createElement('div');
+          b.className = 'bubble system';
+          b.textContent = 'No history yet.';
+          histBox.appendChild(b);
+        }
+      }catch{
+        const b = document.createElement('div');
+        b.className = 'bubble system';
+        b.textContent = 'Failed to load history.';
+        histBox.appendChild(b);
       }
+      modal.classList.remove('hidden');
     });
 
-    hydrate();
+    // --------- wire UI
+    sendBtn.onclick = send;
+    input.addEventListener('keydown', (e)=>{
+      if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); send(); }
+    });
+    clearBtn.onclick = ()=>{ msgs.innerHTML=''; addSystem('Cleared.'); };
+
+    // --------- welcome
+    addBubble('Welcome! Ask me anything.', 'bot');
+    boot();
   </script>
 </body>
 </html>
+
 
 
