@@ -88,37 +88,45 @@
 
   <div id="toast" class="toast">Copied!</div>
 
- <script>
-  // Same-origin by default. For local dev you can append ?dev=1 to the page URL.
-  const dev = new URLSearchParams(location.search).has('dev');
-  const BASE = dev ? 'http://localhost:5000' : '';
+<script>
+  const list = document.getElementById('messages');
+  const form = document.getElementById('chat-form');
+  const input = document.getElementById('chat-input');
+  const clearBtn = document.getElementById('clear');
 
-  const API = {
-    chat:    () => `${BASE}/api/chat`,
-    history: () => `${BASE}/api/history`,
-    model:   () => `${BASE}/api/model`,
-    routes:  () => `${BASE}/routes`,
-    health:  () => `${BASE}/debug/health`,
-  };
-
-  async function sendChat(msg) {
-    const r = await fetch(API.chat(), {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ message: msg })
-    });
-    return r.json();
+  function li(text, who) {
+    const el = document.createElement('div');
+    el.className = `bubble ${who}`;
+    el.textContent = text;
+    list.appendChild(el);
+    list.scrollTop = list.scrollHeight;
   }
 
-  async function loadHistory() {
-    const r = await fetch(API.history());
-    return r.ok ? r.json() : [];
+  async function bootstrap() {
+    const hist = await loadHistory();
+    if (Array.isArray(hist)) {
+      hist.forEach(m => li(m.content, m.role));
+    }
   }
 
-  async function clearHistory() {
-    await fetch(API.history(), { method: 'DELETE' });
-  }
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const msg = input.value.trim();
+    if (!msg) return;
+    input.value = "";
+    li(msg, 'user');
+    const res = await sendChat(msg);
+    li(res.reply ?? (res.error || '…error'), 'assistant');
+  });
+
+  clearBtn?.addEventListener('click', async () => {
+    await clearHistory();
+    list.innerHTML = '';
+  });
+
+  bootstrap();
 </script>
+
 
 </body>
 </html>
