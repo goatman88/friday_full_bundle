@@ -42,6 +42,12 @@ def _save_thread(cid: str, msgs: List[Dict[str, Any]]) -> None:
     else:
         _conversations[cid] = msgs
 
+def _delete_thread(cid: str) -> None:
+    if _redis:
+        _redis.delete(_rkey(cid))
+    else:
+        _conversations.pop(cid, None)
+
 def _all_cids() -> List[str]:
     if _redis:
         cids: List[str] = []
@@ -104,7 +110,7 @@ def routes():
     for rule in app.url_map.iter_rules():
         table.append({
             "endpoint": rule.endpoint,
-            "methods": sorted(m for m in rule.methods if m in {"GET", "POST", "OPTIONS"}),
+            "methods": sorted(m for m in rule.methods if m in {"GET", "POST", "OPTIONS", "DELETE"}),
             "rule": str(rule),
         })
     return jsonify(sorted(table, key=lambda r: r["rule"]))
@@ -128,7 +134,7 @@ def set_model():
     ACTIVE_MODEL = name
     return jsonify({"ok": True, "active": ACTIVE_MODEL})
 
-# ---------------- Stats (Step 4)
+# ---------------- Stats
 START_TS = int(time.time())
 
 @app.get("/api/stats")
@@ -284,6 +290,13 @@ def export_history():
         "messages": msgs,
     })
 
+# NEW: Clear current cid’s history (used by “Clear Chat” in UI)
+@app.delete("/api/history")
+def clear_history():
+    cid = _cid_from_request()
+    _delete_thread(cid)
+    return jsonify({"ok": True, "cid": cid})
+
 # ---------------- Static passthrough
 @app.get("/static/<path:filename>")
 def static_files(filename):
@@ -305,6 +318,7 @@ def method_not_allowed(_):
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=True)
+
 
 
 
