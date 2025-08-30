@@ -4,25 +4,37 @@
   <meta charset="UTF-8"/>
   <title>{{ title or "Friday Admin" }}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
+
+  <!-- Google Fonts (Inter) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+
   <style>
     :root { --bg:#0f172a; --card:#0b233b; --ink:#e5e7eb; --muted:#94a3b8; --accent:#60a5fa; }
-    html,body{margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 system-ui,Segoe UI,Roboto,Arial}
-    .wrap{max-width:960px; margin:28px auto; padding:0 16px}
+    html,body{
+      margin:0; background:var(--bg); color:var(--ink);
+      font:14px/1.5 "Inter", system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      text-rendering:optimizeLegibility; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+    }
+    .wrap{max-width:980px; margin:28px auto; padding:0 16px}
     .card{background:linear-gradient(180deg,#0f2a46,#0b233b); border:1px solid #143251; border-radius:12px; padding:16px}
-    h1{margin:0 0 8px 0}
+    h1{margin:0 0 8px 0; letter-spacing:.2px}
     .row{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
-    input,button{padding:10px 12px; border-radius:10px; border:1px solid #183a5b; background:#0e2138; color:var(--ink)}
-    button{background:var(--accent); border:0; font-weight:700; cursor:pointer}
+    input,button{padding:10px 12px; border-radius:10px; border:1px solid #183a5b; background:#0e2138; color:var(--ink); font-family:inherit}
+    button{background:var(--accent); border:0; font-weight:700; cursor:pointer; letter-spacing:.2px}
     button.secondary{background:transparent; color:var(--muted); border:1px solid #183a5b}
     button.warn{background:#ef4444}
+    button:hover{opacity:.92}
     table{width:100%; border-collapse:collapse; margin-top:12px}
     th,td{border-bottom:1px solid #183a5b; padding:8px; text-align:left}
     .muted{color:var(--muted)}
-    .pill{border:1px solid #183a5b; padding:4px 8px; border-radius:10px}
+    .pill{border:1px solid #183a5b; padding:6px 10px; border-radius:999px}
     .pad{padding:8px 0}
     .grid{display:grid; grid-template-columns: 1fr 1fr; gap:16px}
     @media (max-width:800px){ .grid{grid-template-columns:1fr} }
-    a, a:visited{color:#9ecbff}
+    a, a:visited{color:#9ecbff; text-decoration:none}
+    a:hover{text-decoration:underline}
   </style>
 </head>
 <body>
@@ -36,7 +48,7 @@
     </div>
     <div class="row pad">
       <label class="pill">Token:
-        <input id="tok" type="password" placeholder="Enter ADMIN_TOKEN" style="margin-left:8px; width:240px">
+        <input id="tok" type="password" placeholder="Enter ADMIN_TOKEN" style="margin-left:8px; width:260px">
       </label>
       <button id="saveTok" class="secondary">Save</button>
       <span id="tokStat" class="muted"></span>
@@ -114,7 +126,7 @@
       cids.forEach(cid=>{
         const tr = document.createElement('tr');
         tr.innerHTML = `
-          <td class="muted">${cid}</td>
+          <td class="muted" style="word-break:break-all">${cid}</td>
           <td>
             <button data-cid="${cid}" class="secondary">Purge</button>
             <a href="/api/history?cid=${encodeURIComponent(cid)}" target="_blank">View</a>
@@ -163,3 +175,4 @@
 </script>
 </body>
 </html>
+
