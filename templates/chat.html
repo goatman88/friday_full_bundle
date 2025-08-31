@@ -1,231 +1,272 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>{{ title or "Friday AI" }}</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
-  <style>
-    :root { --bg:#0f172a; --card:#0b233b; --ink:#e5e7eb; --muted:#94a3b8; --accent:#60a5fa; --border:#143251; }
-    html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 "Inter",system-ui,-apple-system,Segoe UI,Roboto,Arial}
-    .wrap{display:flex;flex-direction:column;height:100%}
-    header,footer{background:var(--card);border-color:var(--border)}
-    header{border-bottom:1px solid var(--border);padding:10px 16px;display:flex;justify-content:space-between;align-items:center}
-    .badge{background:linear-gradient(135deg,#5eead4,#60a5fa);width:30px;height:30px;border-radius:8px;margin-right:8px}
-    .links a{color:var(--muted);text-decoration:none;margin-left:12px;font-weight:600}
-    .links a:hover{color:var(--accent)}
-    .meta{font-size:13px;color:var(--muted);display:flex;justify-content:space-between;align-items:center;padding:8px 16px;background:var(--card);gap:8px;flex-wrap:wrap;border-bottom:1px solid var(--border)}
-    .pill{padding:6px 10px;border:1px solid var(--border);border-radius:999px;font-size:12px}
-    .log{flex:1;overflow:auto;padding:22px 18px;display:flex;flex-direction:column;gap:12px}
-    .bubble{max-width:72%;padding:12px 14px;border-radius:14px;white-space:pre-wrap;line-height:1.55}
-    .u{background:#0b395b;color:#fff;align-self:flex-end}
-    .a{background:#12273f;align-self:flex-start}
-    footer{border-top:1px solid var(--border);padding:12px 16px;display:flex;gap:8px}
-    input[type=text]{flex:1;padding:12px 14px;border-radius:12px;border:1px solid var(--border);background:#0e2138;color:var(--ink)}
-    button{background:var(--accent);color:#fff;border:0;padding:12px 16px;border-radius:12px;font-weight:700;cursor:pointer;letter-spacing:.2px}
-    button.secondary{background:transparent;color:var(--muted);border:1px solid var(--border)}
-    button.warn{background:#ef4444}
-    select{background:#0e2138;color:var(--ink);border:1px solid var(--border);border-radius:10px;padding:8px}
-    .hint{font-size:12px;color:var(--muted)}
-  </style>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Friday AI • Chat</title>
+<style>
+  :root { --bg:#0f172a; --panel:#0b1226; --muted:#94a3b8; --text:#e2e8f0; --accent:#60a5fa; --accent-2:#a78bfa; }
+  * { box-sizing: border-box; }
+  body {
+    margin:0; font: 16px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif;
+    background: radial-gradient(1200px 1200px at 10% -20%, #1d2b54 0, transparent 55%), var(--bg); color: var(--text);
+  }
+  header {
+    display:flex; align-items:center; justify-content:space-between; gap:12px;
+    padding:16px 20px; position:sticky; top:0; background:linear-gradient(180deg, rgba(15,23,42,.9), rgba(15,23,42,.5) 70%, transparent);
+    backdrop-filter: blur(6px); border-bottom: 1px solid rgba(255,255,255,.06);
+  }
+  .brand { display:flex; align-items:center; gap:10px; font-weight:700; letter-spacing:.2px; }
+  .badge { font-size:12px; color:#94a3b8; border:1px solid rgba(148,163,184,.35); padding:2px 8px; border-radius:999px; }
+  main { max-width:900px; margin: 16px auto 120px; padding: 0 16px; }
+  #chat {
+    background: linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.02));
+    border:1px solid rgba(255,255,255,.07); border-radius:16px; overflow:hidden; box-shadow: 0 8px 40px rgba(0,0,0,.25);
+  }
+  .toolbar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; padding:12px 12px; background:rgba(255,255,255,.02); border-bottom:1px solid rgba(255,255,255,.06);}
+  .toolbar select, .toolbar input, .toolbar button {
+    background:#0b1226; color:var(--text); border:1px solid rgba(255,255,255,.1); padding:8px 10px; border-radius:10px; outline:none;
+  }
+  .toolbar button { background: linear-gradient(135deg, var(--accent), var(--accent-2)); border:none; font-weight:600; }
+  .toolbar .muted { color: var(--muted); border:none; background:transparent; padding:0 2px; }
+  #log { max-height: 55vh; overflow:auto; padding:14px 14px 0 14px; }
+  .msg { margin: 0 0 14px; padding: 12px 14px; border-radius: 12px; border:1px solid rgba(255,255,255,.07);}
+  .u { background: rgba(96,165,250,.09); border-color: rgba(96,165,250,.25); }
+  .a { background: rgba(167,139,250,.08); border-color: rgba(167,139,250,.25); }
+  .meta { font-size:12px; color:var(--muted); margin-bottom:6px; display:flex; gap:8px; align-items:center;}
+  .composer { display:flex; gap:10px; padding:12px; background:rgba(255,255,255,.02); border-top:1px solid rgba(255,255,255,.06); }
+  #input { flex:1; background:#0b1226; border:1px solid rgba(255,255,255,.1); border-radius:12px; color:var(--text); padding:12px 14px; resize:vertical; min-height:46px; max-height:160px;}
+  .send { min-width:98px; border-radius:12px; border:none; background:linear-gradient(135deg, var(--accent), var(--accent-2)); color:white; font-weight:700; }
+  .links a { color:var(--muted); text-decoration:none; margin-left:10px; font-size:13px; }
+  .links a:hover { color:var(--text); }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .row input[type="text"], .row input[type="password"] { width:220px; }
+  code.small { font-size:12px; color:#cbd5e1; }
+  .hint { color:var(--muted); font-size:12px; }
+</style>
 </head>
 <body>
-<div class="wrap" id="root">
   <header>
-    <div style="display:flex;align-items:center"><div class="badge"></div><strong>Friday AI</strong></div>
+    <div class="brand">
+      <svg width="28" height="28" viewBox="0 0 48 48" fill="none"><defs><linearGradient id="g" x1="0" y1="48" x2="48" y2="0" gradientUnits="userSpaceOnUse"><stop stop-color="#60a5fa"/><stop offset="1" stop-color="#a78bfa"/></linearGradient></defs><rect rx="12" width="48" height="48" fill="url(#g)"/></svg>
+      <div>Friday AI</div>
+      <div id="envBadge" class="badge">/chat</div>
+    </div>
     <div class="links">
-      <a href="/chat">/chat</a> · <a href="/admin" target="_blank">admin</a> ·
-      <a id="routesLink" href="#">routes</a> · <a id="healthLink" href="#">health</a> · <a id="statsLink" href="#">stats</a>
+      <a href="/routes" target="_blank">routes</a>
+      <a href="/debug/health" target="_blank">health</a>
+      <a href="/api/history" target="_blank">history</a>
     </div>
   </header>
 
-  <div class="meta">
-    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-      <label><input id="stream" type="checkbox" checked> Stream</label>
-      · Model: <select id="model"></select>
-      · <label><input id="useRag" type="checkbox"> Use RAG (top snippets)</label>
-      <span id="commit" class="pill"></span>
-      <span id="cidLabel" class="pill"></span>
-    </div>
-    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-      <button id="loginBtn" class="secondary">Login</button>
-      <button id="logoutBtn" class="secondary" style="display:none">Logout</button>
-      <button id="newCid" class="secondary">New session</button>
-      <button id="clearChat" class="secondary">Clear session</button>
-      <button id="downloadChat" class="secondary">Download</button>
-      <button id="purgeAll" class="warn">Clear ALL</button>
-    </div>
-  </div>
+  <main>
+    <section id="chat">
+      <!-- Top toolbar -->
+      <div class="toolbar">
+        <div class="row">
+          <span class="muted">User</span>
+          <input id="username" type="text" placeholder="username" />
+          <button id="saveUser">Set</button>
+        </div>
 
-  <div id="log" class="log"></div>
+        <div class="row">
+          <span class="muted">Model</span>
+          <select id="model"></select>
+          <button id="setModel">Use</button>
+          <span class="hint" id="modelHint"></span>
+        </div>
 
-  <footer>
-    <input id="msg" type="text" placeholder="Type a message… (Enter to send)"/>
-    <button id="send">Send</button>
-  </footer>
-</div>
+        <div class="row">
+          <span class="muted">Admin</span>
+          <input id="adminToken" type="password" placeholder="ADMIN_TOKEN (Bearer)" />
+          <button id="mint">Mint token</button>
+          <input id="redeemCode" type="text" placeholder="redeem code" />
+          <button id="redeem">Redeem</button>
+        </div>
+      </div>
+
+      <!-- Messages -->
+      <div id="log"></div>
+
+      <!-- Composer -->
+      <div class="composer">
+        <textarea id="input" placeholder="Type a message…"></textarea>
+        <button class="send" id="send">Send</button>
+      </div>
+    </section>
+
+    <p class="hint" style="margin-top:10px">
+      Tip: your username, model, and admin token are remembered in <code class="small">localStorage</code> in this browser only.
+    </p>
+  </main>
 
 <script>
-const base = location.origin;
-const log = document.querySelector("#log");
-const msg = document.querySelector("#msg");
-const sendBtn = document.querySelector("#send");
-const modelSel = document.querySelector("#model");
-const commitSpan = document.querySelector("#commit");
-const cidLabel = document.querySelector("#cidLabel");
-const newCidBtn = document.querySelector("#newCid");
-const clearBtn = document.querySelector("#clearChat");
-const downloadBtn = document.querySelector("#downloadChat");
-const purgeAllBtn = document.querySelector("#purgeAll");
-const streamChk = document.querySelector("#stream");
-const routesLink = document.querySelector("#routesLink");
-const healthLink = document.querySelector("#healthLink");
-const statsLink = document.querySelector("#statsLink");
-const loginBtn = document.querySelector("#loginBtn");
-const logoutBtn = document.querySelector("#logoutBtn");
-const useRagChk = document.querySelector("#useRag");
+  const $ = (sel) => document.querySelector(sel);
+  const log = $("#log");
+  const input = $("#input");
+  const sendBtn = $("#send");
+  const userEl = $("#username");
+  const saveUserBtn = $("#saveUser");
+  const modelSel = $("#model");
+  const setModelBtn = $("#setModel");
+  const modelHint = $("#modelHint");
+  const adminTokenEl = $("#adminToken");
+  const mintBtn = $("#mint");
+  const redeemEl = $("#redeemCode");
+  const redeemBtn = $("#redeem");
 
-function token(){ return localStorage.getItem("JWT") || ""; }
-function headers(json=true){
-  const h = json ? {"Content-Type":"application/json"} : {};
-  const t = token(); if(t) h["Authorization"] = "Bearer " + t;
-  return h;
-}
-function authed(){ return !!token(); }
-function showAuthButtons(){ loginBtn.style.display = authed()?"none":""; logoutBtn.style.display = authed()?"": "none"; }
+  // ---- persistence (per browser)
+  const state = {
+    username: localStorage.getItem("friday.username") || "guest",
+    model: localStorage.getItem("friday.model") || null,
+    adminToken: localStorage.getItem("friday.adminToken") || ""
+  };
 
-function getCid(){
-  let c = localStorage.getItem("cid");
-  if(!c){ c = crypto.randomUUID(); localStorage.setItem("cid", c); }
-  cidLabel.textContent = `cid: ${c.slice(0,8)}…`;
-  return c;
-}
-function setCid(c){
-  localStorage.setItem("cid", c);
-  cidLabel.textContent = `cid: ${c.slice(0,8)}…`;
-}
-function append(role, text){
-  const b = document.createElement("div");
-  b.className = `bubble ${role==="user"?"u":"a"}`;
-  b.textContent = text;
-  log.appendChild(b); log.scrollTop = log.scrollHeight;
-}
-function clearUI(){ log.innerHTML = ""; }
+  // ---- helpers
+  function addMsg(role, text) {
+    const wrap = document.createElement("div");
+    wrap.className = "msg " + (role === "user" ? "u" : "a");
 
-async function loadModels(){
-  try{
-    const j = await fetch(`${base}/api/models`).then(r=>r.json());
-    modelSel.innerHTML = "";
-    (j.available||[]).forEach(m=>{
-      const o = document.createElement("option"); o.value=m; o.textContent=m;
-      if(m === j.active) o.selected = true; modelSel.appendChild(o);
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    const who = role === "user" ? (state.username || "guest") : "Friday";
+    meta.textContent = `${who} • ${new Date().toLocaleTimeString()}`;
+    const body = document.createElement("div");
+    body.textContent = text;
+
+    wrap.appendChild(meta);
+    wrap.appendChild(body);
+    log.appendChild(wrap);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  async function jsonFetch(url, opts = {}) {
+    const res = await fetch(url, {
+      headers: {"Content-Type":"application/json", ...(opts.headers||{})},
+      ...opts
     });
-  }catch{ modelSel.innerHTML = "<option>(error)</option>"; }
-}
-modelSel.onchange = async ()=>{
-  try{
-    const j = await fetch(`${base}/api/model`,{method:"POST", headers:headers(), body:JSON.stringify({model:modelSel.value})}).then(r=>r.json());
-    append("assistant", `Model switched to: ${j.active}`);
-  }catch(e){ append("assistant", "Model switch error: " + e.message); }
-};
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    return res.json();
+  }
 
-async function sendMsg(cid, text){
-  // optional: RAG prepend
-  if(authed() && useRagChk.checked){
-    try{
-      const rag = await fetch(`${base}/api/rag/search?q=${encodeURIComponent(text)}&k=3`, {headers:headers(false)}).then(r=>r.json());
-      if(rag.results?.length){
-        const ctx = rag.results.map(r=>`[${r.score}] ${r.snippet}`).join("\n---\n");
-        text = `Use this context to answer:\n${ctx}\n\nUser: ${text}`;
+  // ---- wire up UI initial values
+  userEl.value = state.username;
+  adminTokenEl.value = state.adminToken;
+
+  // Models: load + set active in dropdown
+  async function loadModels() {
+    try {
+      const data = await jsonFetch("/api/models");
+      // data: { active, available: [] }
+      modelSel.innerHTML = "";
+      (data.available || []).forEach(m => {
+        const opt = document.createElement("option");
+        opt.value = m; opt.textContent = m;
+        if ((state.model && state.model === m) || (!state.model && data.active === m)) {
+          opt.selected = true;
+        }
+        modelSel.appendChild(opt);
+      });
+      modelHint.textContent = `active: ${data.active}`;
+      if (!state.model) state.model = data.active;
+      localStorage.setItem("friday.model", state.model);
+    } catch (e) {
+      modelHint.textContent = "models unavailable";
+    }
+  }
+
+  // History on load
+  async function loadHistory() {
+    try {
+      const h = await jsonFetch("/api/history");
+      if (Array.isArray(h)) {
+        h.forEach(item => {
+          addMsg("user", item.message);
+          addMsg("assistant", item.reply);
+        });
       }
-    }catch{}
+    } catch (e) { /* ignore */ }
   }
-  const j = await fetch(`${base}/api/chat?cid=${encodeURIComponent(cid)}`, {
-    method:"POST", headers:headers(), body:JSON.stringify({message:text})
-  }).then(r=>r.json());
-  if(j.cid && j.cid !== cid) setCid(j.cid);
-  return j;
-}
 
-async function sendStream(cid, text, onDelta, onDone){
-  // optional: RAG
-  if(authed() && useRagChk.checked){
-    try{
-      const rag = await fetch(`${base}/api/rag/search?q=${encodeURIComponent(text)}&k=3`, {headers:headers(false)}).then(r=>r.json());
-      if(rag.results?.length){
-        const ctx = rag.results.map(r=>`[${r.score}] ${r.snippet}`).join("\n---\n");
-        text = `Use this context to answer:\n${ctx}\n\nUser: ${text}`;
-      }
-    }catch{}
-  }
-  const url = new URL(`${base}/api/chat/stream`);
-  url.searchParams.set("cid", cid);
-  url.searchParams.set("q", text);
-  const resp = await fetch(url, { headers: headers(false) });
-  const reader = resp.body.getReader(); const dec = new TextDecoder();
-  let acc = "";
-  for(;;){
-    const {value, done} = await reader.read();
-    if(done) break;
-    const chunk = dec.decode(value);
-    chunk.split("\n\n").forEach(line=>{
-      if(line.startsWith("data: ")){
-        try{
-          const obj = JSON.parse(line.slice(6));
-          if(obj.delta){ acc += obj.delta; onDelta && onDelta(obj.delta, acc); }
-          if(obj.done){ onDone && onDone(acc); }
-        }catch{}
-      }
-    });
-  }
-}
+  // ---- event handlers
+  sendBtn.addEventListener("click", async () => {
+    const text = (input.value || "").trim();
+    if (!text) return;
+    addMsg("user", text);
+    input.value = "";
+    try {
+      const res = await jsonFetch("/api/chat", {
+        method:"POST",
+        body: JSON.stringify({ message: text, username: state.username, model: state.model })
+      });
+      addMsg("assistant", res.reply || "(no reply)");
+    } catch (e) {
+      addMsg("assistant", "Error: " + e.message);
+    }
+  });
 
-async function send(){
-  const text = msg.value.trim(); if(!text) return;
-  append("user", text); msg.value = "";
-  const cid = getCid();
+  input.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" && !ev.shiftKey) {
+      ev.preventDefault();
+      sendBtn.click();
+    }
+  });
 
-  if(streamChk.checked){
-    const bubble = document.createElement("div"); bubble.className="bubble a"; bubble.textContent="…"; log.appendChild(bubble);
-    await sendStream(cid, text, (_d, acc)=>{ bubble.textContent = acc; log.scrollTop = log.scrollHeight; }, (_final)=>{});
-  } else {
-    try{
-      const j = await sendMsg(cid, text);
-      append("assistant", j.reply ?? JSON.stringify(j));
-    }catch(e){ append("assistant", "Request failed: " + e.message); }
-  }
-}
+  saveUserBtn.addEventListener("click", () => {
+    state.username = userEl.value.trim() || "guest";
+    localStorage.setItem("friday.username", state.username);
+    addMsg("assistant", `Okay, I’ll call you “${state.username}”.`);
+  });
 
-// nav & actions
-routesLink.onclick = async e => { e.preventDefault(); append("assistant", JSON.stringify(await (await fetch(base+"/routes")).json(), null, 2)); };
-healthLink.onclick = async e => { e.preventDefault(); const j = await (await fetch(base+"/debug/health")).json(); commitSpan.textContent = j.commit ? "commit "+j.commit : ""; append("assistant", JSON.stringify(j,null,2)); };
-statsLink.onclick  = async e => { e.preventDefault(); append("assistant", JSON.stringify(await (await fetch(base+"/api/stats")).json(), null, 2)); };
+  setModelBtn.addEventListener("click", async () => {
+    const picked = modelSel.value;
+    try {
+      const res = await jsonFetch("/api/model", {
+        method:"POST",
+        body: JSON.stringify({ model: picked })
+      });
+      state.model = res.active || picked;
+      localStorage.setItem("friday.model", state.model);
+      modelHint.textContent = `active: ${state.model}`;
+      addMsg("assistant", `Using model: ${state.model}`);
+    } catch (e) {
+      addMsg("assistant", "Couldn’t set model: " + e.message);
+    }
+  });
 
-newCidBtn.onclick = ()=>{ setCid(crypto.randomUUID()); clearUI(); append("assistant","Started fresh session."); };
-clearBtn.onclick = async ()=>{ const cid = getCid(); await fetch(`${base}/api/history?cid=${encodeURIComponent(cid)}`, {method:"DELETE",headers:headers(false)}); clearUI(); append("assistant","Cleared chat history for this session."); };
-downloadBtn.onclick = async ()=>{ const cid = getCid(); const res = await fetch(`${base}/api/history/export_file?cid=${encodeURIComponent(cid)}`,{headers:headers(false)}); const blob = await res.blob(); const url = URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`friday_${cid.slice(0,8)}.json`; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url); };
-purgeAllBtn.onclick = async ()=>{ const tok = prompt("Admin token to purge ALL:"); if(!tok) return; const r = await fetch(`${base}/api/admin/purge_all`, {method:"DELETE", headers:{ "X-Admin-Token": tok }}); const j = await r.json(); append("assistant", r.ok? `Purged ${j.purged_count} sessions` : "Admin purge failed: "+(j.error||r.status)); };
+  mintBtn.addEventListener("click", async () => {
+    const tok = adminTokenEl.value.trim();
+    if (!tok) { addMsg("assistant","Enter ADMIN_TOKEN to mint."); return; }
+    try {
+      const res = await jsonFetch("/api/admin/mint", {
+        method:"POST",
+        headers: { Authorization: "Bearer " + tok },
+        body: JSON.stringify({ count: 1 })
+      });
+      localStorage.setItem("friday.adminToken", tok);
+      addMsg("assistant", "Minted: " + (res.tokens ? res.tokens.join(", ") : "(none)"));
+    } catch (e) {
+      addMsg("assistant", "Mint failed: " + e.message);
+    }
+  });
 
-sendBtn.onclick = send;
-msg.addEventListener("keydown", e=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); send(); } });
+  redeemBtn.addEventListener("click", async () => {
+    const code = redeemEl.value.trim();
+    if (!code) { addMsg("assistant","Paste a redeem code first."); return; }
+    try {
+      const res = await jsonFetch("/api/auth/redeem", {
+        method:"POST",
+        body: JSON.stringify({ code, username: state.username || "guest" })
+      });
+      addMsg("assistant", res.success ? `Redeemed for ${res.user}` : "Redeem failed.");
+    } catch (e) {
+      addMsg("assistant", "Redeem failed: " + e.message);
+    }
+  });
 
-async function doLogin(){
-  const email = prompt("Email:"); if(!email) return;
-  const pwd = prompt("Password:");
-  const res = await fetch(`${base}/auth/login`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({email, password: pwd})});
-  const j = await res.json();
-  if(res.ok && j.token){ localStorage.setItem("JWT", j.token); showAuthButtons(); append("assistant", `Logged in as ${j.name||email}`); }
-  else { if(confirm("No account? Create one now?")) { const n = prompt("Name (optional):")||""; const rr = await fetch(`${base}/auth/register`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email, password: pwd, name:n})}); const jj = await rr.json(); if(rr.ok && jj.token){ localStorage.setItem("JWT", jj.token); showAuthButtons(); append("assistant","Account created & logged in."); } else { append("assistant","Auth failed: "+(jj.error||rr.status)); } } }
-}
-loginBtn.onclick = doLogin;
-logoutBtn.onclick = ()=>{ localStorage.removeItem("JWT"); showAuthButtons(); append("assistant","Logged out."); };
-
-(async function boot(){
-  showAuthButtons();
-  getCid(); loadModels();
-  fetch(`${base}/debug/health`).then(r=>r.json()).then(j=>{ if(j.commit) commitSpan.textContent = "commit "+j.commit; });
-})();
+  // ---- kick off
+  loadModels();
+  loadHistory();
 </script>
 </body>
 </html>
