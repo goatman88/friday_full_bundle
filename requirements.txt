@@ -1,9 +1,10 @@
-Flask==3.1.2
-flask-cors==6.0.1
+Flask>=3.1.2
+Flask-Compress>=1.15
+flask-cors>=4.0
 gunicorn==23.0.0
-python-dotenv==1.1.1
+python-dotenv>=1.0
 
-openai==1.102.0
+openai>=1.42
 redis==5.0.8
 
 psycopg[binary]==3.2.1
