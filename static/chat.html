@@ -11,8 +11,8 @@
   header{position:sticky;top:0;z-index:10;background:rgba(15,23,42,.75);backdrop-filter:saturate(1.2) blur(6px);
          border-bottom:1px solid var(--border);display:flex;gap:12px;align-items:center;padding:10px 14px}
   header .title{font-weight:800}
-  main{max-width:1200px;margin:16px auto;padding:0 16px;display:grid;grid-template-columns:2fr 1fr;gap:16px}
-  @media (max-width:980px){ main{grid-template-columns:1fr} }
+  main{max-width:1250px;margin:16px auto;padding:0 16px;display:grid;grid-template-columns:1.35fr .9fr;gap:16px}
+  @media (max-width:1080px){ main{grid-template-columns:1fr} }
   .card{background:var(--panel);border:1px solid var(--border);border-radius:14px;overflow:hidden}
   .section{padding:12px}
   .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
@@ -32,6 +32,9 @@
   a{color:#93c5fd;text-decoration:none}
   .pill{font-size:12px;background:rgba(255,255,255,.07);padding:2px 6px;border-radius:999px;border:1px solid var(--border)}
   .sources{font-size:13px;color:#c7d2fe;margin-top:6px}
+  .k{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px; color:#cbd5e1}
+  table{width:100%;border-collapse:collapse}
+  th,td{border-bottom:1px solid var(--border);padding:6px 8px;vertical-align:top}
 </style>
 </head>
 <body>
@@ -46,6 +49,7 @@
 </header>
 
 <main>
+  <!-- Chat panel -->
   <div class="card">
     <div class="section col">
       <div class="row">
@@ -65,13 +69,38 @@
     <div class="log" id="log"></div>
   </div>
 
+  <!-- RAG panel -->
   <div class="card">
-    <div class="section">
+    <div class="section col">
       <div class="row" style="justify-content:space-between">
-        <strong>History</strong>
-        <button id="refresh" class="pill">Refresh</button>
+        <strong>Documents (RAG)</strong>
+        <div class="row">
+          <button id="btnList" class="pill">List</button>
+          <button id="btnExport" class="pill">Export CSV</button>
+          <button id="btnClearRag" class="pill" title="remove all vectors">Clear</button>
+        </div>
       </div>
-      <div id="history" style="max-height:62vh;overflow:auto;padding:8px 12px"></div>
+
+      <div class="col" style="gap:6px;border:1px dashed var(--border);padding:10px;border-radius:10px">
+        <div class="k">Upload .txt / .md / .csv</div>
+        <input id="fileInput" type="file" multiple>
+        <button id="btnUpload">Upload & Index</button>
+      </div>
+
+      <div class="col" style="gap:6px;border:1px dashed var(--border);padding:10px;border-radius:10px">
+        <div class="k">Paste text</div>
+        <input id="pasteFilename" placeholder="filename (optional)" style="width:60%">
+        <textarea id="pasteText" placeholder="Paste raw text to index…"></textarea>
+        <button id="btnIndexText">Index Pasted Text</button>
+      </div>
+
+      <div class="row" style="margin-top:6px">
+        <input id="ragQuery" placeholder="RAG search query…" style="flex:1">
+        <input id="ragK" type="number" min="1" max="10" value="4" style="width:80px">
+        <button id="btnRagSearch" class="primary">Search</button>
+      </div>
+
+      <div id="ragResult" style="max-height:52vh;overflow:auto"></div>
     </div>
   </div>
 </main>
@@ -79,7 +108,7 @@
 <script>
 const $ = s => document.querySelector(s);
 const log = (...a) => { const l=$("#log"); l.textContent += a.map(x=>typeof x==="string"?x:JSON.stringify(x)).join(" ")+"\n"; l.scrollTop=l.scrollHeight; };
-const escapeHTML = s => (s||"").replace(/[&<>"']/g, m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"}[m]));
+const escapeHTML = s => (s||"").replace(/[&<>"']/g, m=>({"&":"&amp;","<":"&gt;","</": "&lt;/",">":"&gt;","\"":"&quot;","'":"&#039;"}[m]||m));
 
 function addMsg(role, text, citations){
   const wrap = document.createElement("div");
@@ -134,24 +163,15 @@ async function loadRate(){
 async function loadHistory(){
   const u=$("#username").value||"guest";
   const r = await fetch(`/api/history?username=${encodeURIComponent(u)}&limit=200`);
-  const j = await r.json(); const h=$("#history"); h.innerHTML="";
-  j.forEach(it=>{
-    const d=document.createElement("div");
-    const when = new Date((it.ts||0)*1000).toLocaleString();
-    const mem = it.memory ? " (memory)" : "";
-    d.className="msg"; d.innerHTML = `<small>${when}${mem}</small><div><strong>Q:</strong> ${escapeHTML(it.message||"")}</div><div><strong>A:</strong> ${escapeHTML(it.reply||"")}</div>`;
-    h.appendChild(d);
-  });
+  const j = await r.json(); const h=$("#history"); if(h){h.innerHTML="";}
 }
 
 $("#model").addEventListener("change", saveModel);
 $("#preset").addEventListener("change", savePreset);
-$("#refresh").onclick = loadHistory;
 $("#btnClear").onclick = async ()=>{
   const u=$("#username").value||"guest";
   const r = await fetch("/api/history/clear",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u})});
   const j = await r.json(); addMsg("bot", `cleared: ${j.cleared}`);
-  loadHistory();
 };
 
 async function send(){
@@ -181,7 +201,7 @@ async function send(){
       else if(m.type==="citations"){ finalCites = m.citations || []; }
       else if(m.type==="usage"){ log("usage", m.usage || {}); }
       else if(m.type==="done"){
-        es.close(); loadHistory(); loadRate();
+        es.close(); loadRate();
         if(finalCites.length){
           const src = document.createElement("div");
           src.className="sources";
@@ -199,17 +219,109 @@ async function send(){
     const j = await r.json();
     addMsg("bot", j.reply || j.error || "(no reply)", j.citations || []);
     if(j.traces){ j.traces.forEach(t=> log(`→ tool: ${t.tool}`, t.args||{}, t.result||{})); }
-    loadHistory(); loadRate();
+    loadRate();
   }
 }
 
 $("#send").onclick = send;
 $("#input").addEventListener("keydown", (e)=>{ if(e.key==="Enter" && (e.ctrlKey||e.metaKey)){ send(); } });
 
-loadModels(); loadPresets(); loadRate(); loadHistory();
+// ---------- RAG UI ----------
+function renderList(list){
+  const div=$("#ragResult"); div.innerHTML="";
+  if(!list || !list.sample){ div.textContent="(no docs)"; return; }
+  const head = document.createElement("div");
+  head.className="k"; head.textContent = `Total chunks: ${list.total} (showing last ${list.sample.length})`;
+  div.appendChild(head);
+  const table = document.createElement("table");
+  table.innerHTML = `<thead><tr><th>#</th><th>File</th><th>Chunk</th><th>Text</th></tr></thead><tbody></tbody>`;
+  const tb = table.querySelector("tbody");
+  list.sample.forEach((r,i)=>{
+    const tr=document.createElement("tr");
+    const fn=(r.metadata && (r.metadata.filename||""))||"";
+    const ck=(r.metadata && (r.metadata.chunk??""))||"";
+    tr.innerHTML = `<td>${i+1}</td><td>${escapeHTML(fn)}</td><td>${ck}</td><td>${escapeHTML(r.text||"")}</td>`;
+    tb.appendChild(tr);
+  });
+  div.appendChild(table);
+}
+
+function renderMatches(res){
+  const div=$("#ragResult"); div.innerHTML="";
+  if(!res || !res.matches || !res.matches.length){ div.textContent="(no matches)"; return; }
+  const head = document.createElement("div");
+  head.className="k"; head.textContent = `Top ${res.matches.length} of ${res.total||"?"}`;
+  div.appendChild(head);
+  const table = document.createElement("table");
+  table.innerHTML = `<thead><tr><th>Score</th><th>File</th><th>Chunk</th><th>Snippet</th></tr></thead><tbody></tbody>`;
+  const tb = table.querySelector("tbody");
+  res.matches.forEach(m=>{
+    const fn=(m.metadata && (m.metadata.filename||""))||"";
+    const ck=(m.metadata && (m.metadata.chunk??""))||"";
+    const snip=(m.text||"").slice(0,240).replace(/\n/g," ");
+    const tr=document.createElement("tr");
+    tr.innerHTML = `<td>${m.score}</td><td>${escapeHTML(fn)}</td><td>${ck}</td><td>${escapeHTML(snip)}</td>`;
+    tb.appendChild(tr);
+  });
+  div.appendChild(table);
+}
+
+$("#btnList").onclick = async ()=>{
+  const u=$("#username").value||"guest";
+  const r = await fetch(`/api/rag/list?username=${encodeURIComponent(u)}&limit=50`);
+  renderList(await r.json());
+};
+
+$("#btnExport").onclick = ()=>{
+  const u=$("#username").value||"guest";
+  window.location = `/api/rag/export_csv?username=${encodeURIComponent(u)}`;
+};
+
+$("#btnClearRag").onclick = async ()=>{
+  const u=$("#username").value||"guest";
+  const r = await fetch("/api/rag/clear",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u})});
+  const j = await r.json();
+  $("#ragResult").textContent = j.cleared ? "Vectors cleared." : "Nothing to clear.";
+};
+
+$("#btnUpload").onclick = async ()=>{
+  const u=$("#username").value||"guest";
+  const files = $("#fileInput").files;
+  if(!files || !files.length){ alert("Pick at least one .txt/.md/.csv file"); return; }
+  const fd = new FormData();
+  fd.append("username", u);
+  for(const f of files) fd.append("files", f, f.name);
+  const r = await fetch("/api/rag/upload",{method:"POST", body: fd});
+  const j = await r.json();
+  $("#ragResult").textContent = j.ok ? `Added ${j.added} chunks.` : (j.error || "upload failed");
+};
+
+$("#btnIndexText").onclick = async ()=>{
+  const u=$("#username").value||"guest";
+  const fn= $("#pasteFilename").value.trim() || "";
+  const tx= $("#pasteText").value.trim();
+  if(!tx){ alert("Paste some text first"); return; }
+  const r = await fetch("/api/rag/index_text",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u, filename: fn||undefined, text: tx})});
+  const j = await r.json();
+  $("#ragResult").textContent = j.ok ? `Indexed ${j.added} chunks from ${j.filename}` : (j.error || "index failed");
+};
+
+$("#btnRagSearch").onclick = async ()=>{
+  const u=$("#username").value||"guest";
+  const q=$("#ragQuery").value.trim(); const k= $("#ragK").value || 4;
+  if(!q){ alert("Type a query"); return; }
+  const r = await fetch(`/api/rag/search?username=${encodeURIComponent(u)}&query=${encodeURIComponent(q)}&k=${encodeURIComponent(k)}`);
+  renderMatches(await r.json());
+};
+
+// boot
+(async function init(){
+  await Promise.all([loadModels(), loadPresets(), loadRate()]);
+})();
 </script>
 </body>
 </html>
+
 
 
 
