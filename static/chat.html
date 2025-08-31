@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Friday AI • Stream+Tools</title>
+<title>Friday AI • Stream+Tools++</title>
 <style>
-  :root { --bg:#0f172a; --panel:#0b1226; --muted:#94a3b8; --text:#e2e8f0; --accent:#60a5fa; --accent2:#a78bfa; --ok:#10b981; --warn:#f59e0b; }
+  :root { --bg:#0f172a; --panel:#0b1226; --muted:#94a3b8; --text:#e2e8f0; --accent:#60a5fa; --accent2:#a78bfa; --ok:#10b981; --warn:#f59e0b; --err:#ef4444; }
   *{box-sizing:border-box}
   body{margin:0;background:radial-gradient(1200px 1200px at 10% -20%, #1d2b54 0, transparent 55%),var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,Segoe UI,Inter,Roboto,Arial,sans-serif}
   header{position:sticky;top:0;display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 16px;background:linear-gradient(180deg, rgba(15,23,42,.9), rgba(15,23,42,.55) 70%, transparent);backdrop-filter:blur(6px);border-bottom:1px solid rgba(255,255,255,.06)}
@@ -13,12 +13,14 @@
   .badge{font-size:12px;color:#cbd5e1;border:1px solid rgba(148,163,184,.35);padding:2px 8px;border-radius:999px}
   .live{border-color: rgba(16,185,129,.5); color:#d1fae5;}
   .dev{border-color: rgba(245,158,11,.5); color:#fef3c7;}
-  main{max-width:980px;margin:16px auto 120px;padding:0 16px}
+  .warn{border-color: rgba(245,158,11,.5); color:#fde68a;}
+  main{max-width:1000px;margin:16px auto 120px;padding:0 16px}
   #chat{border:1px solid rgba(255,255,255,.07);border-radius:16px;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,.25)}
   .toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:10px;background:rgba(255,255,255,.02);border-bottom:1px solid rgba(255,255,255,.06)}
   .toolbar input,.toolbar select,.toolbar button{background:#0b1226;color:var(--text);border:1px solid rgba(255,255,255,.1);padding:8px 10px;border-radius:10px;outline:none}
   .toolbar button.btn{background:linear-gradient(135deg,var(--accent),var(--accent2));border:none;font-weight:600}
   .muted{color:var(--muted);font-size:12px}
+  .hint{font-size:12px;color:#cbd5e1;margin-left:6px}
   #log{max-height:58vh;overflow:auto;padding:12px}
   .msg{margin:0 0 12px;padding:10px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.07);white-space:pre-wrap}
   .u{background:rgba(96,165,250,.08);border-color:rgba(96,165,250,.25)}
@@ -31,6 +33,11 @@
   .send{min-width:98px;border-radius:12px;border:none;background:linear-gradient(135deg,var(--accent),var(--accent2));color:white;font-weight:700}
   .links a{color:var(--muted);text-decoration:none;margin-left:10px;font-size:13px}
   .links a:hover{color:var(--text)}
+  .row{display:flex;gap:10px; align-items:center}
+  .pill{padding:2px 8px;border-radius:999px;border:1px solid rgba(255,255,255,.15); font-size:12px}
+  .pill.warn{border-color:rgba(245,158,11,.45); color:#fde68a}
+  .pill.ok{border-color:rgba(16,185,129,.45); color:#d1fae5}
+  .pill.err{border-color:rgba(239,68,68,.45); color:#fecaca}
 </style>
 </head>
 <body>
@@ -44,6 +51,7 @@
     <a href="/routes" target="_blank">routes</a>
     <a href="/debug/health" target="_blank">health</a>
     <a href="/api/history" target="_blank">history</a>
+    <a href="/api/metrics" target="_blank">metrics</a>
   </div>
 </header>
 
@@ -57,7 +65,7 @@
       <span class="muted" style="margin-left:8px">Model</span>
       <select id="model" style="width:180px"></select>
       <button id="useModel" class="btn">Use</button>
-      <span id="modelHint" class="muted"></span>
+      <span id="modelHint" class="hint"></span>
 
       <span class="muted" style="margin-left:8px">Mode</span>
       <select id="sendMode">
@@ -65,16 +73,19 @@
         <option value="stream_legacy">Legacy Stream</option>
         <option value="nonstream_tools">Non-stream (tools)</option>
       </select>
+
+      <button id="clearHistory" style="margin-left:auto">Clear history</button>
+      <span id="rlBadge" class="pill warn" title="Rate-limit status">RL…</span>
     </div>
 
     <div id="log"></div>
 
     <div class="composer">
-      <textarea id="input" placeholder="Ask: weather in Paris, search CUDA Graphs, or anything…"></textarea>
+      <textarea id="input" placeholder="Ask anything. Try: weather in Paris; search CUDA graphs; ‘use my docs about X’…"></textarea>
       <button id="send" class="send">Send</button>
     </div>
   </section>
-  <p class="muted" style="margin-top:8px">Tip: username & model saved in this browser.</p>
+  <p class="muted" style="margin-top:8px">Tip: username & model saved in this browser. Use “Stream+ (tools)” for Jarvis vibes.</p>
 </main>
 
 <script>
@@ -83,6 +94,8 @@ const log = $("#log"), input = $("#input"), sendBtn = $("#send");
 const userEl = $("#username"), saveUserBtn = $("#saveUser");
 const modelSel = $("#model"), useModelBtn = $("#useModel"), modelHint = $("#modelHint");
 const modeBadge = $("#modeBadge"), sendMode = $("#sendMode");
+const rlBadge = $("#rlBadge");
+const clearBtn = $("#clearHistory");
 
 const state = {
   username: localStorage.getItem("friday.username") || "guest",
@@ -113,7 +126,11 @@ function addTrace(parent, title, obj){
 
 async function jsonFetch(url, opts={}){
   const res = await fetch(url, { headers:{ "Content-Type":"application/json", ...(opts.headers||{}) }, ...opts });
-  if(!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if(!res.ok){
+    let msg = `${res.status} ${res.statusText}`;
+    try{ const j = await res.json(); msg = j.error || j.reason || msg; }catch{}
+    throw new Error(msg);
+  }
   return res.json();
 }
 
@@ -122,10 +139,10 @@ async function checkHealth(){
     const h = await jsonFetch("/debug/health");
     const live = !!h.openai;
     modeBadge.textContent = live ? "Live (OpenAI)" : "Dev Echo";
-    modeBadge.classList.toggle("live", live);
-    modeBadge.classList.toggle("dev", !live);
+    modeBadge.className = "badge " + (live ? "live" : "dev");
   }catch{
     modeBadge.textContent = "Unknown";
+    modeBadge.className = "badge warn";
   }
 }
 
@@ -153,6 +170,18 @@ async function loadHistory(){
   }catch{}
 }
 
+async function pollRL(){
+  try{
+    const m = await jsonFetch("/api/metrics");
+    const rem = m?.rate_limit?.remaining ?? "?";
+    rlBadge.textContent = `RL ${rem}`;
+    rlBadge.className = "pill " + (rem <= 2 ? "err" : rem < 10 ? "warn" : "ok");
+  }catch{
+    rlBadge.textContent = "RL ?";
+    rlBadge.className = "pill warn";
+  }
+}
+
 saveUserBtn.addEventListener("click", ()=>{
   state.username = (userEl.value||"guest").trim() || "guest";
   localStorage.setItem("friday.username", state.username);
@@ -170,7 +199,17 @@ useModelBtn.addEventListener("click", async ()=>{
   }catch(e){ add("assistant", "Couldn’t set model: "+e.message); }
 });
 
-// --- Sending modes ---
+clearBtn.addEventListener("click", async ()=>{
+  try{
+    await jsonFetch("/api/history/clear", {method:"POST", body: JSON.stringify({username: state.username})});
+    log.innerHTML = "";
+    add("assistant", "History cleared.");
+  }catch(e){
+    add("assistant", "Couldn’t clear history: "+e.message);
+  }
+});
+
+// --- Send modes ---
 function sendStreamPlus(text){
   add("user", text);
   const {wrap, body} = add("assistant", "");
@@ -234,6 +273,8 @@ async function sendNonstreamTools(text){
     });
     wrap.lastChild.textContent = res.reply || "(no reply)";
     if (res.traces && res.traces.length) addTrace(wrap, "Tool trace", res.traces);
+    if (res.usage) addTrace(wrap, "Usage", res.usage);
+    await pollRL();
   }catch(e){
     wrap.lastChild.textContent = "Error: " + e.message;
   }
@@ -257,6 +298,8 @@ input.addEventListener("keydown", (e)=>{
 checkHealth();
 loadModels();
 loadHistory();
+pollRL();
+setInterval(pollRL, 15000);
 </script>
 </body>
 </html>
