@@ -1,0 +1,15 @@
+version: "3.9"
+services:
+  pg:
+    image: ankane/pgvector:latest
+    environment:
+      POSTGRES_PASSWORD: password
+      POSTGRES_USER: friday
+      POSTGRES_DB: fridaydb
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U friday -d fridaydb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
