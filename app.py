@@ -1,6 +1,6 @@
 # app.py
-import os, json, time, math, secrets, hashlib
-from datetime import datetime
+import os, json, time, math, secrets, hashlib, mimetypes
+from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Generator, Tuple
 
 # --- Load .env locally (non-prod) ---
@@ -37,6 +37,9 @@ except Exception:
 # ---------- App & config ----------
 app = Flask(__name__, static_folder="static", template_folder="templates")
 
+# Upload limits
+app.config["MAX_CONTENT_LENGTH"] = int(os.getenv("MAX_CONTENT_LENGTH_BYTES", str(10 * 1024 * 1024)))  # 10MB default
+
 # CORS allowlist (comma-separated), default open for dev
 cors_allow = [o.strip() for o in os.getenv("CORS_ALLOW_ORIGINS", "*").split(",")]
 CORS(app, resources={r"/*": {"origins": cors_allow}})
@@ -44,10 +47,16 @@ CORS(app, resources={r"/*": {"origins": cors_allow}})
 COMMIT = (os.getenv("RENDER_GIT_COMMIT", "")[:7] or os.getenv("COMMIT", "") or "dev")
 OPENAI_KEY = os.getenv("OPENAI_API_KEY", "")
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
+
+# Auth
+JWT_SECRET = os.getenv("JWT_SECRET", "dev-secret-change-me")
+APP_LOGIN_PASSWORD = os.getenv("APP_LOGIN_PASSWORD", "")  # if set, required at login
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")                # optional admin override
 
 # Persona/system prompt
-SYSTEM_PROMPT = os.getenv("PROMPT_SYSTEM", "You are Friday AI: fast, helpful, concise. Use tools when helpful. Keep answers tight.")
+SYSTEM_PROMPT = os.getenv("PROMPT_SYSTEM",
+    "You are Friday AI: fast, helpful, concise. Use tools when helpful. Keep answers tight."
+)
 
 # Embeddings (for RAG)
 EMBED_MODEL = os.getenv("EMBED_MODEL", "text-embedding-3-small")
@@ -58,7 +67,7 @@ RL_MAX = int(os.getenv("RATE_LIMIT_MAX", "60"))                # requests per wi
 
 # Pricing table (rough, USD) — adjust as you wish
 PRICES = {
-    "gpt-4o":        {"in": 0.0025, "out": 0.0100},  # $/1k tokens (example)
+    "gpt-4o":        {"in": 0.0025, "out": 0.0100},
     "gpt-4o-mini":   {"in": 0.0005, "out": 0.0015},
     "gpt-4.1-mini":  {"in": 0.0006, "out": 0.0018},
     "o3-mini":       {"in": 0.0005, "out": 0.0015},
@@ -152,6 +161,35 @@ def rate_limit_check(scope: str) -> Tuple[bool, int, int]:
     except Exception:
         return (True, RL_MAX, int(time.time()) + RL_WINDOW)
 
+# ---------- JWT helpers ----------
+def make_jwt(username: str, role: str = "user", ttl_days: int = 30) -> str:
+    import jwt
+    payload = {
+        "sub": username,
+        "role": role,
+        "iat": int(time.time()),
+        "exp": int(time.time() + ttl_days*24*3600),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+
+def decode_jwt_from_request() -> Optional[Dict[str, Any]]:
+    import jwt
+    auth = request.headers.get("Authorization","")
+    if not auth.startswith("Bearer "): return None
+    token = auth.split(" ",1)[1].strip()
+    try:
+        data = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+        return data
+    except Exception:
+        return None
+
+def require_jwt(role: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    data = decode_jwt_from_request()
+    if not data: return None
+    if role and data.get("role") != role:
+        return None
+    return data
+
 # ---------- Pages ----------
 @app.get("/")
 def home():
@@ -198,6 +236,25 @@ def metrics():
         "rate_limit": {"allowed": allowed, "remaining": remaining, "reset": reset}
     })
 
+# ---------- Auth ----------
+@app.post("/api/auth/login")
+def auth_login():
+    body = request.get_json(silent=True) or {}
+    username = str(body.get("username") or "").strip()
+    password = str(body.get("password") or "")
+    admin_code = str(body.get("admin_code") or "")
+
+    if not username:
+        return jsonify({"error": "missing_username"}), 400
+
+    # If APP_LOGIN_PASSWORD is set, require it
+    if APP_LOGIN_PASSWORD and password != APP_LOGIN_PASSWORD:
+        return jsonify({"error": "invalid_password"}), 401
+
+    role = "admin" if (ADMIN_TOKEN and admin_code == ADMIN_TOKEN) else "user"
+    token = make_jwt(username, role=role, ttl_days=30)
+    return jsonify({"token": token, "user": {"username": username, "role": role}})
+
 # ---------- Models ----------
 @app.get("/api/models")
 def list_models():
@@ -242,18 +299,22 @@ def cache_set(prefix: str, key: str, value: Any, ttl: int = 300):
 # ---------- Moderation guard ----------
 def moderate_text(text: str) -> Dict[str, Any]:
     if not OPENAI_KEY:
-        return {"ok": True}  # dev pass-through
+        return {"ok": True}
     try:
         from openai import OpenAI
         client = OpenAI(api_key=OPENAI_KEY)
         m = client.moderations.create(model="omni-moderation-latest", input=text)
-        flagged = any((c.get("flagged") for c in (m.results[0].categories if hasattr(m.results[0], "categories") else []))) if hasattr(m.results[0],"categories") else (m.results[0].flagged if hasattr(m.results[0],"flagged") else False)
-        return {"ok": not flagged, "raw": m.model_dump() if hasattr(m,"model_dump") else None}
+        flagged = False
+        try:
+            # prefer .results[0].flagged if available
+            flagged = bool(m.results[0].flagged)
+        except Exception:
+            pass
+        return {"ok": not flagged}
     except Exception as e:
-        # On moderation error, be permissive but log
-        return {"ok": True, "error": str(e)}
+        return {"ok": True, "error": str(e)}  # permissive on moderation failure
 
-# ---------- Tools (with caching) ----------
+# ---------- Tools (cached) ----------
 def tool_weather_city(city: str) -> Dict[str, Any]:
     if not city:
         return {"ok": False, "reason": "missing_city"}
@@ -283,7 +344,7 @@ def tool_weather_city(city: str) -> Dict[str, Any]:
             "temperature_c": cw.get("temperature"), "windspeed_kmh": cw.get("windspeed"),
             "time": cw.get("time"), "raw": cw
         }
-        cache_set("weather", key, out, ttl=180)  # 3 min
+        cache_set("weather", key, out, ttl=180)
         return out
     except Exception as e:
         return {"ok": False, "reason": str(e)}
@@ -311,7 +372,7 @@ def tool_web_search_ddg(query: str) -> Dict[str, Any]:
                    for r in (data.get("RelatedTopics") or [])[:5]
                    if isinstance(r, dict) and r.get("Text") and r.get("FirstURL")]
         out = {"ok": True, "heading": heading, "summary": abstract, "related": related}
-        cache_set("ddg", key, out, ttl=300)  # 5 min
+        cache_set("ddg", key, out, ttl=300)
         return out
     except Exception as e:
         return {"ok": False, "reason": str(e)}
@@ -408,9 +469,8 @@ def price_estimate(model: str, prompt_tokens: int, comp_tokens: int) -> float:
     p = PRICES.get(model, PRICES.get("gpt-4o-mini"))
     return (prompt_tokens/1000.0)*p["in"] + (comp_tokens/1000.0)*p["out"]
 
-# ---------- Non-stream tool loop (with moderation + usage) ----------
-def openai_tool_calling(model: str, user_msg: str, username: str) -> Dict[str, Any]:
-    # Pre moderation
+# ---------- Non-stream tool loop (with moderation + usage + deeper chaining) ----------
+def openai_tool_calling(model: str, user_msg: str, username: str, max_hops: int = 6) -> Dict[str, Any]:
     pre_mod = moderate_text(user_msg)
     if not pre_mod.get("ok", True):
         return {"reply": "I can’t help with that request.", "traces":[{"tool":"moderation_pre","result":pre_mod}]}
@@ -440,11 +500,11 @@ def openai_tool_calling(model: str, user_msg: str, username: str) -> Dict[str, A
     prompt_tokens_used = 0
     completion_tokens_used = 0
 
-    for _ in range(3):
+    for _ in range(max_hops):
         resp = client.chat.completions.create(
-            model=model, messages=messages, tools=OPENAI_TOOLS, tool_choice="auto", temperature=0.5
+            model=model, messages=messages, tools=OPENAI_TOOLS, tool_choice="auto", temperature=0.4
         )
-        # usage (if provided)
+        # usage
         u = getattr(resp, "usage", None)
         if u:
             prompt_tokens_used += int(getattr(u, "prompt_tokens", 0))
@@ -453,7 +513,6 @@ def openai_tool_calling(model: str, user_msg: str, username: str) -> Dict[str, A
         msg = resp.choices[0].message
         if not getattr(msg, "tool_calls", None):
             final = (msg.content or "").strip() or "(no reply)"
-            # Post moderation
             post_mod = moderate_text(final)
             if not post_mod.get("ok", True):
                 final = "I rewrote that for safety. Here’s a safer version: I can’t share that content."
@@ -477,7 +536,7 @@ def openai_tool_calling(model: str, user_msg: str, username: str) -> Dict[str, A
             traces.append({"tool": name, "args": args, "result": res})
             messages.append({"role": "assistant", "tool_calls": [tc]})
             messages.append({"role": "tool", "tool_call_id": tc.id, "name": name, "content": json.dumps(res)})
-    return {"reply": "I tried tools but couldn’t finish. Try rephrasing.", "traces": traces}
+    return {"reply": "Planner hit hop limit. Try again with a simpler ask.", "traces": traces}
 
 # ---------- Non-stream chat ----------
 @app.post("/api/chat")
@@ -495,7 +554,7 @@ def api_chat():
         return jsonify({"error": "missing_message"}), 400
 
     if use_tools:
-        result = openai_tool_calling(model, message, username)
+        result = openai_tool_calling(model, message, username, max_hops=6)
         reply = result.get("reply",""); traces = result.get("traces",[]); usage = result.get("usage",{})
     else:
         reply = f"(dev echo) {message}"; traces=[]; usage={}
@@ -544,7 +603,6 @@ def api_chat_stream_tools():
     if not user_msg:
         return jsonify({"error": "missing_message"}), 400
 
-    # Pre moderation
     pre_mod = moderate_text(user_msg)
     if not pre_mod.get("ok", True):
         def quick():
@@ -574,10 +632,10 @@ def api_chat_stream_tools():
             {"role":"user","content": user_msg},
         ]
 
-        for hop in range(3):
+        for hop in range(6):
             stream = client.chat.completions.create(
                 model=model, messages=messages, tools=OPENAI_TOOLS,
-                tool_choice="auto", temperature=0.5, stream=True
+                tool_choice="auto", temperature=0.4, stream=True
             )
             tool_calls: Dict[int, Dict[str, Any]] = {}
             last_hb = time.time()
@@ -651,12 +709,10 @@ def api_chat_stream_tools():
                 continue
             break
 
-        # Post moderation
         final_text = "".join(final_text_all).strip() or "(no reply)"
         post_mod = moderate_text(final_text)
         if not post_mod.get("ok", True):
             final_text = "I rewrote that for safety. Here’s a safer version: I can’t share that content."
-        # stream the final token if needed (already done), then done
         yield sse({"type":"done"})
         append_history(username, user_msg, final_text)
 
@@ -714,7 +770,6 @@ def api_chat_stream_plain():
     def generate():
         for chunk in stream_openai_plain(model, message):
             yield chunk
-        # store a copy for history continuity
         final_copy = f"(dev echo) {message}"
         if OPENAI_KEY:
             try:
@@ -791,8 +846,89 @@ def api_rag_query():
     res = rag_search(username, query, top_k)
     return jsonify(res)
 
+# ---------- File Upload → Auto-RAG (JWT required) ----------
+from werkzeug.utils import secure_filename
+
+ALLOWED_EXT = {".txt", ".md", ".pdf"}
+def _chunk_text(text: str, size: int = 800, overlap: int = 200) -> List[str]:
+    text = (text or "").strip()
+    if not text: return []
+    chunks = []
+    i = 0
+    n = len(text)
+    while i < n:
+        chunk = text[i:i+size]
+        chunks.append(chunk)
+        i += max(1, size - overlap)
+    return chunks
+
+def _read_pdf_bytes(data: bytes) -> str:
+    try:
+        import PyPDF2
+        reader = PyPDF2.PdfReader(io.BytesIO(data))
+        out = []
+        for page in reader.pages:
+            try: out.append(page.extract_text() or "")
+            except Exception: pass
+        return "\n".join(out).strip()
+    except Exception:
+        return ""
+
+import io
+
+@app.post("/api/upload")
+def upload_and_index():
+    # Require a valid JWT (user or admin)
+    user = require_jwt(role=None)
+    if not user:
+        return jsonify({"error":"unauthorized"}), 401
+    username = user.get("sub") or "guest"
+
+    if "files" not in request.files:
+        return jsonify({"error": "no_files"}), 400
+
+    files = request.files.getlist("files")
+    if not files:
+        return jsonify({"error":"no_files"}), 400
+
+    total_chunks = 0
+    docs: List[Dict[str, Any]] = []
+    for f in files:
+        fname = secure_filename(f.filename or "")
+        if not fname:
+            continue
+        ext = os.path.splitext(fname)[1].lower()
+        if ext not in ALLOWED_EXT:
+            continue
+        data = f.read()
+        text = ""
+        if ext == ".pdf":
+            text = _read_pdf_bytes(data)
+        else:
+            try:
+                text = data.decode("utf-8", errors="ignore")
+            except Exception:
+                text = ""
+
+        for idx, ch in enumerate(_chunk_text(text)):
+            docs.append({
+                "id": f"{fname}-{idx}",
+                "text": ch,
+                "metadata": {"filename": fname, "chunk": idx}
+            })
+            total_chunks += 1
+
+    if not docs:
+        return jsonify({"ok": False, "reason": "no_text_extracted"}), 400
+
+    res = rag_index(username, docs)
+    return jsonify({"ok": True, "indexed_docs": res.get("count", 0), "chunks": total_chunks})
+
 # ---------- Admin: mint & redeem ----------
 def require_admin(req) -> bool:
+    # JWT admin OR legacy ADMIN_TOKEN bearer
+    jwt_data = require_jwt(role="admin")
+    if jwt_data: return True
     if not ADMIN_TOKEN: return False
     auth = req.headers.get("Authorization", "")
     if not auth.startswith("Bearer "): return False
@@ -830,6 +966,41 @@ def auth_redeem():
     r.set(k_user_authed(username), "1", ex=60*60*24*30)
     return jsonify({"success": True, "user": username})
 
+# ---------- JSON-mode endpoint (strict JSON out) ----------
+@app.post("/api/structured")
+def api_structured():
+    data = request.get_json(silent=True) or {}
+    prompt = str(data.get("prompt") or "").strip()
+    model = str(data.get("model") or active_model("guest"))
+    if not prompt:
+        return jsonify({"error":"missing_prompt"}), 400
+
+    if not OPENAI_KEY:
+        # dev stub: echo as JSON object
+        return jsonify({"ok": True, "json": {"echo": prompt, "dev": True}})
+
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_KEY)
+        r0 = client.chat.completions.create(
+            model=model,
+            response_format={"type":"json_object"},
+            messages=[
+                {"role":"system","content": f"{SYSTEM_PROMPT}\nReturn ONLY valid JSON."},
+                {"role":"user","content": prompt},
+            ],
+            temperature=0.2
+        )
+        content = (r0.choices[0].message.content or "").strip()
+        # Best effort parse
+        try:
+            js = json.loads(content)
+        except Exception:
+            js = {"raw": content}
+        return jsonify({"ok": True, "json": js})
+    except Exception as e:
+        return jsonify({"error":"upstream_error","detail": str(e)}), 502
+
 # ---------- Static passthrough ----------
 @app.get("/static/<path:filename>")
 def static_files(filename):
@@ -851,6 +1022,7 @@ def method_not_allowed(_):
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=(os.getenv("FLASK_ENV","").lower()!="production"), threaded=True)
+
 
 
 
