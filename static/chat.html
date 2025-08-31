@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Friday AI • Supercharged</title>
+<title>Friday AI • Vector + Refresh</title>
 <style>
   :root { --bg:#0f172a; --panel:#0b1226; --muted:#94a3b8; --text:#e2e8f0; --accent:#60a5fa; --accent2:#a78bfa; --ok:#10b981; --warn:#f59e0b; --err:#ef4444; }
   *{box-sizing:border-box}
@@ -13,7 +13,6 @@
   .badge{font-size:12px;color:#cbd5e1;border:1px solid rgba(148,163,184,.35);padding:2px 8px;border-radius:999px}
   .live{border-color: rgba(16,185,129,.5); color:#d1fae5;}
   .dev{border-color: rgba(245,158,11,.5); color:#fef3c7;}
-  .warn{border-color: rgba(245,158,11,.5); color:#fde68a;}
   main{max-width:1100px;margin:16px auto 120px;padding:0 16px}
   #chat{border:1px solid rgba(255,255,255,.07);border-radius:16px;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,.25)}
   .toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:10px;background:rgba(255,255,255,.02);border-bottom:1px solid rgba(255,255,255,.06)}
@@ -27,17 +26,17 @@
   .a{background:rgba(167,139,250,.08);border-color:rgba(167,139,250,.25)}
   .meta{font-size:12px;color:var(--muted);margin-bottom:6px}
   .trace{background:rgba(255,255,255,.03); border:1px dashed rgba(255,255,255,.15); padding:8px 10px; border-radius:8px; margin-top:6px; font-size:12px; color:#d1d5db}
-  .trace pre{white-space:pre-wrap; margin:6px 0 0}
   .composer{display:flex;gap:10px;padding:10px;background:rgba(255,255,255,.02);border-top:1px solid rgba(255,255,255,.06)}
   #input{flex:1;background:#0b1226;border:1px solid rgba(255,255,255,.1);border-radius:12px;color:var(--text);padding:12px 14px;min-height:46px;max-height:160px;resize:vertical}
   .send{min-width:98px;border-radius:12px;border:none;background:linear-gradient(135deg,var(--accent),var(--accent2));color:white;font-weight:700}
-  .links a{color:var(--muted);text-decoration:none;margin-left:10px;font-size:13px}
-  .links a:hover{color:var(--text)}
-  .row{display:flex;gap:10px; align-items:center}
   .pill{padding:2px 8px;border-radius:999px;border:1px solid rgba(255,255,255,.15); font-size:12px}
-  .pill.warn{border-color:rgba(245,158,11,.45); color:#fde68a}
-  .pill.ok{border-color:rgba(16,185,129,.45); color:#d1fae5}
-  .pill.err{border-color:rgba(239,68,68,.45); color:#fecaca}
+  .ok{border-color:rgba(16,185,129,.45); color:#d1fae5}
+  .warn{border-color:rgba(245,158,11,.45); color:#fde68a}
+  .err{border-color:rgba(239,68,68,.45); color:#fecaca}
+  .links a{color:#94a3b8;text-decoration:none;margin-left:10px;font-size:13px}
+  .links a:hover{color:#e2e8f0}
+  .admin-only{display:none}
+  .admin-on .admin-only{display:inline-flex}
 </style>
 </head>
 <body>
@@ -45,7 +44,7 @@
   <div class="brand">
     <svg width="26" height="26" viewBox="0 0 48 48" fill="none"><defs><linearGradient id="g" x1="0" y1="48" x2="48" y2="0"><stop stop-color="#60a5fa"/><stop offset="1" stop-color="#a78bfa"/></linearGradient></defs><rect rx="12" width="48" height="48" fill="url(#g)"/></svg>
     <div>Friday AI</div>
-    <div id="modeBadge" class="badge">checking…</div>
+    <div id="mode" class="badge">checking…</div>
   </div>
   <div class="links">
     <a href="/routes" target="_blank">routes</a>
@@ -67,70 +66,48 @@
       <button id="useModel" class="btn">Use</button>
       <span id="modelHint" class="hint"></span>
 
-      <span class="muted" style="margin-left:8px">Mode</span>
-      <select id="sendMode">
-        <option value="stream_plus" selected>Stream+ (tools)</option>
-        <option value="stream_legacy">Legacy Stream</option>
-        <option value="nonstream_tools">Non-stream (tools)</option>
-      </select>
-
       <span class="muted" style="margin-left:auto">Login</span>
-      <input id="password" type="password" placeholder="password (if set)" style="width:160px">
+      <input id="password" type="password" placeholder="password (if set)" style="width:150px">
       <input id="adminCode" type="text" placeholder="admin code (optional)" style="width:160px">
       <button id="loginBtn">Login</button>
+      <button id="logoutBtn">Logout</button>
 
-      <span id="authBadge" class="pill warn" title="Auth">anon</span>
-      <button id="clearHistory">Clear history</button>
-      <span id="rlBadge" class="pill warn" title="Rate-limit status">RL…</span>
+      <span id="authBadge" class="pill warn">anon</span>
     </div>
 
-    <div class="toolbar" style="border-top:1px solid rgba(255,255,255,.06)">
-      <span class="muted">Upload (PDF/TXT) → RAG</span>
-      <input id="fileInput" type="file" multiple accept=".pdf,.txt,.md">
+    <div class="toolbar">
+      <span class="muted">Upload (PDF/TXT/MD/DOCX/HTML)</span>
+      <input id="fileInput" type="file" multiple accept=".pdf,.txt,.md,.docx,.html,.htm">
       <button id="uploadBtn">Upload & Index</button>
 
-      <span class="muted" style="margin-left:12px">JSON mode test</span>
-      <input id="jsonPrompt" placeholder='e.g., "Summarize this as {title, bullets[]}"' style="min-width:320px">
+      <span class="muted" style="margin-left:12px">JSON mode</span>
+      <input id="jsonPrompt" placeholder='e.g., {"title": "...", "bullets": []} about topic' style="min-width:320px">
       <button id="jsonBtn">Run</button>
+
+      <button id="mintBtn" class="admin-only">Mint Admin Codes</button>
     </div>
 
     <div id="log"></div>
 
     <div class="composer">
-      <textarea id="input" placeholder="Ask anything. Try: weather in Paris; search CUDA graphs; ‘use my docs about X’…"></textarea>
+      <textarea id="input" placeholder="Ask anything…"></textarea>
       <button id="send" class="send">Send</button>
     </div>
   </section>
-  <p class="muted" style="margin-top:8px">Tip: username & model saved in this browser. Use “Stream+ (tools)” for Jarvis vibes. Upload docs to ground answers.</p>
+  <p class="muted" style="margin-top:8px">Tip: login to enable uploads & admin. Admin-only controls appear when your role is admin.</p>
 </main>
 
 <script>
-const $ = sel => document.querySelector(sel);
-const log = $("#log"), input = $("#input"), sendBtn = $("#send");
-const userEl = $("#username"), saveUserBtn = $("#saveUser");
-const modelSel = $("#model"), useModelBtn = $("#useModel"), modelHint = $("#modelHint");
-const modeBadge = $("#modeBadge"), sendMode = $("#sendMode");
-const rlBadge = $("#rlBadge"); const authBadge = $("#authBadge");
-const clearBtn = $("#clearHistory");
-
-const loginBtn = $("#loginBtn"); const pwdEl = $("#password"); const adminEl = $("#adminCode");
-const fileInput = $("#fileInput"); const uploadBtn = $("#uploadBtn");
-const jsonPrompt = $("#jsonPrompt"); const jsonBtn = $("#jsonBtn");
-
+const $ = s => document.querySelector(s);
 const state = {
   username: localStorage.getItem("friday.username") || "guest",
-  model: localStorage.getItem("friday.model") || null,
-  token: localStorage.getItem("friday.token") || null,
+  access: localStorage.getItem("friday.access") || null,
+  refresh: localStorage.getItem("friday.refresh") || null,
   role: localStorage.getItem("friday.role") || "anon",
+  model: localStorage.getItem("friday.model") || null,
 };
-userEl.value = state.username;
 
-function headersAuth(json=true){
-  const h = json ? {"Content-Type":"application/json"} : {};
-  if(state.token) h["Authorization"] = "Bearer " + state.token;
-  return h;
-}
-
+const log = $("#log");
 function add(role, text){
   const wrap = document.createElement("div");
   wrap.className = "msg " + (role === "user" ? "u" : "a");
@@ -144,16 +121,51 @@ function add(role, text){
   return {wrap, body};
 }
 
-function addTrace(parent, title, obj){
-  const d = document.createElement("div");
-  d.className = "trace";
-  d.innerHTML = `<strong>${title}</strong><pre>${JSON.stringify(obj, null, 2)}</pre>`;
-  parent.appendChild(d);
-  log.scrollTop = log.scrollHeight;
+function setAuthUI(){
+  const badge = $("#authBadge");
+  if(state.access){
+    badge.textContent = state.role || "user";
+    badge.className = "pill ok";
+    document.body.classList.toggle("admin-on", state.role === "admin");
+  }else{
+    badge.textContent = "anon";
+    badge.className = "pill warn";
+    document.body.classList.remove("admin-on");
+  }
+}
+
+function headers(json=true){
+  const h = json ? {"Content-Type":"application/json"} : {};
+  if(state.access) h["Authorization"] = "Bearer " + state.access;
+  return h;
+}
+
+// Fetch helper with auto-refresh on 401
+async function fetchAuth(url, opts={}){
+  let res = await fetch(url, {headers:{...headers(true), ...(opts.headers||{})}, ...opts});
+  if(res.status !== 401) return res;
+  // try refresh
+  if(!state.refresh) return res;
+  try{
+    const r = await fetch("/api/auth/refresh", {
+      method:"POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({refresh_token: state.refresh})
+    });
+    if(!r.ok) return res;
+    const j = await r.json();
+    state.access = j.access_token; state.role = j.user?.role || state.role;
+    localStorage.setItem("friday.access", state.access);
+    localStorage.setItem("friday.role", state.role);
+    setAuthUI();
+    // retry original
+    res = await fetch(url, {headers:{...headers(true), ...(opts.headers||{})}, ...opts});
+    return res;
+  }catch{ return res; }
 }
 
 async function jsonFetch(url, opts={}){
-  const res = await fetch(url, { headers:{ ...headersAuth(true), ...(opts.headers||{}) }, ...opts });
+  const res = await fetchAuth(url, opts);
   if(!res.ok){
     let msg = `${res.status} ${res.statusText}`;
     try{ const j = await res.json(); msg = j.error || j.reason || msg; }catch{}
@@ -162,236 +174,138 @@ async function jsonFetch(url, opts={}){
   return res.json();
 }
 
+// UI init
+$("#username").value = state.username;
+
 async function checkHealth(){
   try{
-    const h = await jsonFetch("/debug/health", {headers: headersAuth(true)});
-    const live = !!h.openai;
-    modeBadge.textContent = live ? "Live (OpenAI)" : "Dev Echo";
-    modeBadge.className = "badge " + (live ? "live" : "dev");
+    const j = await jsonFetch("/debug/health", {headers: headers(true)});
+    const live = !!j.openai; const m = $("#mode");
+    m.textContent = live ? "Live" : "Dev";
+    m.className = "badge " + (live ? "live" : "dev");
   }catch{
-    modeBadge.textContent = "Unknown";
-    modeBadge.className = "badge warn";
+    const m = $("#mode"); m.textContent = "unknown"; m.className = "badge";
   }
 }
 
 async function loadModels(){
   try{
-    const data = await jsonFetch("/api/models");
-    modelSel.innerHTML = "";
-    (data.available||[]).forEach(m=>{
-      const opt = document.createElement("option");
-      opt.value=m; opt.textContent=m;
-      if((state.model && state.model===m) || (!state.model && data.active===m)) opt.selected = true;
-      modelSel.appendChild(opt);
+    const j = await jsonFetch("/api/models");
+    const sel = $("#model"); sel.innerHTML = "";
+    (j.available||[]).forEach(x=>{
+      const o = document.createElement("option"); o.value=x; o.textContent=x; sel.appendChild(o);
     });
-    modelHint.textContent = `active: ${data.active}`;
-    if(!state.model) { state.model = data.active; localStorage.setItem("friday.model", state.model); }
-  }catch{ modelHint.textContent = "models unavailable"; }
+    const active = j.active;
+    $("#modelHint").textContent = `active: ${active}`;
+    if(!state.model) { state.model = active; localStorage.setItem("friday.model", state.model); }
+    Array.from(sel.options).forEach(o=>{ if(o.value===state.model) o.selected=true; });
+  }catch{}
 }
 
 async function loadHistory(){
   try{
-    const items = await jsonFetch(`/api/history?username=${encodeURIComponent(state.username)}`);
-    if(Array.isArray(items)){
-      items.forEach(it=>{ add("user", it.message); add("assistant", it.reply); });
-    }
+    const j = await jsonFetch(`/api/history?username=${encodeURIComponent(state.username)}`);
+    (j||[]).forEach(it=>{ add("user", it.message); add("assistant", it.reply); });
   }catch{}
 }
 
-async function pollRL(){
-  try{
-    const m = await jsonFetch("/api/metrics");
-    const rem = m?.rate_limit?.remaining ?? "?";
-    rlBadge.textContent = `RL ${rem}`;
-    rlBadge.className = "pill " + (rem <= 2 ? "err" : rem < 10 ? "warn" : "ok");
-  }catch{
-    rlBadge.textContent = "RL ?";
-    rlBadge.className = "pill warn";
-  }
-}
-
-function updateAuthBadge(){
-  if(state.token){
-    authBadge.textContent = state.role || "user";
-    authBadge.className = "pill ok";
-  }else{
-    authBadge.textContent = "anon";
-    authBadge.className = "pill warn";
-  }
-}
-
-saveUserBtn.addEventListener("click", ()=>{
-  state.username = (userEl.value||"guest").trim() || "guest";
+// Controls
+$("#saveUser").onclick = () => {
+  state.username = ($("#username").value || "guest").trim() || "guest";
   localStorage.setItem("friday.username", state.username);
-  add("assistant", `Got it, hi ${state.username}!`);
-});
+  add("assistant", `Yo ${state.username}, locked in.`);
+};
 
-useModelBtn.addEventListener("click", async ()=>{
-  const m = modelSel.value;
+$("#useModel").onclick = async () => {
+  const m = $("#model").value;
   try{
-    const res = await jsonFetch("/api/model", { method:"POST", body: JSON.stringify({ model: m })});
-    state.model = res.active || m;
-    localStorage.setItem("friday.model", state.model);
-    modelHint.textContent = `active: ${state.model}`;
+    const j = await jsonFetch("/api/model", {method:"POST", body: JSON.stringify({model: m})});
+    state.model = j.active || m; localStorage.setItem("friday.model", state.model);
+    $("#modelHint").textContent = `active: ${state.model}`;
     add("assistant", `Using model: ${state.model}`);
-  }catch(e){ add("assistant", "Couldn’t set model: "+e.message); }
-});
+  }catch(e){ add("assistant", "Set model failed: " + e.message); }
+};
 
-clearBtn.addEventListener("click", async ()=>{
+$("#loginBtn").onclick = async () => {
+  const body = {username: ($("#username").value||"guest").trim(), password: $("#password").value, admin_code: $("#adminCode").value};
   try{
-    await jsonFetch("/api/history/clear", {method:"POST", body: JSON.stringify({username: state.username})});
-    log.innerHTML = "";
-    add("assistant", "History cleared.");
-  }catch(e){
-    add("assistant", "Couldn’t clear history: "+e.message);
-  }
-});
-
-// Login → JWT
-loginBtn.addEventListener("click", async ()=>{
-  try{
-    const body = { username: (userEl.value||"guest").trim(), password: pwdEl.value, admin_code: adminEl.value };
-    const j = await jsonFetch("/api/auth/login", { method:"POST", body: JSON.stringify(body) });
-    state.token = j.token; state.role = j.user?.role || "user";
-    localStorage.setItem("friday.token", state.token);
+    const j = await jsonFetch("/api/auth/login", {method:"POST", body: JSON.stringify(body)});
+    state.access = j.access_token; state.refresh = j.refresh_token; state.role = j.user?.role || "user";
+    localStorage.setItem("friday.access", state.access);
+    localStorage.setItem("friday.refresh", state.refresh);
     localStorage.setItem("friday.role", state.role);
-    updateAuthBadge();
+    setAuthUI();
     add("assistant", `Logged in as ${j.user.username} (${state.role}).`);
   }catch(e){ add("assistant", "Login failed: " + e.message); }
-});
+};
 
-// Upload → RAG
-uploadBtn.addEventListener("click", async ()=>{
-  const files = fileInput.files;
-  if(!files || !files.length){ add("assistant","Pick a file first."); return; }
-  if(!state.token){ add("assistant","Login first to upload."); return; }
+$("#logoutBtn").onclick = () => {
+  state.access = null; state.refresh = null; state.role = "anon";
+  localStorage.removeItem("friday.access"); localStorage.removeItem("friday.refresh"); localStorage.setItem("friday.role","anon");
+  setAuthUI(); add("assistant", "Logged out.");
+};
 
-  const fd = new FormData();
-  Array.from(files).forEach(f => fd.append("files", f));
+$("#uploadBtn").onclick = async () => {
+  const files = $("#fileInput").files;
+  if(!files || !files.length){ add("assistant","Pick files first."); return; }
+  if(!state.access){ add("assistant","Login first to upload."); return; }
+  const fd = new FormData(); Array.from(files).forEach(f => fd.append("files", f));
   try{
-    const res = await fetch("/api/upload", { method:"POST", body: fd, headers: { ...(state.token ? {"Authorization":"Bearer "+state.token} : {}) }});
+    const res = await fetch("/api/upload", {method:"POST", body: fd, headers: state.access ? {"Authorization":"Bearer "+state.access} : {}});
     if(!res.ok){ const t = await res.text(); throw new Error(t); }
     const j = await res.json();
-    add("assistant", `Indexed ${j.indexed_docs} docs (${j.chunks} chunks).`);
-  }catch(e){
-    add("assistant", "Upload failed: " + e.message);
-  }
-});
+    add("assistant", `Indexed ${j.indexed_docs} docs (${j.chunks} chunks) via ${j.backend}.`);
+  }catch(e){ add("assistant", "Upload failed: " + e.message); }
+};
 
-// JSON mode test
-jsonBtn.addEventListener("click", async ()=>{
-  const p = (jsonPrompt.value||"").trim();
-  if(!p){ add("assistant","Type a JSON prompt first"); return; }
+$("#jsonBtn").onclick = async () => {
+  const p = ($("#jsonPrompt").value||"").trim(); if(!p){ add("assistant","Type a JSON-mode prompt."); return; }
   try{
-    const j = await jsonFetch("/api/structured", { method:"POST", body: JSON.stringify({ prompt: p, model: state.model||"" })});
-    add("assistant", "JSON Mode result:");
-    const last = log.lastChild;
-    const trace = document.createElement("div");
-    trace.className = "trace";
-    trace.innerHTML = `<strong>JSON</strong><pre>${JSON.stringify(j.json, null, 2)}</pre>`;
-    last.appendChild(trace);
-  }catch(e){
-    add("assistant", "Structured failed: " + e.message);
-  }
-});
+    const j = await jsonFetch("/api/structured", {method:"POST", body: JSON.stringify({prompt: p, model: state.model||""})});
+    const {wrap} = add("assistant", "JSON result:");
+    const tr = document.createElement("div"); tr.className = "trace";
+    tr.innerHTML = `<strong>JSON</strong><pre>${JSON.stringify(j.json, null, 2)}</pre>`;
+    wrap.appendChild(tr);
+  }catch(e){ add("assistant","Structured failed: "+e.message); }
+};
 
-// --- Send modes ---
-function sendStreamPlus(text){
-  add("user", text);
-  const {wrap, body} = add("assistant", "");
-  const params = new URLSearchParams({
-    message: text,
-    username: state.username || "guest",
-    model: state.model || ""
-  });
-  const es = new EventSource(`/api/chat/stream-tools?${params.toString()}`);
-  let closed = false;
-  es.onmessage = (ev) => {
-    if(!ev.data) return;
-    try{
-      const obj = JSON.parse(ev.data);
-      if(obj.type === "delta"){ body.textContent += obj.delta; }
-      else if(obj.type === "tool_call"){ addTrace(wrap, `Calling tool: ${obj.name}`, obj); }
-      else if(obj.type === "tool_result"){ addTrace(wrap, `Tool result: ${obj.name}`, obj); }
-      else if(obj.type === "error"){ addTrace(wrap, "Error", obj); }
-      else if(obj.type === "done"){ es.close(); closed = true; }
-      log.scrollTop = log.scrollHeight;
-    }catch{}
-  };
-  es.onerror = () => { if(!closed) es.close(); };
-}
+$("#mintBtn").onclick = async () => {
+  if(state.role !== "admin"){ add("assistant","Admin only."); return; }
+  try{
+    const j = await jsonFetch("/api/admin/mint", {method:"POST", body: JSON.stringify({count: 3})});
+    const {wrap} = add("assistant", "Minted codes:");
+    const tr = document.createElement("div"); tr.className="trace";
+    tr.innerHTML = `<strong>Tokens</strong><pre>${JSON.stringify(j.tokens, null, 2)}</pre>`;
+    wrap.appendChild(tr);
+  }catch(e){ add("assistant","Mint failed: "+e.message); }
+};
 
-function sendLegacyStream(text){
-  add("user", text);
-  const {body} = add("assistant", "");
-  const params = new URLSearchParams({
-    message: text,
-    username: state.username || "guest",
-    model: state.model || ""
-  });
-  const es = new EventSource(`/api/chat/stream?${params.toString()}`);
-  let closed = false;
-  es.onmessage = (ev) => {
-    if(!ev.data) return;
-    try{
-      const obj = JSON.parse(ev.data);
-      if(obj.delta){ body.textContent += obj.delta; }
-      if(obj.done){ es.close(); closed = true; }
-      if(obj.error){ body.textContent += `\n[error] ${obj.error}`; }
-      log.scrollTop = log.scrollHeight;
-    }catch{}
-  };
-  es.onerror = () => { if(!closed) es.close(); };
-}
-
-async function sendNonstreamTools(text){
+$("#send").onclick = async () => {
+  const text = ($("#input").value||"").trim(); if(!text) return;
+  $("#input").value = "";
   add("user", text);
   const {wrap} = add("assistant", "…");
   try{
-    const res = await jsonFetch("/api/chat", {
+    const j = await jsonFetch("/api/chat", {
       method:"POST",
-      body: JSON.stringify({
-        message: text,
-        username: state.username || "guest",
-        model: state.model || "",
-        tools: true
-      })
+      body: JSON.stringify({message: text, username: state.username || "guest", model: state.model || ""})
     });
-    wrap.lastChild.textContent = res.reply || "(no reply)";
-    if (res.traces && res.traces.length) addTrace(wrap, "Tool trace", res.traces);
-    if (res.usage) addTrace(wrap, "Usage", res.usage);
-    await pollRL();
-  }catch(e){
-    wrap.lastChild.textContent = "Error: " + e.message;
-  }
-}
-
-sendBtn.addEventListener("click", ()=>{
-  const text = (input.value||"").trim();
-  if(!text) return;
-  input.value = "";
-  const mode = sendMode.value;
-  if (mode === "stream_plus") sendStreamPlus(text);
-  else if (mode === "stream_legacy") sendLegacyStream(text);
-  else sendNonstreamTools(text);
-});
-
-input.addEventListener("keydown", (e)=>{
-  if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); sendBtn.click(); }
-});
+    wrap.lastChild.textContent = j.reply || "(no reply)";
+    if (j.traces && j.traces.length){
+      const tr = document.createElement("div"); tr.className="trace";
+      tr.innerHTML = `<strong>Tools</strong><pre>${JSON.stringify(j.traces, null, 2)}</pre>`;
+      wrap.appendChild(tr);
+    }
+  }catch(e){ wrap.lastChild.textContent = "Error: " + e.message; }
+};
 
 // init
-function initAuth(){
-  state.token = localStorage.getItem("friday.token");
-  state.role = localStorage.getItem("friday.role") || "anon";
-  updateAuthBadge();
-}
-initAuth();
-checkHealth();
-loadModels();
-loadHistory();
-pollRL();
-setInterval(pollRL, 15000);
+(async function init(){
+  setAuthUI();
+  await checkHealth();
+  await loadModels();
+  await loadHistory();
+})();
 </script>
 </body>
 </html>
