@@ -1,12 +1,12 @@
 # app.py
-import os, json, time, uuid, base64, sqlite3, io, math, hashlib
+import os, json, time, uuid, base64, sqlite3, io, math, hashlib, re
 from datetime import datetime, timedelta
 from functools import wraps
 from typing import List, Dict, Any, Optional, Tuple
 
 from flask import (
     Flask, jsonify, request, render_template, send_from_directory,
-    Response, make_response, send_file
+    Response, make_response, send_file, abort
 )
 from flask_cors import CORS
 
@@ -22,6 +22,7 @@ BASIC_PASS   = os.getenv("BASIC_AUTH_PASS", "")
 JWT_SECRET   = os.getenv("JWT_SECRET", "change-me")
 JWT_DAYS     = int(os.getenv("JWT_DAYS", "14"))
 ENABLE_MOD   = os.getenv("ENABLE_MODERATION", "true").lower() in ("1","true","yes","on")
+INVITE_REQUIRED = os.getenv("INVITE_REQUIRED", "false").lower() in ("1","true","yes","on")
 ASSET_CDN    = [o.strip() for o in os.getenv("ASSET_CDN", "").split(",") if o.strip()]
 UPLOAD_DIR   = os.getenv("UPLOAD_DIR", "uploads"); os.makedirs(UPLOAD_DIR, exist_ok=True)
 MAX_UPLOAD_MB= int(os.getenv("MAX_UPLOAD_MB", "10"))
@@ -32,6 +33,8 @@ _env_models = [m.strip() for m in os.getenv("OPENAI_MODELS", "").split(",") if m
 AVAILABLE_MODELS = _env_models or _default_models
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", AVAILABLE_MODELS[0])
 ACTIVE_MODEL  = DEFAULT_MODEL if DEFAULT_MODEL in AVAILABLE_MODELS else AVAILABLE_MODELS[0]
+EMBED_MODEL   = os.getenv("EMBED_MODEL","text-embedding-3-small")
+EMBED_DIM     = int(os.getenv("EMBED_DIM","1536"))  # 1536 for te3-small
 
 # Optional: Sentry
 try:
@@ -41,7 +44,34 @@ try:
 except Exception:
     pass
 
-# ------------------------- Storage (Redis → SQLite → Memory) -------------------------
+# Optional: OpenTelemetry (minimal)
+OTEL_ENABLED = os.getenv("OTEL_ENABLED","false").lower() in ("1","true","yes","on")
+if OTEL_ENABLED:
+    try:
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        provider = TracerProvider()
+        provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+        trace.set_tracer_provider(provider)
+        tracer = trace.get_tracer("friday")
+    except Exception:
+        OTEL_ENABLED = False
+        tracer = None
+else:
+    tracer = None
+
+def span(name):
+    def deco(fn):
+        if not OTEL_ENABLED: return fn
+        def wrap(*a, **k):
+            with tracer.start_as_current_span(name):
+                return fn(*a, **k)
+        return wrap
+    return deco
+
+# ------------------------- Storage (Redis → SQLite) + optional Postgres pgvector -------------------------
 _redis = None
 try:
     from redis import Redis
@@ -58,94 +88,90 @@ def _sqlite_init():
     if _sqlite is not None: return
     _sqlite = sqlite3.connect(DB_PATH, check_same_thread=False)
     _sqlite.row_factory = sqlite3.Row
-    # chat history
     _sqlite.execute("""CREATE TABLE IF NOT EXISTS messages (
-        cid TEXT NOT NULL, user_id TEXT, role TEXT NOT NULL, content TEXT NOT NULL, ts REAL NOT NULL
+        cid TEXT NOT NULL, user_id TEXT, org_id TEXT, role TEXT NOT NULL, content TEXT NOT NULL, ts REAL NOT NULL
     )""")
     _sqlite.execute("CREATE INDEX IF NOT EXISTS idx_messages_cid ON messages(cid)")
     _sqlite.execute("CREATE INDEX IF NOT EXISTS idx_messages_user ON messages(user_id)")
-    # users
-    _sqlite.execute("""CREATE TABLE IF NOT EXISTS users (
-        id TEXT PRIMARY KEY, email TEXT UNIQUE, name TEXT, pwd_hash TEXT, created REAL
-    )""")
-    # docs (RAG)
-    _sqlite.execute("""CREATE TABLE IF NOT EXISTS docs (
-        id TEXT PRIMARY KEY, user_id TEXT, name TEXT, content TEXT, embedding TEXT, created REAL
-    )""")
+    # users / orgs / invites
+    _sqlite.execute("""CREATE TABLE IF NOT EXISTS orgs (id TEXT PRIMARY KEY, name TEXT, created REAL)""")
+    _sqlite.execute("""CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, org_id TEXT, email TEXT UNIQUE, name TEXT, pwd_hash TEXT, created REAL)""")
+    _sqlite.execute("""CREATE TABLE IF NOT EXISTS invites (code TEXT PRIMARY KEY, org_id TEXT, created REAL, used_by TEXT)""")
+    # docs (fallback RAG table)
+    _sqlite.execute("""CREATE TABLE IF NOT EXISTS docs (id TEXT PRIMARY KEY, user_id TEXT, org_id TEXT, name TEXT, content TEXT, embedding TEXT, created REAL)""")
     _sqlite.commit()
 
-def _use_sqlite(): return _redis is None
+def _use_sqlite(): return True  # baseline always on
 
-_conversations: Dict[str, List[Dict[str, Any]]] = {}
+# Optional Postgres for pgvector search
+PG_URL = os.getenv("PG_URL","")
+_pg = None
+if PG_URL:
+    try:
+        import psycopg
+        _pg = psycopg.connect(PG_URL, autocommit=True)
+        with _pg.cursor() as cur:
+            # Extension may already exist or not allowed; ignore errors
+            try: cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+            except Exception: pass
+            cur.execute(f"""
+            CREATE TABLE IF NOT EXISTS rag_chunks (
+                id TEXT PRIMARY KEY,
+                user_id TEXT,
+                org_id TEXT,
+                name TEXT,
+                content TEXT,
+                embedding vector({EMBED_DIM}),
+                created TIMESTAMP DEFAULT NOW()
+            );""")
+    except Exception:
+        _pg = None
 
-def _rkey(cid: str, user_id: Optional[str]) -> str:
-    return f"conv:{user_id or 'anon'}:{cid}"
+# ------------------------- Conversations (per-user/org) -------------------------
+def _rkey(cid: str, user_id: Optional[str], org_id: Optional[str]) -> str:
+    return f"conv:{org_id or 'noorg'}:{user_id or 'anon'}:{cid}"
 
-def _load_thread(cid: str, user_id: Optional[str]) -> List[Dict[str, Any]]:
+def _load_thread(cid: str, user_id: Optional[str], org_id: Optional[str]) -> List[Dict[str, Any]]:
     if _redis:
-        raw = _redis.get(_rkey(cid, user_id))
+        raw = _redis.get(_rkey(cid, user_id, org_id))
         return json.loads(raw) if raw else []
-    if _use_sqlite():
-        _sqlite_init()
-        cur = _sqlite.execute(
-            "SELECT role, content, ts FROM messages WHERE cid = ? AND (user_id IS ? OR user_id = ?) ORDER BY ts ASC",
-            (cid, user_id, user_id)
-        )
-        return [{"role": r["role"], "content": r["content"], "ts": r["ts"]} for r in cur.fetchall()]
-    return _conversations.get((user_id or "anon")+":"+cid, [])
+    _sqlite_init()
+    cur = _sqlite.execute(
+        "SELECT role, content, ts FROM messages WHERE cid = ? AND (user_id IS ? OR user_id = ?) AND (org_id IS ? OR org_id = ?) ORDER BY ts ASC",
+        (cid, user_id, user_id, org_id, org_id)
+    )
+    return [{"role": r["role"], "content": r["content"], "ts": r["ts"]} for r in cur.fetchall()]
 
-def _save_thread(cid: str, user_id: Optional[str], msgs: List[Dict[str, Any]]) -> None:
+def _save_thread(cid: str, user_id: Optional[str], org_id: Optional[str], msgs: List[Dict[str, Any]]) -> None:
     if _redis:
-        _redis.set(_rkey(cid, user_id), json.dumps(msgs)); return
-    if _use_sqlite():
-        _sqlite_init()
-        with _sqlite:
-            _sqlite.execute("DELETE FROM messages WHERE cid = ? AND (user_id IS ? OR user_id = ?)", (cid, user_id, user_id))
-            _sqlite.executemany(
-                "INSERT INTO messages (cid, user_id, role, content, ts) VALUES (?, ?, ?, ?, ?)",
-                [(cid, user_id, m["role"], m["content"], float(m.get("ts", time.time()))) for m in msgs]
-            )
-        return
-    _conversations[(user_id or "anon")+":"+cid] = msgs
+        _redis.set(_rkey(cid, user_id, org_id), json.dumps(msgs)); return
+    _sqlite_init()
+    with _sqlite:
+        _sqlite.execute("DELETE FROM messages WHERE cid = ? AND (user_id IS ? OR user_id = ?) AND (org_id IS ? OR org_id = ?)",
+                        (cid, user_id, user_id, org_id, org_id))
+        _sqlite.executemany(
+            "INSERT INTO messages (cid, user_id, org_id, role, content, ts) VALUES (?,?,?,?,?,?)",
+            [(cid, user_id, org_id, m["role"], m["content"], float(m.get("ts", time.time()))) for m in msgs]
+        )
 
-def _delete_thread(cid: str, user_id: Optional[str]) -> None:
-    if _redis: _redis.delete(_rkey(cid, user_id)); return
-    if _use_sqlite():
-        _sqlite_init()
-        with _sqlite: _sqlite.execute("DELETE FROM messages WHERE cid = ? AND (user_id IS ? OR user_id = ?)", (cid, user_id, user_id))
-        return
-    _conversations.pop((user_id or "anon")+":"+cid, None)
+def _delete_thread(cid: str, user_id: Optional[str], org_id: Optional[str]) -> None:
+    if _redis: _redis.delete(_rkey(cid, user_id, org_id)); return
+    _sqlite_init()
+    with _sqlite:
+        _sqlite.execute("DELETE FROM messages WHERE cid = ? AND (user_id IS ? OR user_id = ?) AND (org_id IS ? OR org_id = ?)",
+                        (cid, user_id, user_id, org_id, org_id))
 
 def _all_cids() -> List[str]:
-    if _redis:
-        cids = []
-        cursor = 0
-        while True:
-            cursor, keys = _redis.scan(cursor=cursor, match="conv:*", count=500)
-            cids.extend([k.split(":")[-1] for k in keys])
-            if cursor == 0: break
-        return sorted(set(cids))
-    if _use_sqlite():
-        _sqlite_init()
-        cur = _sqlite.execute("SELECT DISTINCT cid FROM messages ORDER BY cid ASC")
-        return [r["cid"] for r in cur.fetchall()]
-    # memory
-    return sorted(set(k.split(":",1)[1] for k in _conversations.keys()))
+    _sqlite_init()
+    cur = _sqlite.execute("SELECT DISTINCT cid FROM messages ORDER BY cid ASC")
+    return [r["cid"] for r in cur.fetchall()]
 
 def _purge_all() -> Tuple[int, List[str]]:
-    if _redis:
-        keys = _redis.keys("conv:*")
-        cnt = len(keys)
-        if cnt: _redis.delete(*keys)
-        return cnt, [k.split(":")[-1] for k in keys]
-    if _use_sqlite():
-        _sqlite_init()
-        cur = _sqlite.execute("SELECT DISTINCT cid FROM messages")
-        cids = [r["cid"] for r in cur.fetchall()]
-        with _sqlite: _sqlite.execute("DELETE FROM messages")
-        return len(cids), cids
-    cnt = len(_conversations); purged = list(_conversations.keys()); _conversations.clear()
-    return cnt, purged
+    _sqlite_init()
+    cur = _sqlite.execute("SELECT DISTINCT cid FROM messages")
+    cids = [r["cid"] for r in cur.fetchall()]
+    with _sqlite: _sqlite.execute("DELETE FROM messages")
+    return len(cids), cids
 
 # ------------------------- Rate limit & usage -------------------------
 _limiter = None
@@ -163,7 +189,6 @@ def limit(rule: str):
     return deco
 
 def _approx_tokens(s: str) -> int:
-    # very rough: ~4 chars/token
     return max(1, math.ceil(len(s)/4))
 
 def _bump_usage(user_id: Optional[str], n_tokens: int):
@@ -180,29 +205,29 @@ def usage_today():
     val = int(_redis.get(key) or "0")
     return jsonify({"user_id": user_id or None, "tokens_est_today": val})
 
-# ------------------------- Auth (JWT) -------------------------
+# ------------------------- Auth (JWT) + Orgs + Invites -------------------------
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt
 
-def _jwt_issue(user_id: str) -> str:
-    payload = {"sub": user_id, "iat": int(time.time()), "exp": int(time.time()+JWT_DAYS*86400)}
+def _jwt_issue(user_id: str, org_id: Optional[str]) -> str:
+    payload = {"sub": user_id, "org": org_id, "iat": int(time.time()), "exp": int(time.time()+JWT_DAYS*86400)}
     return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
 
-def _jwt_parse(token: str) -> Optional[str]:
+def _jwt_parse(token: str) -> Tuple[Optional[str], Optional[str]]:
     try:
         data = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
-        return data.get("sub")
+        return data.get("sub"), data.get("org")
     except Exception:
-        return None
+        return None, None
 
 def auth_required(fn):
     @wraps(fn)
     def wrap(*a, **k):
         auth = request.headers.get("Authorization","")
         if auth.startswith("Bearer "):
-            user_id = _jwt_parse(auth.split(" ",1)[1])
-            if user_id:
-                request.user_id = user_id
+            uid, org = _jwt_parse(auth.split(" ",1)[1])
+            if uid:
+                request.user_id = uid; request.org_id = org
                 return fn(*a, **k)
         return jsonify({"error":"auth_required"}), 401
     return wrap
@@ -210,41 +235,60 @@ def auth_required(fn):
 def optional_auth(fn):
     @wraps(fn)
     def wrap(*a, **k):
-        user_id = None
+        user_id = org_id = None
         auth = request.headers.get("Authorization","")
         if auth.startswith("Bearer "):
-            user_id = _jwt_parse(auth.split(" ",1)[1])
-        request.user_id = user_id
+            user_id, org_id = _jwt_parse(auth.split(" ",1)[1])
+        request.user_id = user_id; request.org_id = org_id
         return fn(*a, **k)
     return wrap
 
-# users table helpers
-def _user_get_by_email(email: str) -> Optional[sqlite3.Row]:
+def _user_get_by_email(email: str):
     _sqlite_init()
     cur = _sqlite.execute("SELECT * FROM users WHERE email = ?", (email,))
     return cur.fetchone()
 
-def _user_get(user_id: str) -> Optional[sqlite3.Row]:
+def _user_get(user_id: str):
     _sqlite_init()
     cur = _sqlite.execute("SELECT * FROM users WHERE id = ?", (user_id,))
     return cur.fetchone()
 
 @app.post("/auth/register")
+@span("auth.register")
 def auth_register():
     _sqlite_init()
     data = request.get_json(silent=True) or {}
     email = (data.get("email") or "").strip().lower()
     name  = (data.get("name") or "").strip()
     pwd   = (data.get("password") or "")
+    invite_code = (data.get("invite") or "").strip()
     if not (email and pwd): return jsonify({"error":"missing_fields"}), 400
+    if INVITE_REQUIRED and not invite_code: return jsonify({"error":"invite_required"}), 400
     if _user_get_by_email(email): return jsonify({"error":"exists"}), 409
+
+    org_id = None
+    if INVITE_REQUIRED:
+        row = _sqlite.execute("SELECT * FROM invites WHERE code = ?", (invite_code,)).fetchone()
+        if not row or row["used_by"]:
+            return jsonify({"error":"invalid_invite"}), 400
+        org_id = row["org_id"]
+
+    if not org_id:
+        # create personal org on the fly
+        org_id = uuid.uuid4().hex
+        with _sqlite:
+            _sqlite.execute("INSERT INTO orgs (id,name,created) VALUES (?,?,?)", (org_id, f"org-{email}", time.time()))
+
     uid = uuid.uuid4().hex
     with _sqlite:
-        _sqlite.execute("INSERT INTO users (id,email,name,pwd_hash,created) VALUES (?,?,?,?,?)",
-                        (uid, email, name, generate_password_hash(pwd), time.time()))
-    return jsonify({"ok": True, "user_id": uid, "token": _jwt_issue(uid)})
+        _sqlite.execute("INSERT INTO users (id,org_id,email,name,pwd_hash,created) VALUES (?,?,?,?,?,?)",
+                        (uid, org_id, email, name, generate_password_hash(pwd), time.time()))
+        if INVITE_REQUIRED and invite_code:
+            _sqlite.execute("UPDATE invites SET used_by = ? WHERE code = ?", (uid, invite_code))
+    return jsonify({"ok": True, "user_id": uid, "org_id": org_id, "token": _jwt_issue(uid, org_id)})
 
 @app.post("/auth/login")
+@span("auth.login")
 def auth_login():
     data = request.get_json(silent=True) or {}
     email = (data.get("email") or "").strip().lower()
@@ -252,17 +296,37 @@ def auth_login():
     row = _user_get_by_email(email)
     if not row or not check_password_hash(row["pwd_hash"], pwd):
         return jsonify({"error":"invalid_credentials"}), 401
-    return jsonify({"ok": True, "user_id": row["id"], "token": _jwt_issue(row["id"]), "name": row["name"]})
+    return jsonify({"ok": True, "user_id": row["id"], "org_id": row["org_id"], "token": _jwt_issue(row["id"], row["org_id"]), "name": row["name"]})
 
 @app.get("/auth/me")
 @auth_required
 def auth_me():
     row = _user_get(request.user_id)
-    return jsonify({"user_id": row["id"], "email": row["email"], "name": row["name"]})
+    return jsonify({"user_id": row["id"], "org_id": row["org_id"], "email": row["email"], "name": row["name"]})
+
+# Admin: invite codes
+def _require_admin():
+    if not ADMIN_TOKEN: return make_response(jsonify({"error":"admin_disabled"}), 403)
+    tok = request.headers.get("X-Admin-Token") or request.args.get("token")
+    if tok != ADMIN_TOKEN: return make_response(jsonify({"error":"unauthorized"}), 401)
+    return None
+
+@app.post("/api/admin/invite")
+def admin_create_invite():
+    gate = _require_admin()
+    if gate: return gate
+    _sqlite_init()
+    data = request.get_json(silent=True) or {}
+    org_name = (data.get("org_name") or "team").strip()
+    org_id = uuid.uuid4().hex
+    code = uuid.uuid4().hex[:10]
+    with _sqlite:
+        _sqlite.execute("INSERT INTO orgs (id,name,created) VALUES (?,?,?)", (org_id, org_name, time.time()))
+        _sqlite.execute("INSERT INTO invites (code,org_id,created,used_by) VALUES (?,?,?,NULL)", (code, org_id, time.time()))
+    return jsonify({"ok": True, "org_id": org_id, "invite": code})
 
 # ------------------------- Security helpers -------------------------
 import base64 as _b64
-
 def _basic_auth_enabled(): return bool(BASIC_USER and BASIC_PASS)
 def _check_basic_auth(h: str) -> bool:
     if not h or not h.startswith("Basic "): return False
@@ -270,7 +334,6 @@ def _check_basic_auth(h: str) -> bool:
         raw = _b64.b64decode(h.split(" ",1)[1]).decode()
         u,p = raw.split(":",1); return u==BASIC_USER and p==BASIC_PASS
     except Exception: return False
-
 def requires_basic_auth(fn):
     @wraps(fn)
     def wrapper(*a, **k):
@@ -310,7 +373,8 @@ def _json_log():
                 "method": request.method,
                 "ip": request.headers.get("X-Forwarded-For") or request.remote_addr,
                 "cid": request.args.get("cid") or request.headers.get("X-Client-Id"),
-                "user": getattr(request, "user_id", None)
+                "user": getattr(request, "user_id", None),
+                "org": getattr(request, "org_id", None)
             }))
         except Exception:
             pass
@@ -318,14 +382,11 @@ def _json_log():
 # ------------------------- Pages -------------------------
 @app.get("/")
 def home(): return render_template("chat.html", title="Friday AI")
-
 @app.get("/chat")
 def chat_page(): return render_template("chat.html", title="Friday AI")
-
 @app.get("/admin")
 @requires_basic_auth
 def admin_page(): return render_template("admin.html", title="Friday Admin")
-
 @app.get("/login")
 def login_page(): return render_template("login.html", title="Login • Friday")
 
@@ -345,10 +406,10 @@ def routes():
 @app.get("/debug/health")
 @requires_basic_auth
 def health():
-    store = "redis" if _redis else ("sqlite" if _use_sqlite() else "memory")
-    return jsonify({"ok": True, "commit": COMMIT, "model": ACTIVE_MODEL, "store": store, "db_path": DB_PATH if _use_sqlite() else None})
+    store = "redis" if _redis else "sqlite"
+    return jsonify({"ok": True, "commit": COMMIT, "model": ACTIVE_MODEL, "store": store, "pgvector": bool(_pg), "db_path": DB_PATH})
 
-# ------------------------- Utilities -------------------------
+# ------------------------- Utilities/Models -------------------------
 @app.get("/api/ping")
 def ping(): return jsonify({"pong": True, "commit": COMMIT, "now": int(time.time())})
 
@@ -357,10 +418,10 @@ def info():
     return jsonify({
         "commit": COMMIT, "has_openai_key": bool(OPENAI_KEY),
         "active_model": ACTIVE_MODEL, "available_models": AVAILABLE_MODELS,
-        "upload_dir": os.path.abspath(UPLOAD_DIR), "max_upload_mb": MAX_UPLOAD_MB
+        "upload_dir": os.path.abspath(UPLOAD_DIR), "max_upload_mb": MAX_UPLOAD_MB,
+        "pgvector": bool(_pg), "embed_model": EMBED_MODEL, "embed_dim": EMBED_DIM
     })
 
-# ------------------------- Model switch -------------------------
 @app.get("/api/models")
 def list_models(): return jsonify({"active": ACTIVE_MODEL, "available": AVAILABLE_MODELS})
 
@@ -382,6 +443,10 @@ def _openai_chat(user_msg: str, history: Optional[List[Dict[str,str]]] = None) -
         for m in history[-16:]:
             if m["role"] in ("user","assistant"):
                 messages.append({"role": m["role"], "content": m["content"]})
+    # simple "tool call" router: detect weather or calc and return the tool result inline
+    tool_reply = _maybe_tool_call(user_msg)
+    if tool_reply is not None:
+        return tool_reply
     messages.append({"role":"user","content":user_msg})
     resp = client.chat.completions.create(model=ACTIVE_MODEL, messages=messages, temperature=0.6)
     return (resp.choices[0].message.content or "").strip()
@@ -389,8 +454,7 @@ def _openai_chat(user_msg: str, history: Optional[List[Dict[str,str]]] = None) -
 def _openai_embed(texts: List[str]) -> List[List[float]]:
     from openai import OpenAI
     client = OpenAI(api_key=OPENAI_KEY)
-    model = os.getenv("EMBED_MODEL","text-embedding-3-small")
-    r = client.embeddings.create(model=model, input=texts)
+    r = client.embeddings.create(model=EMBED_MODEL, input=texts)
     return [d.embedding for d in r.data]
 
 def _openai_moderate(text: str) -> Dict[str,Any]:
@@ -400,7 +464,38 @@ def _openai_moderate(text: str) -> Dict[str,Any]:
     res = r.results[0]
     return {"flagged": bool(res.flagged), "categories": res.categories}
 
-# ------------------------- Chat + Stream (with guardrails) -------------------------
+# ------------------------- Tool calling (simple) -------------------------
+def _maybe_tool_call(text: str) -> Optional[str]:
+    t = text.strip().lower()
+    # weather
+    m = re.match(r'^(what(?:\'s| is) the )?weather in ([\w\s,.-]+)\??$', t)
+    if m:
+        city = m.group(2).strip()
+        try:
+            from requests import get
+            g = get("https://geocoding-api.open-meteo.com/v1/search", params={"name": city, "count": 1, "language":"en"}).json()
+            if not g.get("results"): return f"I couldn't find {city}."
+            lat = g["results"][0]["latitude"]; lon = g["results"][0]["longitude"]
+            f = get("https://api.open-meteo.com/v1/forecast", params={"latitude":lat,"longitude":lon,"current_weather":True}).json()
+            cw = f.get("current_weather") or {}
+            return f"Weather in {g['results'][0]['name']}: {cw.get('temperature','?')}°C, wind {cw.get('windspeed','?')} km/h."
+        except Exception as e:
+            return f"(weather error) {e!s}"
+    # calculator: "calc 2+2*5"
+    m = re.match(r'^calc\s+(.+)$', t)
+    if m:
+        expr = m.group(1)
+        try:
+            from asteval import Interpreter
+            ae = Interpreter(minimal=True, no_print=True)
+            val = ae(expr)
+            if ae.error: return f"(calc error) {'; '.join(str(e.get_error()) for e in ae.error)}"
+            return f"{expr} = {val}"
+        except Exception as e:
+            return f"(calc error) {e!s}"
+    return None
+
+# ------------------------- Chat + Stream (moderation, usage) -------------------------
 def _cid_from_request() -> str:
     return (request.args.get("cid") or request.headers.get("X-Client-Id") or uuid.uuid4().hex)
 
@@ -410,22 +505,20 @@ def _dev_echo(msg: str) -> str:
 @app.post("/api/chat")
 @optional_auth
 @limit("30/minute")
+@span("api.chat")
 def api_chat():
     data = request.get_json(silent=True) or {}
     user_msg = (data.get("message") or "").strip()
     if not user_msg: return jsonify({"error":"missing_message"}), 400
-    cid = _cid_from_request(); user_id = request.user_id
+    cid = _cid_from_request(); user_id = request.user_id; org_id = request.org_id
 
-    # Guardrails
     if ENABLE_MOD and OPENAI_KEY:
         try:
             m = _openai_moderate(user_msg)
-            if m.get("flagged"):
-                return jsonify({"error":"moderation_flagged","detail":m}), 400
-        except Exception:
-            pass
+            if m.get("flagged"): return jsonify({"error":"moderation_flagged","detail":m}), 400
+        except Exception: pass
 
-    thread = _load_thread(cid, user_id)
+    thread = _load_thread(cid, user_id, org_id)
     thread.append({"role":"user","content":user_msg,"ts":time.time()})
 
     try:
@@ -434,13 +527,14 @@ def api_chat():
         reply = f"(upstream error) {e!s}"
 
     thread.append({"role":"assistant","content":reply,"ts":time.time()})
-    _save_thread(cid, user_id, thread)
+    _save_thread(cid, user_id, org_id, thread)
     _bump_usage(user_id, _approx_tokens(user_msg) + _approx_tokens(reply))
     return jsonify({"reply": reply, "cid": cid})
 
 @app.get("/api/chat/stream")
 @optional_auth
 @limit("30/minute")
+@span("api.chat.stream")
 def chat_stream():
     q = request.args.get("q")
     if not q and request.data:
@@ -448,22 +542,29 @@ def chat_stream():
         except Exception: q = None
     user_msg = (q or "").strip()
     if not user_msg: return jsonify({"error":"missing_message"}), 400
-    cid = _cid_from_request(); user_id = request.user_id
+    cid = _cid_from_request(); user_id = request.user_id; org_id = request.org_id
 
-    # Guardrails
     if ENABLE_MOD and OPENAI_KEY:
         try:
             m = _openai_moderate(user_msg)
             if m.get("flagged"): return jsonify({"error":"moderation_flagged","detail":m}), 400
-        except Exception:
-            pass
+        except Exception: pass
 
-    thread = _load_thread(cid, user_id)
+    thread = _load_thread(cid, user_id, org_id)
     thread.append({"role":"user","content":user_msg,"ts":time.time()})
-    _save_thread(cid, user_id, thread)
+    _save_thread(cid, user_id, org_id, thread)
 
     def gen():
         def send(obj): yield f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
+        # tool short-circuit
+        tool = _maybe_tool_call(user_msg)
+        if tool is not None:
+            assembled = tool
+            yield from send({"delta": assembled}); yield from send({"done": True})
+            thread.append({"role":"assistant","content":assembled,"ts":time.time()})
+            _save_thread(cid, user_id, org_id, thread)
+            _bump_usage(user_id, _approx_tokens(user_msg)+_approx_tokens(assembled))
+            return
 
         if not OPENAI_KEY:
             acc = ""
@@ -487,13 +588,12 @@ def chat_stream():
                 assembled.append(delta); yield from send({"delta": delta})
         reply = "".join(assembled).strip()
         thread.append({"role":"assistant","content":reply,"ts":time.time()})
-        _save_thread(cid, user_id, thread)
+        _save_thread(cid, user_id, org_id, thread)
         _bump_usage(user_id, _approx_tokens(user_msg)+_approx_tokens(reply))
         yield from send({"done": True})
-
     return Response(gen(), mimetype="text/event-stream")
 
-# ------------------------- Moderation API -------------------------
+# ------------------------- Moderation/Image -------------------------
 @app.post("/api/moderate")
 def moderate():
     text = (request.get_json(silent=True) or {}).get("text","")
@@ -504,7 +604,6 @@ def moderate():
     except Exception as e:
         return jsonify({"error":"upstream_error","detail":str(e)}), 502
 
-# ------------------------- Text-to-Image -------------------------
 @app.post("/api/image")
 def image_generate():
     data = request.get_json(silent=True) or {}
@@ -523,8 +622,16 @@ def image_generate():
     except Exception as e:
         return jsonify({"error":"upstream_error","detail":str(e)}), 502
 
-# ------------------------- Files (upload/list/delete) -------------------------
+# ------------------------- Files (per-user buckets) -------------------------
+def _user_bucket_path(user_id: Optional[str], org_id: Optional[str]) -> str:
+    u = user_id or "anon"
+    o = org_id or "noorg"
+    p = os.path.join(UPLOAD_DIR, o, u)
+    os.makedirs(p, exist_ok=True)
+    return p
+
 @app.post("/api/files")
+@optional_auth
 def files_upload():
     if "file" not in request.files: return jsonify({"error":"missing_file"}), 400
     f = request.files["file"]
@@ -534,27 +641,30 @@ def files_upload():
         return jsonify({"error":"file_too_large","max_mb":MAX_UPLOAD_MB}), 413
     ext = os.path.splitext(f.filename)[1]
     name = f"{uuid.uuid4().hex}{ext}"
-    path = os.path.join(UPLOAD_DIR, name)
+    path = os.path.join(_user_bucket_path(request.user_id, request.org_id), name)
     f.save(path)
     return jsonify({"ok": True, "filename": name, "size": size})
 
 @app.get("/api/files")
+@optional_auth
 def files_list():
+    bucket = _user_bucket_path(request.user_id, request.org_id)
     files = []
-    for fn in sorted(os.listdir(UPLOAD_DIR)):
-        p = os.path.join(UPLOAD_DIR, fn)
-        if os.path.isfile(p):
-            files.append({"name": fn, "size": os.path.getsize(p)})
+    if os.path.isdir(bucket):
+        for fn in sorted(os.listdir(bucket)):
+            p = os.path.join(bucket, fn)
+            if os.path.isfile(p):
+                files.append({"name": fn, "size": os.path.getsize(p)})
     return jsonify({"files": files})
 
 @app.delete("/api/files")
+@optional_auth
 def files_delete():
     name = request.args.get("name")
     if not name: return jsonify({"error":"missing_name"}), 400
-    p = os.path.join(UPLOAD_DIR, name)
+    p = os.path.join(_user_bucket_path(request.user_id, request.org_id), name)
     if not os.path.isfile(p): return jsonify({"error":"not_found"}), 404
-    os.remove(p)
-    return jsonify({"ok": True, "deleted": name})
+    os.remove(p); return jsonify({"ok": True, "deleted": name})
 
 @app.get("/static/<path:filename>")
 @requires_basic_auth
@@ -563,12 +673,12 @@ def static_files(filename):
     resp.headers["Cache-Control"] = "public, max-age=3600"
     return resp
 
-# ------------------------- History (per-user) -------------------------
+# ------------------------- History -------------------------
 @app.get("/api/history")
 @optional_auth
 def get_history():
     cid = _cid_from_request()
-    msgs = _load_thread(cid, request.user_id)
+    msgs = _load_thread(cid, request.user_id, request.org_id)
     if not msgs: return jsonify({"error":"no_conversation"}), 404
     return jsonify({"messages": msgs, "cid": cid})
 
@@ -576,7 +686,7 @@ def get_history():
 @optional_auth
 def export_history():
     cid = _cid_from_request()
-    msgs = _load_thread(cid, request.user_id)
+    msgs = _load_thread(cid, request.user_id, request.org_id)
     return jsonify({"cid": cid, "count": len(msgs), "model": ACTIVE_MODEL,
                     "commit": COMMIT, "exported_at": datetime.utcnow().isoformat()+"Z", "messages": msgs})
 
@@ -585,7 +695,7 @@ def export_history():
 def export_history_file():
     cid = _cid_from_request()
     payload = {"cid": cid, "model": ACTIVE_MODEL, "commit": COMMIT,
-               "exported_at": datetime.utcnow().isoformat()+"Z", "messages": _load_thread(cid, request.user_id)}
+               "exported_at": datetime.utcnow().isoformat()+"Z", "messages": _load_thread(cid, request.user_id, request.org_id)}
     blob = json.dumps(payload, ensure_ascii=False, indent=2)
     resp = make_response(blob)
     resp.headers["Content-Type"] = "application/json; charset=utf-8"
@@ -605,23 +715,17 @@ def import_history():
         if role not in ("user","assistant","system"): continue
         content = str(m.get("content","")); ts = float(m.get("ts", time.time()))
         cleaned.append({"role": role, "content": content, "ts": ts})
-    _save_thread(cid, request.user_id, cleaned)
+    _save_thread(cid, request.user_id, request.org_id, cleaned)
     return jsonify({"ok": True, "cid": cid, "count": len(cleaned)})
 
 @app.delete("/api/history")
 @optional_auth
 def clear_history():
     cid = _cid_from_request()
-    _delete_thread(cid, request.user_id)
+    _delete_thread(cid, request.user_id, request.org_id)
     return jsonify({"ok": True, "cid": cid})
 
-# ------------------------- Admin (backup/restore) -------------------------
-def _require_admin():
-    if not ADMIN_TOKEN: return make_response(jsonify({"error":"admin_disabled"}), 403)
-    tok = request.headers.get("X-Admin-Token") or request.args.get("token")
-    if tok != ADMIN_TOKEN: return make_response(jsonify({"error":"unauthorized"}), 401)
-    return None
-
+# ------------------------- Admin (existing) -------------------------
 @app.get("/api/admin/cids")
 def admin_cids():
     gate = _require_admin()
@@ -635,14 +739,7 @@ def admin_purge_one():
     if gate: return gate
     cid = request.args.get("cid")
     if not cid: return jsonify({"error":"missing_cid"}), 400
-    # purge for all users who used this cid
-    if _use_sqlite():
-        _sqlite_init()
-        with _sqlite: _sqlite.execute("DELETE FROM messages WHERE cid = ?", (cid,))
-    else:
-        # redis/memory: blunt instrument
-        for u in (None, "anon"):
-            _delete_thread(cid, None)
+    _delete_thread(cid, None, None)
     return jsonify({"ok": True, "purged": cid})
 
 @app.delete("/api/admin/purge_all")
@@ -652,63 +749,7 @@ def admin_purge_all():
     count, purged = _purge_all()
     return jsonify({"ok": True, "purged_count": count, "purged": purged})
 
-@app.get("/api/admin/backup")
-def admin_backup():
-    gate = _require_admin()
-    if gate: return gate
-    out = {}
-    if _use_sqlite():
-        _sqlite_init()
-        cur = _sqlite.execute("SELECT DISTINCT cid FROM messages")
-        for r in cur.fetchall():
-            cid = r["cid"]; out[cid] = _load_thread(cid, None)  # anonymous superset
-    else:
-        for cid in _all_cids(): out[cid] = _load_thread(cid, None)
-    return jsonify({
-        "ok": True, "generated_at": datetime.utcnow().isoformat()+"Z",
-        "model": ACTIVE_MODEL, "commit": COMMIT,
-        "sessions": out, "count": len(out),
-        "messages_total": sum(len(v) for v in out.values()),
-    })
-
-@app.get("/api/admin/backup_file")
-def admin_backup_file():
-    gate = _require_admin()
-    if gate: return gate
-    payload = (admin_backup().json if hasattr(admin_backup(), "json") else None)
-    if payload is None:
-        out = {cid: _load_thread(cid, None) for cid in _all_cids()}
-        payload = {"ok": True, "generated_at": datetime.utcnow().isoformat()+"Z",
-                   "model": ACTIVE_MODEL, "commit": COMMIT, "sessions": out}
-    blob = json.dumps(payload, ensure_ascii=False, indent=2)
-    resp = make_response(blob)
-    resp.headers["Content-Type"] = "application/json; charset=utf-8"
-    resp.headers["Content-Disposition"] = f'attachment; filename="friday_backup_{int(time.time())}.json"'
-    return resp
-
-@app.post("/api/admin/restore")
-def admin_restore():
-    gate = _require_admin()
-    if gate: return gate
-    data = request.get_json(silent=True) or {}
-    sessions = data.get("sessions"); merge = bool(data.get("merge", False))
-    if not isinstance(sessions, dict):
-        return jsonify({"error":"invalid_payload","detail":"sessions must be an object"}), 400
-    if not merge: _purge_all()
-    written_sessions = 0; written_msgs = 0
-    for cid, msgs in sessions.items():
-        cleaned = []
-        for m in msgs:
-            role = (m.get("role") or "").strip()
-            if role not in ("user","assistant","system"): continue
-            content = str(m.get("content","")); ts = float(m.get("ts", time.time()))
-            cleaned.append({"role": role, "content": content, "ts": ts})
-        _save_thread(cid, None, cleaned)
-        written_sessions += 1; written_msgs += len(cleaned)
-    return jsonify({"ok": True, "merge": merge,
-                    "sessions_written": written_sessions, "messages_written": written_msgs})
-
-# ------------------------- RAG: ingest + search -------------------------
+# ------------------------- RAG: ingest + search (pgvector if PG_URL set) -------------------------
 def _cosine(a: List[float], b: List[float]) -> float:
     if not a or not b or len(a)!=len(b): return 0.0
     dot = sum(x*y for x,y in zip(a,b))
@@ -726,11 +767,20 @@ def rag_ingest():
     content = (data.get("text") or "").strip()
     if not content: return jsonify({"error":"missing_text"}), 400
     vec = _openai_embed([content])[0]
-    _sqlite_init()
-    with _sqlite:
-        _sqlite.execute("INSERT INTO docs (id,user_id,name,content,embedding,created) VALUES (?,?,?,?,?,?)",
-                        (uuid.uuid4().hex, request.user_id, name, content, json.dumps(vec), time.time()))
-    return jsonify({"ok": True, "name": name, "tokens_est": _approx_tokens(content)})
+    if _pg:
+        import psycopg
+        with _pg.cursor() as cur:
+            cur.execute(
+                "INSERT INTO rag_chunks (id,user_id,org_id,name,content,embedding) VALUES (%s,%s,%s,%s,%s,%s)",
+                (uuid.uuid4().hex, request.user_id, request.org_id, name, content, vec)
+            )
+        return jsonify({"ok": True, "name": name, "store":"pgvector"})
+    else:
+        _sqlite_init()
+        with _sqlite:
+            _sqlite.execute("INSERT INTO docs (id,user_id,org_id,name,content,embedding,created) VALUES (?,?,?,?,?,?,?)",
+                            (uuid.uuid4().hex, request.user_id, request.org_id, name, content, json.dumps(vec), time.time()))
+        return jsonify({"ok": True, "name": name, "store":"sqlite"})
 
 @app.get("/api/rag/search")
 @auth_required
@@ -738,22 +788,36 @@ def rag_search():
     q = (request.args.get("q") or "").strip()
     k = int(request.args.get("k","3"))
     if not q: return jsonify({"error":"missing_q"}), 400
-    qv = _openai_embed([q])[0] if OPENAI_KEY else []
-    _sqlite_init()
-    cur = _sqlite.execute("SELECT id,name,content,embedding,created FROM docs WHERE user_id = ? ORDER BY created DESC LIMIT 500", (request.user_id,))
-    rows = cur.fetchall()
-    scored = []
-    for r in rows:
-        try:
-            v = json.loads(r["embedding"])
-            score = _cosine(qv, v) if qv else 0.0
-            scored.append({"id": r["id"], "name": r["name"], "snippet": r["content"][:300], "score": round(score,4)})
-        except Exception:
-            continue
-    scored.sort(key=lambda x: x["score"], reverse=True)
-    return jsonify({"q": q, "k": k, "results": scored[:k]})
+    if _pg:
+        qv = _openai_embed([q])[0] if OPENAI_KEY else [0.0]*EMBED_DIM
+        with _pg.cursor() as cur:
+            cur.execute("""
+                SELECT id,name,content, 1 - (embedding <=> %s) AS score
+                FROM rag_chunks
+                WHERE (user_id = %s OR user_id IS NULL) AND (org_id = %s OR org_id IS NULL)
+                ORDER BY embedding <=> %s
+                LIMIT %s
+            """, (qv, request.user_id, request.org_id, qv, k))
+            rows = cur.fetchall()
+            results = [{"id": r[0], "name": r[1], "snippet": r[2][:300], "score": float(r[3])} for r in rows]
+        return jsonify({"q": q, "k": k, "store":"pgvector", "results": results})
+    else:
+        qv = _openai_embed([q])[0] if OPENAI_KEY else []
+        _sqlite_init()
+        cur = _sqlite.execute("SELECT id,name,content,embedding,created FROM docs WHERE (user_id IS ? OR user_id = ?) AND (org_id IS ? OR org_id = ?) ORDER BY created DESC LIMIT 500",
+                              (request.user_id, request.user_id, request.org_id, request.org_id))
+        rows = cur.fetchall()
+        scored = []
+        for r in rows:
+            try:
+                v = json.loads(r["embedding"])
+                scored.append({"id": r["id"], "name": r["name"], "snippet": r["content"][:300], "score": round(_cosine(qv, v),4)})
+            except Exception:
+                continue
+        scored.sort(key=lambda x: x["score"], reverse=True)
+        return jsonify({"q": q, "k": k, "store":"sqlite", "results": scored[:k]})
 
-# ------------------------- Tools: Weather (no key) -------------------------
+# ------------------------- Tools exposed -------------------------
 @app.get("/api/tools/weather")
 def tool_weather():
     import requests
@@ -763,10 +827,23 @@ def tool_weather():
         g = requests.get("https://geocoding-api.open-meteo.com/v1/search", params={"name": city, "count": 1, "language":"en"}).json()
         if not g.get("results"): return jsonify({"error":"not_found"}), 404
         lat = g["results"][0]["latitude"]; lon = g["results"][0]["longitude"]
-        f = requests.get("https://api.open-meteo.com/v1/forecast", params={"latitude":lat,"longitude":lon,"hourly":"temperature_2m","current_weather":True}).json()
+        f = requests.get("https://api.open-meteo.com/v1/forecast", params={"latitude":lat,"longitude":lon,"current_weather":True}).json()
         return jsonify({"city": g["results"][0]["name"], "lat":lat, "lon":lon, "current": f.get("current_weather")})
     except Exception as e:
         return jsonify({"error":"upstream_error","detail":str(e)}), 502
+
+@app.get("/api/tools/calc")
+def tool_calc():
+    expr = (request.args.get("q") or "").strip()
+    if not expr: return jsonify({"error":"missing_q"}), 400
+    try:
+        from asteval import Interpreter
+        ae = Interpreter(minimal=True, no_print=True)
+        val = ae(expr)
+        if ae.error: return jsonify({"error":"calc_error","detail": '; '.join(str(e.get_error()) for e in ae.error)}), 400
+        return jsonify({"expr": expr, "value": val})
+    except Exception as e:
+        return jsonify({"error":"calc_error","detail": str(e)}), 400
 
 # ------------------------- Errors -------------------------
 @app.errorhandler(404)
