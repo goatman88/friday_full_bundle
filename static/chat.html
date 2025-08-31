@@ -63,58 +63,101 @@
         <input id="project" placeholder="project" value="default" style="width:160px" title="namespace your docs/chats">
         <select id="model" style="width:200px"></select>
         <select id="preset" style="width:180px"></select>
-        <label class="row" style="gap:6px"><input type="checkbox" id="useStream" checked> Stream (tools)</label>
+        <label class="row" style="gap:6px"><input type="checkbox" id="useStream" checked> Stream</label>
+        <label class="row" style="gap:6px"><input type="checkbox" id="useMemory" checked> Use memory</label>
         <button id="btnClear" class="pill" title="clear history">Clear</button>
       </div>
-      <textarea id="input" placeholder="Ask anything… ‘summarize the uploaded PDF on page 3’, ‘weather in Chicago’, ‘search NVIDIA earnings’"></textarea>
+      <textarea id="input" placeholder="Ask anything… include preferences, I’ll remember."></textarea>
       <div class="row">
         <button id="send" class="primary">Send</button>
-        <small id="hint">Tip: switch <code>project</code> to keep work streams separate.</small>
+        <small id="hint">Tip: toggle “Use memory” to compare answers with/without LTM.</small>
       </div>
     </div>
     <div class="messages" id="messages"></div>
     <div class="log" id="log"></div>
   </div>
 
-  <!-- RAG -->
-  <div class="card">
-    <div class="section col">
-      <div class="row" style="justify-content:space-between">
-        <strong>Documents (RAG)</strong>
-        <div class="row">
-          <button id="btnList" class="pill">List</button>
-          <button id="btnExport" class="pill">Export CSV</button>
-          <button id="btnClearRag" class="pill danger" title="remove all vectors">Clear All</button>
+  <!-- Right column: RAG + Memory -->
+  <div class="col" style="gap:16px">
+    <!-- RAG card (unchanged) -->
+    <div class="card">
+      <div class="section col">
+        <div class="row" style="justify-content:space-between">
+          <strong>Documents (RAG)</strong>
+          <div class="row">
+            <button id="btnList" class="pill">List</button>
+            <button id="btnExport" class="pill">Export CSV</button>
+            <button id="btnClearRag" class="pill danger" title="remove all vectors">Clear All</button>
+          </div>
+        </div>
+
+        <div id="drop">
+          <div class="k">Drag & drop (.txt .md .csv .pdf .docx) or</div>
+          <input id="fileInput" type="file" multiple>
+          <div style="margin-top:6px"><button id="btnUpload">Upload & Index</button></div>
+          <div class="k" id="uploadStatus" style="margin-top:6px"></div>
+        </div>
+
+        <div class="col" style="gap:6px;border:1px dashed var(--border);padding:10px;border-radius:10px;margin-top:10px">
+          <div class="k">Paste text</div>
+          <input id="pasteFilename" placeholder="filename (optional)" style="width:60%">
+          <textarea id="pasteText" placeholder="Paste raw text to index…"></textarea>
+          <button id="btnIndexText">Index Pasted Text</button>
+        </div>
+
+        <div class="row" style="margin-top:6px">
+          <input id="ragQuery" placeholder="RAG search query…" style="flex:1">
+          <input id="ragK" type="number" min="1" max="10" value="4" style="width:80px">
+          <button id="btnRagSearch" class="primary">Search</button>
+        </div>
+
+        <div style="margin-top:10px">
+          <div class="k" style="margin:6px 0">Indexed Files</div>
+          <div class="files" id="files"></div>
+        </div>
+
+        <div class="k" style="margin-top:10px">Results</div>
+        <div id="ragResult" style="max-height:40vh;overflow:auto"></div>
+      </div>
+    </div>
+
+    <!-- Memory card -->
+    <div class="card">
+      <div class="section col">
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <strong>Long-Term Memory</strong>
+          <div class="row">
+            <button id="btnMemLoad" class="pill">Load</button>
+            <button id="btnMemSave" class="pill">Save</button>
+            <button id="btnMemClear" class="pill danger">Clear</button>
+          </div>
+        </div>
+
+        <div class="col">
+          <div class="k">Profile</div>
+          <textarea id="memProfile" placeholder="who you are, preferences, constraints"></textarea>
+        </div>
+
+        <div class="col">
+          <div class="k">Goals (one per line)</div>
+          <textarea id="memGoals" placeholder="goal 1\ngoal 2"></textarea>
+        </div>
+
+        <div class="col">
+          <div class="k">Facts (one per line)</div>
+          <textarea id="memFacts" placeholder="prefers morning workouts\nuses Windows & PowerShell"></textarea>
+        </div>
+
+        <div class="col">
+          <div class="k">Glossary (key: value)</div>
+          <textarea id="memGloss" placeholder="FRIDAY: Your assistant\nAAR: After Action Review"></textarea>
+        </div>
+
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <button id="btnMemExtract" class="pill">Extract from Recent Chat</button>
+          <small class="k">Saved per username + project</small>
         </div>
       </div>
-
-      <div id="drop">
-        <div class="k">Drag & drop (.txt .md .csv .pdf .docx) or</div>
-        <input id="fileInput" type="file" multiple>
-        <div style="margin-top:6px"><button id="btnUpload">Upload & Index</button></div>
-        <div class="k" id="uploadStatus" style="margin-top:6px"></div>
-      </div>
-
-      <div class="col" style="gap:6px;border:1px dashed var(--border);padding:10px;border-radius:10px;margin-top:10px">
-        <div class="k">Paste text</div>
-        <input id="pasteFilename" placeholder="filename (optional)" style="width:60%">
-        <textarea id="pasteText" placeholder="Paste raw text to index…"></textarea>
-        <button id="btnIndexText">Index Pasted Text</button>
-      </div>
-
-      <div class="row" style="margin-top:6px">
-        <input id="ragQuery" placeholder="RAG search query…" style="flex:1">
-        <input id="ragK" type="number" min="1" max="10" value="4" style="width:80px">
-        <button id="btnRagSearch" class="primary">Search</button>
-      </div>
-
-      <div style="margin-top:10px">
-        <div class="k" style="margin:6px 0">Indexed Files</div>
-        <div class="files" id="files"></div>
-      </div>
-
-      <div class="k" style="margin-top:10px">Results</div>
-      <div id="ragResult" style="max-height:40vh;overflow:auto"></div>
     </div>
   </div>
 </main>
@@ -144,6 +187,7 @@ function addMsg(role, text, citations){
 
 function getUser(){ return ($("#username").value||"guest").trim() || "guest"; }
 function getProj(){ return ($("#project").value||"default").trim() || "default"; }
+function updateProjectPill(){ $("#projectPill").textContent = "project: " + getProj(); }
 
 async function loadModels(){
   const u=getUser();
@@ -159,7 +203,6 @@ async function saveModel(){
   await fetch("/api/model",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u, model:m})});
   $("#modelPill").textContent = "model: "+m;
 }
-
 async function loadPresets(){
   const u=getUser();
   const r = await fetch(`/api/presets?username=${encodeURIComponent(u)}`); const j = await r.json();
@@ -174,12 +217,10 @@ async function savePreset(){
   await fetch("/api/presets",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u, preset:p})});
   $("#presetPill").textContent = "preset: "+p;
 }
-
 async function loadRate(){
   const r = await fetch("/api/metrics"); const j = await r.json();
   const rl = j.rate_limit||{}; $("#rlPill").textContent = `rate: ${rl.remaining ?? "?"} left — ${j.backend||"redis"}`;
 }
-function updateProjectPill(){ $("#projectPill").textContent = "project: " + getProj(); }
 
 $("#model").addEventListener("change", saveModel);
 $("#preset").addEventListener("change", savePreset);
@@ -195,13 +236,14 @@ async function send(){
   const q = $("#input").value.trim(); if(!q) return;
   const u = getUser(); const p = getProj();
   const model = $("#model").value; const preset = $("#preset").value;
+  const useMemory = $("#useMemory").checked;
 
   addMsg("user", q);
   $("#input").value="";
   $("#log").textContent = "";
 
   if($("#useStream").checked){
-    const url = `/api/chat/stream_tools?message=${encodeURIComponent(q)}&username=${encodeURIComponent(u)}&project=${encodeURIComponent(p)}&model=${encodeURIComponent(model)}&preset=${encodeURIComponent(preset)}`;
+    const url = `/api/chat/stream_tools?message=${encodeURIComponent(q)}&username=${encodeURIComponent(u)}&project=${encodeURIComponent(p)}&model=${encodeURIComponent(model)}&preset=${encodeURIComponent(preset)}&use_memory=${useMemory}`;
     const es = new EventSource(url);
     let bot = document.createElement("div");
     bot.className="msg bot"; bot.innerHTML="<small>assistant</small><pre></pre>";
@@ -233,7 +275,7 @@ async function send(){
     };
     es.onerror = ()=>{ es.close(); log("stream error"); };
   } else {
-    const r = await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({message:q, username:u, project:p, model, preset})});
+    const r = await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({message:q, username:u, project:p, model, preset, use_memory: useMemory})});
     const j = await r.json();
     addMsg("bot", j.reply || j.error || "(no reply)", j.citations || []);
     if(j.traces){ j.traces.forEach(t=> log(`→ tool: ${t.tool}`, t.args||{}, t.result||{})); }
@@ -253,7 +295,6 @@ drop.addEventListener("drop", async (e)=>{
   if(!e.dataTransfer || !e.dataTransfer.files?.length) return;
   await doUpload(e.dataTransfer.files);
 });
-
 $("#btnUpload").onclick = async ()=>{ await doUpload($("#fileInput").files); };
 
 async function doUpload(fileList){
@@ -267,7 +308,6 @@ async function doUpload(fileList){
   $("#uploadStatus").textContent = j.ok ? `Indexed ${j.added} chunks across ${j.files?.length||0} files (${j.backend}).` : (j.error || "upload failed");
   await refreshFiles();
 }
-
 $("#btnIndexText").onclick = async ()=>{
   const u=getUser(), p=getProj();
   const fn= $("#pasteFilename").value.trim() || "";
@@ -278,7 +318,6 @@ $("#btnIndexText").onclick = async ()=>{
   $("#ragResult").textContent = j.ok ? `Indexed ${j.added} chunks from ${j.filename}` : (j.error || "index failed");
   await refreshFiles();
 };
-
 $("#btnRagSearch").onclick = async ()=>{
   const u=getUser(), p=getProj();
   const q=$("#ragQuery").value.trim(); const k= $("#ragK").value || 4;
@@ -286,19 +325,16 @@ $("#btnRagSearch").onclick = async ()=>{
   const r = await fetch(`/api/rag/search?username=${encodeURIComponent(u)}&project=${encodeURIComponent(p)}&query=${encodeURIComponent(q)}&k=${encodeURIComponent(k)}`);
   renderMatches(await r.json());
 };
-
 $("#btnList").onclick = async ()=>{ await listDocs(); };
 async function listDocs(){
   const u=getUser(), p=getProj();
   const r = await fetch(`/api/rag/list?username=${encodeURIComponent(u)}&project=${encodeURIComponent(p)}&limit=50`);
   renderList(await r.json());
 }
-
 $("#btnExport").onclick = ()=>{
   const u=getUser(), p=getProj();
   window.location = `/api/rag/export_csv?username=${encodeURIComponent(u)}&project=${encodeURIComponent(p)}`;
 };
-
 $("#btnClearRag").onclick = async ()=>{
   const u=getUser(), p=getProj();
   const r = await fetch("/api/rag/clear",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u, project:p})});
@@ -308,14 +344,12 @@ $("#btnClearRag").onclick = async ()=>{
 };
 
 function fmtWhen(ts){ try{ return new Date(ts*1000).toLocaleString(); }catch(_){ return "" } }
-
 function renderFiles(list){
   const box=$("#files"); box.innerHTML="";
   if(!list || !list.files || !list.files.length){ box.textContent="(no files yet)"; return; }
   list.files.forEach(meta=>{
     const row=document.createElement("div"); row.className="file-row";
     const left=document.createElement("div");
-    const pgHint = meta.pages ? ` • pages ${meta.pages}` : "";
     left.innerHTML = `<div><strong>${escapeHTML(meta.filename||"")}</strong></div><div class="k">${escapeHTML(meta.file_id||"")} • ${meta.chunks||0} chunks • ${fmtWhen(meta.ts||0)}</div>`;
     const del=document.createElement("button"); del.className="pill danger"; del.textContent="Delete";
     del.onclick = async ()=>{
@@ -330,7 +364,6 @@ function renderFiles(list){
     box.appendChild(row);
   });
 }
-
 function renderList(list){
   const div=$("#ragResult"); div.innerHTML="";
   if(!list || !list.sample){ div.textContent="(no docs)"; return; }
@@ -350,7 +383,6 @@ function renderList(list){
   });
   div.appendChild(table);
 }
-
 function renderMatches(res){
   const div=$("#ragResult"); div.innerHTML="";
   if(!res || !res.matches || !res.matches.length){ div.textContent="(no matches)"; return; }
@@ -371,18 +403,56 @@ function renderMatches(res){
   });
   div.appendChild(table);
 }
-
 async function refreshFiles(){
   const u=getUser(), p=getProj();
   const r = await fetch(`/api/rag/files?username=${encodeURIComponent(u)}&project=${encodeURIComponent(p)}`);
   renderFiles(await r.json());
 }
 
+// ---------- MEMORY UI ----------
+$("#btnMemLoad").onclick = async ()=>{ await memLoad(); };
+$("#btnMemSave").onclick = async ()=>{ await memSave(); };
+$("#btnMemClear").onclick = async ()=>{ await memClear(); };
+$("#btnMemExtract").onclick = async ()=>{ await memExtract(); };
+
+async function memLoad(){
+  const u=getUser(), p=getProj();
+  const r = await fetch(`/api/memory?username=${encodeURIComponent(u)}&project=${encodeURIComponent(p)}`);
+  const j = await r.json();
+  const m = (j.memory)||{};
+  $("#memProfile").value = m.profile || "";
+  $("#memGoals").value   = (m.goals||[]).join("\n");
+  $("#memFacts").value   = (m.facts||[]).join("\n");
+  $("#memGloss").value   = Object.entries(m.glossary||{}).map(([k,v])=>`${k}: ${v}`).join("\n");
+}
+async function memSave(){
+  const u=getUser(), p=getProj();
+  const profile = $("#memProfile").value.trim();
+  const goals   = $("#memGoals").value.split("\n").map(s=>s.trim()).filter(Boolean);
+  const facts   = $("#memFacts").value.split("\n").map(s=>s.trim()).filter(Boolean);
+  const gloss   = {};
+  $("#memGloss").value.split("\n").forEach(line=>{
+    const i=line.indexOf(":"); if(i>0){ const k=line.slice(0,i).trim(); const v=line.slice(i+1).trim(); if(k) gloss[k]=v; }
+  });
+  const r = await fetch("/api/memory/upsert",{method:"POST",headers:{"Content-Type":"application/json"},
+              body: JSON.stringify({username:u, project:p, profile, goals, facts, glossary: gloss})});
+  const j = await r.json(); log("memory saved", j.ok);
+}
+async function memClear(){
+  const u=getUser(), p=getProj();
+  const r = await fetch("/api/memory/clear",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u, project:p})});
+  await r.json(); await memLoad(); log("memory cleared");
+}
+async function memExtract(){
+  const u=getUser(), p=getProj();
+  const r = await fetch("/api/memory/extract",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u, project:p})});
+  const j = await r.json(); if(j.ok){ await memLoad(); } log("extract", j);
+}
+
 // boot
-(async function init(){
+(function init(){
   updateProjectPill();
-  await Promise.all([loadModels(), loadPresets(), loadRate()]);
-  await refreshFiles();
+  Promise.all([loadModels(), loadPresets(), loadRate(), refreshFiles(), memLoad()]);
 })();
 </script>
 </body>
