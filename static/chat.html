@@ -2,292 +2,169 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Friday AI • Chat</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Friday Chat</title>
 <style>
-  :root { --bg:#0f172a; --panel:#0b1226; --muted:#94a3b8; --text:#e2e8f0; --accent:#60a5fa; --accent2:#a78bfa; --ok:#10b981; --warn:#f59e0b; --err:#ef4444; }
+  :root { --bg:#0f172a; --panel:#0b1226; --text:#e2e8f0; --muted:#94a3b8; --border:rgba(255,255,255,.08); }
   *{box-sizing:border-box}
-  body{margin:0;background:radial-gradient(1200px 1200px at 10% -20%, #1d2b54 0, transparent 55%),var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,Segoe UI,Inter,Roboto,Arial,sans-serif}
-  header{position:sticky;top:0;display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 16px;background:linear-gradient(180deg, rgba(15,23,42,.9), rgba(15,23,42,.55) 70%, transparent);backdrop-filter:blur(6px);border-bottom:1px solid rgba(255,255,255,.06)}
-  .brand{display:flex;gap:10px;align-items:center;font-weight:700}
-  .badge{font-size:12px;color:#cbd5e1;border:1px solid rgba(148,163,184,.35);padding:2px 8px;border-radius:999px}
-  .live{border-color: rgba(16,185,129,.5); color:#d1fae5;}
-  .dev{border-color: rgba(245,158,11,.5); color:#fef3c7;}
-  main{max-width:1100px;margin:16px auto 120px;padding:0 16px}
-  #chat{border:1px solid rgba(255,255,255,.07);border-radius:16px;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,.25)}
-  .toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:10px;background:rgba(255,255,255,.02);border-bottom:1px solid rgba(255,255,255,.06)}
-  .toolbar input,.toolbar select,.toolbar button{background:#0b1226;color:var(--text);border:1px solid rgba(255,255,255,.1);padding:8px 10px;border-radius:10px;outline:none}
-  .toolbar button.btn{background:linear-gradient(135deg,var(--accent),var(--accent2));border:none;font-weight:600}
-  .muted{color:var(--muted);font-size:12px}
-  .hint{font-size:12px;color:#cbd5e1;margin-left:6px}
-  #log{max-height:58vh;overflow:auto;padding:12px}
-  .msg{margin:0 0 12px;padding:10px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.07);white-space:pre-wrap}
-  .u{background:rgba(96,165,250,.08);border-color:rgba(96,165,250,.25)}
-  .a{background:rgba(167,139,250,.08);border-color:rgba(167,139,250,.25)}
-  .meta{font-size:12px;color:var(--muted);margin-bottom:6px}
-  .trace{background:rgba(255,255,255,.03); border:1px dashed rgba(255,255,255,.15); padding:8px 10px; border-radius:8px; margin-top:6px; font-size:12px; color:#d1d5db}
-  .composer{display:flex;gap:10px;padding:10px;background:rgba(255,255,255,.02);border-top:1px solid rgba(255,255,255,.06)}
-  #input{flex:1;background:#0b1226;border:1px solid rgba(255,255,255,.1);border-radius:12px;color:var(--text);padding:12px 14px;min-height:46px;max-height:160px;resize:vertical}
-  .send{min-width:98px;border-radius:12px;border:none;background:linear-gradient(135deg,var(--accent),var(--accent2));color:white;font-weight:700}
-  .pill{padding:2px 8px;border-radius:999px;border:1px solid rgba(255,255,255,.15); font-size:12px}
-  .ok{border-color:rgba(16,185,129,.45); color:#d1fae5}
-  .warn{border-color:rgba(245,158,11,.45); color:#fde68a}
-  .links a{color:#94a3b8;text-decoration:none;margin-left:10px;font-size:13px}
-  .links a:hover{color:#e2e8f0}
-  .admin-only{display:none}
-  .admin-on .admin-only{display:inline-flex}
+  body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,Segoe UI,Inter,Roboto,Arial}
+  header{position:sticky;top:0;z-index:10;background:rgba(15,23,42,.8);backdrop-filter:saturate(1.2) blur(6px);
+         border-bottom:1px solid var(--border);display:flex;gap:12px;align-items:center;padding:10px 14px}
+  header .title{font-weight:700}
+  main{max-width:1200px;margin:16px auto;padding:0 16px;display:grid;grid-template-columns:2fr 1fr;gap:16px}
+  @media (max-width:980px){ main{grid-template-columns:1fr} }
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:14px;overflow:hidden}
+  .section{padding:12px}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  input, select, button, textarea{background:var(--panel);color:var(--text);border:1px solid rgba(255,255,255,.15);border-radius:10px;padding:8px 10px}
+  input, select{height:36px}
+  textarea{width:100%;min-height:80px;resize:vertical}
+  button.primary{background:linear-gradient(135deg,#60a5fa,#a78bfa);border:none;font-weight:700}
+  .col{display:flex;flex-direction:column;gap:8px}
+  .messages{padding:10px 12px;max-height:58vh;overflow:auto}
+  .msg{padding:10px;border:1px solid var(--border);border-radius:10px;margin:8px 0}
+  .user{background:rgba(59,130,246,.08)}
+  .bot{background:rgba(168,85,247,.08)}
+  small{color:var(--muted)}
+  pre{white-space:pre-wrap}
+  code{background:rgba(255,255,255,.06);padding:2px 6px;border-radius:6px}
+  .log{padding:10px 12px;height:200px;overflow:auto;font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;font-size:12px;background:#071023;border-top:1px solid var(--border)}
+  a{color:#93c5fd;text-decoration:none}
+  .pill{font-size:12px;background:rgba(255,255,255,.07);padding:2px 6px;border-radius:999px;border:1px solid var(--border)}
 </style>
 </head>
 <body>
 <header>
-  <div class="brand">
-    <svg width="26" height="26" viewBox="0 0 48 48" fill="none"><defs><linearGradient id="g" x1="0" y1="48" x2="48" y2="0"><stop stop-color="#60a5fa"/><stop offset="1" stop-color="#a78bfa"/></linearGradient></defs><rect rx="12" width="48" height="48" fill="url(#g)"/></svg>
-    <div>Friday AI</div>
-    <div id="mode" class="badge">checking…</div>
-  </div>
-  <div class="links">
-    <a href="/routes" target="_blank">routes</a>
-    <a href="/debug/health" target="_blank">health</a>
-    <a href="/api/history" target="_blank">history</a>
-    <a href="/api/metrics" target="_blank">metrics</a>
-    <a href="/admin" target="_blank" class="admin-only">admin</a>
+  <div class="title">Friday</div>
+  <div class="pill" id="modelPill">model: …</div>
+  <div class="pill" id="rlPill">rate: …</div>
+  <div style="margin-left:auto;display:flex;gap:10px">
+    <a href="/admin" target="_blank">Admin</a>
+    <a href="/vectors" target="_blank">Vectors</a>
   </div>
 </header>
 
 <main>
-  <section id="chat">
-    <div class="toolbar">
-      <span class="muted">User</span>
-      <input id="username" placeholder="username" style="width:160px">
-      <button id="saveUser" class="btn">Set</button>
-
-      <span class="muted" style="margin-left:8px">Model</span>
-      <select id="model" style="width:180px"></select>
-      <button id="useModel" class="btn">Use</button>
-      <span id="modelHint" class="hint"></span>
-
-      <span class="muted" style="margin-left:auto">Login</span>
-      <input id="password" type="password" placeholder="password (if set)" style="width:150px">
-      <input id="adminCode" type="text" placeholder="admin code (optional)" style="width:160px">
-      <button id="loginBtn">Login</button>
-      <button id="logoutBtn">Logout</button>
-
-      <span id="authBadge" class="pill warn">anon</span>
+  <div class="card">
+    <div class="section col">
+      <div class="row">
+        <input id="username" placeholder="username" value="guest" style="width:200px">
+        <select id="model" style="width:200px"></select>
+        <label class="row" style="gap:6px"><input type="checkbox" id="useStream" checked> Stream (tools)</label>
+        <button id="btnClear" class="pill" title="clear history">Clear History</button>
+      </div>
+      <textarea id="input" placeholder="Type your question…"></textarea>
+      <div class="row">
+        <button id="send" class="primary">Send</button>
+        <small id="hint">Tip: try “weather in Paris” or “search NVIDIA earnings summary”.</small>
+      </div>
     </div>
+    <div class="messages" id="messages"></div>
+    <div class="log" id="log"></div>
+  </div>
 
-    <div class="toolbar">
-      <span class="muted">Upload (PDF/TXT/MD/DOCX/HTML)</span>
-      <input id="fileInput" type="file" multiple accept=".pdf,.txt,.md,.docx,.html,.htm">
-      <button id="uploadBtn">Upload & Index</button>
-
-      <span class="muted" style="margin-left:12px">JSON mode</span>
-      <input id="jsonPrompt" placeholder='e.g., {"title": "...", "bullets": []} about topic' style="min-width:320px">
-      <button id="jsonBtn">Run</button>
-
-      <button id="mintBtn" class="admin-only">Mint Admin Codes</button>
+  <div class="card">
+    <div class="section">
+      <div class="row" style="justify-content:space-between">
+        <strong>History</strong>
+        <button id="refresh" class="pill">Refresh</button>
+      </div>
+      <div id="history" style="max-height:62vh;overflow:auto;padding:8px 12px"></div>
     </div>
-
-    <div id="log"></div>
-
-    <div class="composer">
-      <textarea id="input" placeholder="Ask anything…"></textarea>
-      <button id="send" class="send">Send</button>
-    </div>
-  </section>
-  <p class="muted" style="margin-top:8px">Tip: login to enable uploads & admin. Admin-only controls appear when your role is admin.</p>
+  </div>
 </main>
 
 <script>
-const $ = s => document.querySelector(s);
-const state = {
-  username: localStorage.getItem("friday.username") || "guest",
-  access: localStorage.getItem("friday.access") || null,
-  refresh: localStorage.getItem("friday.refresh") || null,
-  role: localStorage.getItem("friday.role") || "anon",
-  model: localStorage.getItem("friday.model") || null,
-};
+const $ = sel => document.querySelector(sel);
+const $$ = sel => document.querySelectorAll(sel);
+const log = (...a) => { const l=$("#log"); l.textContent += a.map(x=>typeof x==="string"?x:JSON.stringify(x)).join(" ")+"\n"; l.scrollTop=l.scrollHeight; };
+const asText = (x)=> (typeof x==="string"? x: JSON.stringify(x,null,2));
 
-const log = $("#log");
-function add(role, text){
+function addMsg(role, text){
   const wrap = document.createElement("div");
-  wrap.className = "msg " + (role === "user" ? "u" : "a");
-  const meta = document.createElement("div");
-  meta.className = "meta";
-  meta.textContent = `${role === "user" ? (state.username || "guest") : "Friday"} • ${new Date().toLocaleTimeString()}`;
-  const body = document.createElement("div");
-  body.textContent = text;
-  wrap.appendChild(meta); wrap.appendChild(body);
-  log.appendChild(wrap); log.scrollTop = log.scrollHeight;
-  return {wrap, body};
+  wrap.className = "msg "+(role==="user"?"user":"bot");
+  wrap.innerHTML = `<small>${role}</small><pre>${asText(text)}</pre>`;
+  $("#messages").appendChild(wrap);
+  $("#messages").scrollTop = $("#messages").scrollHeight;
 }
 
-function setAuthUI(){
-  const badge = $("#authBadge");
-  if(state.access){
-    badge.textContent = state.role || "user";
-    badge.className = "pill ok";
-    document.body.classList.toggle("admin-on", state.role === "admin");
-  }else{
-    badge.textContent = "anon";
-    badge.className = "pill warn";
-    document.body.classList.remove("admin-on");
-  }
-}
-
-function headers(json=true){
-  const h = json ? {"Content-Type":"application/json"} : {};
-  if(state.access) h["Authorization"] = "Bearer " + state.access;
-  return h;
-}
-
-async function fetchAuth(url, opts={}){
-  let res = await fetch(url, {headers:{...headers(true), ...(opts.headers||{})}, ...opts});
-  if(res.status !== 401) return res;
-  if(!state.refresh) return res;
-  try{
-    const r = await fetch("/api/auth/refresh", {
-      method:"POST",
-      headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({refresh_token: state.refresh})
-    });
-    if(!r.ok) return res;
-    const j = await r.json();
-    state.access = j.access_token; state.role = j.user?.role || state.role;
-    localStorage.setItem("friday.access", state.access);
-    localStorage.setItem("friday.role", state.role);
-    setAuthUI();
-    res = await fetch(url, {headers:{...headers(true), ...(opts.headers||{})}, ...opts});
-    return res;
-  }catch{ return res; }
-}
-
-async function jsonFetch(url, opts={}){
-  const res = await fetchAuth(url, opts);
-  if(!res.ok){
-    let msg = `${res.status} ${res.statusText}`;
-    try{ const j = await res.json(); msg = j.error || j.reason || msg; }catch{}
-    throw new Error(msg);
-  }
-  return res.json();
-}
-
-// Init
-$("#username").value = state.username;
-
-async function checkHealth(){
-  try{
-    const j = await jsonFetch("/debug/health", {headers: headers(true)});
-    const live = !!j.openai; const m = $("#mode");
-    m.textContent = live ? "Live" : "Dev";
-    m.className = "badge " + (live ? "live" : "dev");
-  }catch{
-    const m = $("#mode"); m.textContent = "unknown"; m.className = "badge";
-  }
-}
 async function loadModels(){
-  try{
-    const j = await jsonFetch("/api/models");
-    const sel = $("#model"); sel.innerHTML = "";
-    (j.available||[]).forEach(x=>{
-      const o = document.createElement("option"); o.value=x; o.textContent=x; sel.appendChild(o);
-    });
-    const active = j.active;
-    $("#modelHint").textContent = `active: ${active}`;
-    if(!state.model) { state.model = active; localStorage.setItem("friday.model", state.model); }
-    Array.from(sel.options).forEach(o=>{ if(o.value===state.model) o.selected=true; });
-  }catch{}
+  const r = await fetch("/api/models"); const j = await r.json();
+  $("#modelPill").textContent = "model: "+(j.active||"gpt-4o-mini");
+  const sel = $("#model"); sel.innerHTML = "";
+  (j.available||["gpt-4o-mini"]).forEach(m=>{
+    const o = document.createElement("option"); o.value=m; o.textContent=m; if(m===j.active) o.selected=true; sel.appendChild(o);
+  });
 }
+
+async function loadRate(){
+  const r = await fetch("/api/metrics"); const j = await r.json();
+  const rl = j.rate_limit||{}; $("#rlPill").textContent = `rate: ${rl.remaining ?? "?"} left`;
+}
+
 async function loadHistory(){
-  try{
-    const j = await jsonFetch(`/api/history?username=${encodeURIComponent(state.username)}`);
-    (j||[]).forEach(it=>{ add("user", it.message); add("assistant", it.reply); });
-  }catch{}
+  const u = $("#username").value||"guest";
+  const r = await fetch(`/api/history?username=${encodeURIComponent(u)}&limit=200`);
+  const j = await r.json();
+  const h = $("#history"); h.innerHTML = "";
+  j.forEach(it=>{
+    const d=document.createElement("div");
+    const when = new Date((it.ts||0)*1000).toLocaleString();
+    d.className="msg"; d.innerHTML = `<small>${when}</small><div><strong>Q:</strong> ${asText(it.message)}</div><div><strong>A:</strong> ${asText(it.reply)}</div>`;
+    h.appendChild(d);
+  });
 }
 
-// Controls
-$("#saveUser").onclick = () => {
-  state.username = ($("#username").value || "guest").trim() || "guest";
-  localStorage.setItem("friday.username", state.username);
-  add("assistant", `Yo ${state.username}, locked in.`);
-};
-$("#useModel").onclick = async () => {
-  const m = $("#model").value;
-  try{
-    const j = await jsonFetch("/api/model", {method:"POST", body: JSON.stringify({model: m})});
-    state.model = j.active || m; localStorage.setItem("friday.model", state.model);
-    $("#modelHint").textContent = `active: ${state.model}`;
-    add("assistant", `Using model: ${state.model}`);
-  }catch(e){ add("assistant", "Set model failed: " + e.message); }
-};
-$("#loginBtn").onclick = async () => {
-  const body = {username: ($("#username").value||"guest").trim(), password: $("#password").value, admin_code: $("#adminCode").value};
-  try{
-    const j = await jsonFetch("/api/auth/login", {method:"POST", body: JSON.stringify(body)});
-    state.access = j.access_token; state.refresh = j.refresh_token; state.role = j.user?.role || "user";
-    localStorage.setItem("friday.access", state.access);
-    localStorage.setItem("friday.refresh", state.refresh);
-    localStorage.setItem("friday.role", state.role);
-    setAuthUI();
-    add("assistant", `Logged in as ${j.user.username} (${state.role}).`);
-  }catch(e){ add("assistant", "Login failed: " + e.message); }
-};
-$("#logoutBtn").onclick = () => {
-  state.access = null; state.refresh = null; state.role = "anon";
-  localStorage.removeItem("friday.access"); localStorage.removeItem("friday.refresh"); localStorage.setItem("friday.role","anon");
-  setAuthUI(); add("assistant", "Logged out.");
-};
-$("#uploadBtn").onclick = async () => {
-  const files = $("#fileInput").files;
-  if(!files || !files.length){ add("assistant","Pick files first."); return; }
-  if(!state.access){ add("assistant","Login first to upload."); return; }
-  const fd = new FormData(); Array.from(files).forEach(f => fd.append("files", f));
-  try{
-    const res = await fetch("/api/upload", {method:"POST", body: fd, headers: state.access ? {"Authorization":"Bearer "+state.access} : {}});
-    if(!res.ok){ const t = await res.text(); throw new Error(t); }
-    const j = await res.json();
-    add("assistant", `Indexed ${j.indexed_docs} docs (${j.chunks} chunks) via ${j.backend}. OCR blocks: ${j.ocr_blocks||0}. Limit: ${j.limit_mb} MB (${j.role}).`);
-  }catch(e){ add("assistant", "Upload failed: " + e.message); }
-};
-$("#jsonBtn").onclick = async () => {
-  const p = ($("#jsonPrompt").value||"").trim(); if(!p){ add("assistant","Type a JSON-mode prompt."); return; }
-  try{
-    const j = await jsonFetch("/api/structured", {method:"POST", body: JSON.stringify({prompt: p, model: state.model||""})});
-    const {wrap} = add("assistant", "JSON result:");
-    const tr = document.createElement("div"); tr.className = "trace";
-    tr.innerHTML = `<strong>JSON</strong><pre>${JSON.stringify(j.json, null, 2)}</pre>`;
-    wrap.appendChild(tr);
-  }catch(e){ add("assistant","Structured failed: "+e.message); }
-};
-$("#mintBtn").onclick = async () => {
-  if(state.role !== "admin"){ add("assistant","Admin only."); return; }
-  try{
-    const j = await jsonFetch("/api/admin/mint", {method:"POST", body: JSON.stringify({count: 3})});
-    const {wrap} = add("assistant", "Minted codes:");
-    const tr = document.createElement("div"); tr.className="trace";
-    tr.innerHTML = `<strong>Tokens</strong><pre>${JSON.stringify(j.tokens, null, 2)}</pre>`;
-    wrap.appendChild(tr);
-  }catch(e){ add("assistant","Mint failed: "+e.message); }
-};
-$("#send").onclick = async () => {
-  const text = ($("#input").value||"").trim(); if(!text) return;
-  $("#input").value = "";
-  add("user", text);
-  const {wrap} = add("assistant", "…");
-  try{
-    const j = await jsonFetch("/api/chat", {method:"POST", body: JSON.stringify({message: text, username: state.username || "guest", model: state.model || ""})});
-    wrap.lastChild.textContent = j.reply || "(no reply)";
-    if (j.traces && j.traces.length){
-      const tr = document.createElement("div"); tr.className="trace";
-      tr.innerHTML = `<strong>Tools</strong><pre>${JSON.stringify(j.traces, null, 2)}</pre>`;
-      wrap.appendChild(tr);
-    }
-  }catch(e){ wrap.lastChild.textContent = "Error: " + e.message; }
+$("#refresh").onclick = loadHistory;
+$("#btnClear").onclick = async ()=>{
+  const u=$("#username").value||"guest";
+  const r = await fetch("/api/history/clear",{method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u})});
+  const j = await r.json(); addMsg("bot", `cleared: ${j.cleared}`); loadHistory();
 };
 
-// init
-(function init(){
-  setAuthUI(); checkHealth(); loadModels(); loadHistory();
-})();
+async function send(){
+  const q = $("#input").value.trim(); if(!q) return;
+  const u = $("#username").value||"guest";
+  const model = $("#model").value;
+  addMsg("user", q);
+  $("#input").value="";
+  $("#log").textContent = "";
+
+  if($("#useStream").checked){
+    const es = new EventSource(`/api/chat/stream_tools?message=${encodeURIComponent(q)}&username=${encodeURIComponent(u)}&model=${encodeURIComponent(model)}`);
+    let curBot = document.createElement("div");
+    curBot.className="msg bot"; curBot.innerHTML="<small>assistant</small><pre></pre>";
+    $("#messages").appendChild(curBot);
+    const pre = curBot.querySelector("pre");
+
+    es.onmessage = (e)=>{
+      if(!e.data) return;
+      let m = {};
+      try{ m = JSON.parse(e.data); }catch(_){}
+      if(m.type==="tool_event"){
+        log(`→ tool: ${m.tool}`, m.args || {}, m.result || {});
+      }else if(m.type==="delta"){
+        pre.textContent += m.delta || "";
+      }else if(m.type==="usage"){
+        log("usage", m.usage || {});
+      }else if(m.type==="done"){
+        es.close(); loadHistory(); loadRate();
+      }
+    };
+    es.onerror = ()=>{ es.close(); log("stream error"); };
+  } else {
+    const r = await fetch("/api/chat",{method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({message:q, username:u, model})});
+    const j = await r.json();
+    addMsg("bot", j.reply || j.error || "(no reply)");
+    if(j.traces){ j.traces.forEach(t => log(`→ tool: ${t.tool}`, t.args||{}, t.result||{})); }
+    loadHistory(); loadRate();
+  }
+}
+
+$("#send").onclick = send;
+$("#input").addEventListener("keydown", (e)=>{ if(e.key==="Enter" && (e.ctrlKey||e.metaKey)){ send(); } });
+
+loadModels(); loadRate(); loadHistory();
 </script>
 </body>
 </html>
