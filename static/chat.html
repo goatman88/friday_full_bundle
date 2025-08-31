@@ -5,12 +5,14 @@
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Friday AI • Streaming Chat</title>
 <style>
-  :root { --bg:#0f172a; --panel:#0b1226; --muted:#94a3b8; --text:#e2e8f0; --accent:#60a5fa; --accent2:#a78bfa; }
+  :root { --bg:#0f172a; --panel:#0b1226; --muted:#94a3b8; --text:#e2e8f0; --accent:#60a5fa; --accent2:#a78bfa; --ok:#10b981; --warn:#f59e0b; }
   *{box-sizing:border-box}
   body{margin:0;background:radial-gradient(1200px 1200px at 10% -20%, #1d2b54 0, transparent 55%),var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,Segoe UI,Inter,Roboto,Arial,sans-serif}
   header{position:sticky;top:0;display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 16px;background:linear-gradient(180deg, rgba(15,23,42,.9), rgba(15,23,42,.55) 70%, transparent);backdrop-filter:blur(6px);border-bottom:1px solid rgba(255,255,255,.06)}
   .brand{display:flex;gap:10px;align-items:center;font-weight:700}
-  .badge{font-size:12px;color:#94a3b8;border:1px solid rgba(148,163,184,.35);padding:2px 8px;border-radius:999px}
+  .badge{font-size:12px;color:#cbd5e1;border:1px solid rgba(148,163,184,.35);padding:2px 8px;border-radius:999px}
+  .live{border-color: rgba(16,185,129,.5); color:#d1fae5;}
+  .dev{border-color: rgba(245,158,11,.5); color:#fef3c7;}
   main{max-width:900px;margin:16px auto 120px;padding:0 16px}
   #chat{border:1px solid rgba(255,255,255,.07);border-radius:16px;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,.25)}
   .toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:10px;background:rgba(255,255,255,.02);border-bottom:1px solid rgba(255,255,255,.06)}
@@ -33,7 +35,8 @@
 <header>
   <div class="brand">
     <svg width="26" height="26" viewBox="0 0 48 48" fill="none"><defs><linearGradient id="g" x1="0" y1="48" x2="48" y2="0"><stop stop-color="#60a5fa"/><stop offset="1" stop-color="#a78bfa"/></linearGradient></defs><rect rx="12" width="48" height="48" fill="url(#g)"/></svg>
-    <div>Friday AI</div><div class="badge">streaming</div>
+    <div>Friday AI</div>
+    <div id="modeBadge" class="badge">checking…</div>
   </div>
   <div class="links">
     <a href="/routes" target="_blank">routes</a>
@@ -69,6 +72,7 @@ const $ = sel => document.querySelector(sel);
 const log = $("#log"), input = $("#input"), sendBtn = $("#send");
 const userEl = $("#username"), saveUserBtn = $("#saveUser");
 const modelSel = $("#model"), useModelBtn = $("#useModel"), modelHint = $("#modelHint");
+const modeBadge = $("#modeBadge");
 
 const state = {
   username: localStorage.getItem("friday.username") || "guest",
@@ -86,13 +90,25 @@ function add(role, text){
   body.textContent = text;
   wrap.appendChild(meta); wrap.appendChild(body);
   log.appendChild(wrap); log.scrollTop = log.scrollHeight;
-  return body; // so we can live-append for streaming
+  return body;
 }
 
 async function jsonFetch(url, opts={}){
   const res = await fetch(url, { headers:{ "Content-Type":"application/json", ...(opts.headers||{}) }, ...opts });
   if(!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   return res.json();
+}
+
+async function checkHealth(){
+  try{
+    const h = await jsonFetch("/debug/health");
+    const live = !!h.openai;
+    modeBadge.textContent = live ? "Live (OpenAI)" : "Dev Echo";
+    modeBadge.classList.toggle("live", live);
+    modeBadge.classList.toggle("dev", !live);
+  }catch{
+    modeBadge.textContent = "Unknown";
+  }
 }
 
 async function loadModels(){
@@ -136,19 +152,15 @@ useModelBtn.addEventListener("click", async ()=>{
   }catch(e){ add("assistant", "Couldn’t set model: "+e.message); }
 });
 
-async function sendStreaming(text){
-  // Add user message
+function sendStreaming(text){
   add("user", text);
-  // Pre-create assistant bubble to stream into
   const target = add("assistant", "");
   const params = new URLSearchParams({
     message: text,
     username: state.username || "guest",
     model: state.model || ""
   });
-  const url = `/api/chat/stream?${params.toString()}`;
-  const es = new EventSource(url);
-
+  const es = new EventSource(`/api/chat/stream?${params.toString()}`);
   let closed = false;
   es.onmessage = (ev) => {
     if(!ev.data) return;
@@ -160,10 +172,7 @@ async function sendStreaming(text){
       log.scrollTop = log.scrollHeight;
     }catch{}
   };
-  es.onerror = () => {
-    // If network hiccup, close to avoid zombie connections
-    if(!closed) es.close();
-  };
+  es.onerror = () => { if(!closed) es.close(); };
 }
 
 sendBtn.addEventListener("click", ()=>{
@@ -173,13 +182,13 @@ sendBtn.addEventListener("click", ()=>{
   sendStreaming(text);
 });
 input.addEventListener("keydown", (e)=>{
-  if(e.key==="Enter" && !e.shiftKey){
-    e.preventDefault(); sendBtn.click();
-  }
+  if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); sendBtn.click(); }
 });
 
+checkHealth();
 loadModels();
 loadHistory();
 </script>
 </body>
 </html>
+
