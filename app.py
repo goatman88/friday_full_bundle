@@ -3,14 +3,12 @@ import os, json, time, secrets
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Generator
 
-# --- Load .env locally only (Option 3) ---
+# --- Load .env locally only ---
 try:
     from dotenv import load_dotenv
-    # If FLASK_ENV is NOT production, load local .env. In production (Render) you set env vars in the dashboard.
     if (os.getenv("FLASK_ENV", "").lower() != "production"):
         load_dotenv(override=False)
 except Exception:
-    # dotenv not installed or other issue; keep going
     pass
 
 from flask import (
@@ -18,6 +16,9 @@ from flask import (
     Response, stream_with_context
 )
 from flask_cors import CORS
+
+# third-party HTTP for tools
+import requests
 
 # ---------- App & config ----------
 app = Flask(__name__, static_folder="static", template_folder="templates")
@@ -131,10 +132,225 @@ def set_model_api():
     model = str(data.get("model", "")).strip()
     if not model:
         return jsonify({"error": "missing_model"}), 400
-    set_active_model(model, username=None)  # global; switch to per-user if desired
+    set_active_model(model, username=None)  # global
     return jsonify({"active": active_model()})
 
-# ---------- Chat (non-streaming fallback) ----------
+# ---------- Tool implementations ----------
+def tool_weather_city(city: str) -> Dict[str, Any]:
+    """Get simple current weather for a city via Open-Meteo APIs."""
+    try:
+        # 1) geocode
+        g = requests.get(
+            "https://geocoding-api.open-meteo.com/v1/search",
+            params={"name": city, "count": 1},
+            timeout=8
+        )
+        g.raise_for_status()
+        gdata = g.json()
+        if not gdata.get("results"):
+            return {"ok": False, "reason": "city_not_found"}
+        lat = gdata["results"][0]["latitude"]
+        lon = gdata["results"][0]["longitude"]
+        name = gdata["results"][0]["name"]
+        country = gdata["results"][0].get("country", "")
+
+        # 2) current weather
+        w = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={"latitude": lat, "longitude": lon, "current_weather": "true"},
+            timeout=8
+        )
+        w.raise_for_status()
+        wdata = w.json()
+        cw = wdata.get("current_weather") or {}
+        return {
+            "ok": True,
+            "city": f"{name}, {country}".strip(", "),
+            "latitude": lat,
+            "longitude": lon,
+            "temperature_c": cw.get("temperature"),
+            "windspeed_kmh": cw.get("windspeed"),
+            "time": cw.get("time"),
+            "raw": cw
+        }
+    except Exception as e:
+        return {"ok": False, "reason": str(e)}
+
+def tool_sysinfo() -> Dict[str, Any]:
+    """Simple system info for debugging."""
+    return {
+        "ok": True,
+        "server_time_utc": datetime.utcnow().isoformat() + "Z",
+        "commit": COMMIT,
+        "redis": redis_ok(),
+        "model": active_model()
+    }
+
+def tool_web_search_ddg(query: str) -> Dict[str, Any]:
+    """Lightweight web search via DuckDuckGo Instant Answer (no API key)."""
+    try:
+        res = requests.get(
+            "https://api.duckduckgo.com/",
+            params={"q": query, "format": "json", "no_html": 1, "skip_disambig": 1},
+            timeout=8
+        )
+        res.raise_for_status()
+        data = res.json()
+        abstract = data.get("AbstractText") or ""
+        heading = data.get("Heading") or ""
+        related = [{"Text": r.get("Text"), "FirstURL": r.get("FirstURL")}
+                   for r in (data.get("RelatedTopics") or [])[:5]
+                   if isinstance(r, dict) and r.get("Text") and r.get("FirstURL")]
+        return {"ok": True, "heading": heading, "summary": abstract, "related": related}
+    except Exception as e:
+        return {"ok": False, "reason": str(e)}
+
+# tool registry for local direct-calls (dev echo or safety)
+TOOL_REGISTRY = {
+    "get_weather": tool_weather_city,
+    "system_info": lambda: tool_sysinfo(),
+    "web_search": tool_web_search_ddg,
+}
+
+# OpenAI tool schemas
+OPENAI_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get current weather for a city name.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "city": {"type": "string", "description": "City name, like 'Austin' or 'Paris'."}
+                },
+                "required": ["city"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Quick web search using DuckDuckGo Instant Answer for a concise summary and a few related links.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Your search query."}
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "system_info",
+            "description": "Return server/system info and current active model.",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    }
+]
+
+# ---------- Chat helpers ----------
+def openai_tool_calling(model: str, user_msg: str) -> Dict[str, Any]:
+    """
+    Tool-aware flow:
+    - If OPENAI_KEY set: use function-calling loop (max 3 tool hops)
+    - Else: simple heuristic direct-call (so tools still work locally)
+    Returns: { reply, traces: [ ... ] }
+    """
+    traces: List[Dict[str, Any]] = []
+
+    # No key? Heuristic: trigger tools by keywords
+    if not OPENAI_KEY:
+        lowered = user_msg.lower()
+        if "weather" in lowered or "temperature" in lowered:
+            city = user_msg.split()[-1]  # hilariously naive; good enough for dev
+            out = tool_weather_city(city)
+            traces.append({"tool": "get_weather", "args": {"city": city}, "result": out})
+            if out.get("ok"):
+                t = out.get("temperature_c")
+                c = out.get("city")
+                reply = f"Current temp in {c} is {t}°C (dev, approximate)."
+            else:
+                reply = f"Couldn’t get weather: {out.get('reason','unknown')}"
+            return {"reply": reply, "traces": traces}
+
+        if "search" in lowered or "lookup" in lowered:
+            q = user_msg
+            out = tool_web_search_ddg(q)
+            traces.append({"tool": "web_search", "args": {"query": q}, "result": out})
+            if out.get("ok"):
+                h = out.get("heading") or "Result"
+                s = out.get("summary") or "(no summary)"
+                reply = f"{h}: {s}"
+            else:
+                reply = f"Search failed: {out.get('reason','unknown')}"
+            return {"reply": reply, "traces": traces}
+
+        # fall back to echo
+        return {"reply": f"(dev echo) {user_msg}", "traces": traces}
+
+    # With key: real function-calling
+    from openai import OpenAI
+    client = OpenAI(api_key=OPENAI_KEY)
+
+    messages: List[Dict[str, Any]] = [
+        {"role": "system", "content": "You are Friday AI. Use tools when helpful, cite concise facts, and keep answers tight."},
+        {"role": "user", "content": user_msg},
+    ]
+
+    for hop in range(3):
+        resp = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            tools=OPENAI_TOOLS,
+            tool_choice="auto",
+            temperature=0.5,
+        )
+        msg = resp.choices[0].message
+
+        # if the model responded normally, return it
+        if not getattr(msg, "tool_calls", None):
+            reply_text = (msg.content or "").strip()
+            return {"reply": reply_text or "(no reply)", "traces": traces}
+
+        # otherwise, execute tool calls
+        for tc in msg.tool_calls:
+            name = tc.function.name
+            args = {}
+            try:
+                args = json.loads(tc.function.arguments or "{}")
+            except Exception:
+                args = {}
+            # run local tool
+            if name == "get_weather":
+                res = tool_weather_city(args.get("city", ""))
+            elif name == "web_search":
+                res = tool_web_search_ddg(args.get("query", ""))
+            elif name == "system_info":
+                res = tool_sysinfo()
+            else:
+                res = {"ok": False, "reason": f"unknown_tool:{name}"}
+
+            traces.append({"tool": name, "args": args, "result": res})
+
+            # add tool result back to conversation
+            messages.append({
+                "role": "assistant",
+                "tool_calls": [tc],  # echo the call we just handled
+            })
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "name": name,
+                "content": json.dumps(res, ensure_ascii=False),
+            })
+
+    # safety fallback after hops exhausted
+    return {"reply": "I tried tools but couldn’t finish. Try rephrasing.", "traces": traces}
+
 def openai_nonstream_reply(model: str, message: str) -> str:
     if not OPENAI_KEY:
         return f"(dev echo) {message}"
@@ -153,26 +369,36 @@ def openai_nonstream_reply(model: str, message: str) -> str:
     except Exception as e:
         return f"[upstream_error] {e}"
 
+# ---------- Chat (non-stream, tool-aware) ----------
 @app.post("/api/chat")
 def api_chat():
     data = request.get_json(force=True, silent=True) or {}
     message = str(data.get("message", "")).strip()
     username = str(data.get("username") or "guest")
     model = str(data.get("model") or active_model(username))
+    use_tools = bool(data.get("tools", True))  # default ON
+
     if not message:
         return jsonify({"error": "missing_message"}), 400
-    reply = openai_nonstream_reply(model, message)
-    append_history(username, message, reply)
-    return jsonify({"reply": reply})
 
-# ---------- Chat (STREAMING over SSE) ----------
+    if use_tools:
+        result = openai_tool_calling(model, message)
+        reply = result.get("reply", "")
+        traces = result.get("traces", [])
+    else:
+        reply = openai_nonstream_reply(model, message)
+        traces = []
+
+    append_history(username, message, reply)
+    return jsonify({"reply": reply, "traces": traces})
+
+# ---------- Chat (STREAMING over SSE; no tools in stream path) ----------
 def sse_event(payload: Dict[str, Any]) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 def stream_openai(model: str, message: str) -> Generator[str, None, str]:
     final_text = []
     if not OPENAI_KEY:
-        # dev streamer (no key)
         demo = f"(dev echo) {message}"
         for ch in demo:
             final_text.append(ch)
@@ -225,7 +451,6 @@ def api_chat_stream():
     def generate():
         for chunk in stream_openai(model, message):
             yield chunk
-        # store a non-stream copy to guarantee history
         nonstream = openai_nonstream_reply(model, message)
         append_history(username, message, nonstream)
 
@@ -313,8 +538,13 @@ def method_not_allowed(_):
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
-    # Set FLASK_ENV=production in Render; locally leave it unset or set to development.
-    app.run(host="0.0.0.0", port=port, debug=(os.getenv("FLASK_ENV","").lower()!="production"), threaded=True)
+    app.run(
+        host="0.0.0.0",
+        port=port,
+        debug=(os.getenv("FLASK_ENV","").lower()!="production"),
+        threaded=True
+    )
+
 
 
 
