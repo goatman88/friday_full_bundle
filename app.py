@@ -44,7 +44,7 @@ OPENAI_KEY = os.getenv("OPENAI_API_KEY", "")
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 SYSTEM_PROMPT = os.getenv("PROMPT_SYSTEM", "You are Friday AI: quick, accurate, actionable.")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "text-embedding-3-small")
-EMBED_DIM = int(os.getenv("EMBED_DIM", "1536"))  # text-embedding-3-small=1536, -large=3072
+EMBED_DIM = int(os.getenv("EMBED_DIM", "1536"))  # small=1536; large=3072
 
 # ---------- Auth / JWT ----------
 ACCESS_TTL_MIN = int(os.getenv("ACCESS_TTL_MIN", "15"))
@@ -60,11 +60,9 @@ RL_MAX = int(os.getenv("RATE_LIMIT_MAX", "60"))
 # ---------- Upload limits (role-based) ----------
 UPLOAD_MAX_MB_USER = int(os.getenv("UPLOAD_MAX_MB_USER", "20"))
 UPLOAD_MAX_MB_ADMIN = int(os.getenv("UPLOAD_MAX_MB_ADMIN", "50"))
+app.config["MAX_CONTENT_LENGTH"] = int(os.getenv("MAX_CONTENT_LENGTH_BYTES", str(60*1024*1024)))
 
-# Flask's MAX_CONTENT_LENGTH is a single cap; we enforce role-specific caps manually.
-app.config["MAX_CONTENT_LENGTH"] = int(os.getenv("MAX_CONTENT_LENGTH_BYTES", str(60*1024*1024)))  # absolute ceiling
-
-# ---------- Pricing (rough) ----------
+# ---------- Pricing ----------
 PRICES = {
     "gpt-4o":        {"in": 0.0025, "out": 0.0100},
     "gpt-4o-mini":   {"in": 0.0005, "out": 0.0015},
@@ -72,7 +70,7 @@ PRICES = {
     "o3-mini":       {"in": 0.0005, "out": 0.0015},
 }
 
-# ---------- Redis ----------
+# ---------- Redis (history, rate limit, cache) ----------
 r = None
 try:
     REDIS_URL = os.getenv("REDIS_URL", "")
@@ -130,7 +128,7 @@ def _connect_pg():
         pg = None
         return None
 
-# ---------- Qdrant (preferred if configured) ----------
+# ---------- Qdrant (preferred) ----------
 qdrant = None
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "rag_chunks")
 def _connect_qdrant():
@@ -145,14 +143,9 @@ def _connect_qdrant():
             api_key=os.getenv("QDRANT_API_KEY", None),
             timeout=10
         )
-        # create collection if missing
-        exists = False
         try:
-            info = qdrant.get_collection(QDRANT_COLLECTION)
-            exists = True if info else False
+            qdrant.get_collection(QDRANT_COLLECTION)
         except Exception:
-            exists = False
-        if not exists:
             qdrant.recreate_collection(
                 collection_name=QDRANT_COLLECTION,
                 vectors_config=VectorParams(size=EMBED_DIM, distance=Distance.COSINE),
@@ -266,7 +259,6 @@ def price_estimate(model: str, p_tok: int, c_tok: int) -> float:
 
 def embed_texts(texts: List[str]) -> List[List[float]]:
     if not OPENAI_KEY:
-        # dev fake embeddings
         def cheap_vec(s: str, dim=64):
             v = [0.0]*dim
             for i,ch in enumerate(s.encode("utf-8")):
@@ -357,13 +349,14 @@ def tool_web(query: str) -> Dict[str, Any]:
     except Exception as e:
         return {"ok": False, "reason": str(e)}
 
-# ---------- RAG: Backends (Qdrant -> PG -> Redis) ----------
+# ---------- RAG backend routing ----------
 def rag_backend() -> str:
     if qdrant: return "qdrant"
     if pg: return "pgvector"
     if r: return "redis"
     return "none"
 
+# ---------- RAG index/search (unchanged logic) ----------
 def rag_index(username: str, docs: List[Dict[str, Any]]) -> Dict[str, Any]:
     texts = [d.get("text","") for d in docs]
     vecs = embed_texts(texts)
@@ -544,17 +537,15 @@ def tool_loop(model: str, user_msg: str, username: str, max_hops=6) -> Dict[str,
 
     return {"reply":"Planner hit hop limit. Try again with a simpler ask.", "traces":traces}
 
-# ---------- Ingestion helpers (PDF/TXT/MD/DOCX/HTML + optional OCR on DOCX images) ----------
+# ---------- Ingestion helpers ----------
 from werkzeug.utils import secure_filename
 ALLOWED_EXT = {".txt", ".md", ".pdf", ".docx", ".html", ".htm"}
 
-# OCR feature flags
 ENABLE_OCR = os.getenv("ENABLE_OCR", "true").lower() == "true"
-OCR_LANGS = os.getenv("OCR_LANGS", "eng")  # e.g., "eng+spa"
+OCR_LANGS = os.getenv("OCR_LANGS", "eng")
 _tesseract_ready = None
 
 def _ocr_ready() -> bool:
-    """Detects if pytesseract & Tesseract binary exist; caches the result."""
     global _tesseract_ready
     if _tesseract_ready is not None:
         return _tesseract_ready
@@ -564,7 +555,6 @@ def _ocr_ready() -> bool:
     try:
         import pytesseract
         from PIL import Image  # noqa
-        # Try a harmless version call
         _ = pytesseract.get_tesseract_version()
         _tesseract_ready = True
         return True
@@ -602,7 +592,6 @@ def _read_docx_text(data: bytes) -> str:
         return ""
 
 def _read_docx_image_ocr(data: bytes) -> str:
-    """Extract images from .docx (word/media/*) and OCR them if Tesseract is available."""
     if not _ocr_ready():
         return ""
     try:
@@ -611,7 +600,7 @@ def _read_docx_image_ocr(data: bytes) -> str:
         text_parts=[]
         with zipfile.ZipFile(io.BytesIO(data)) as z:
             for name in z.namelist():
-                if name.startswith("word/media/") and (name.lower().endswith(".png") or name.lower().endswith(".jpg") or name.lower().endswith(".jpeg") or name.lower().endswith(".bmp") or name.lower().endswith(".tif") or name.lower().endswith(".tiff")):
+                if name.startswith("word/media/") and name.lower().split(".")[-1] in {"png","jpg","jpeg","bmp","tif","tiff"}:
                     img_bytes = z.read(name)
                     try:
                         img = Image.open(io.BytesIO(img_bytes))
@@ -645,6 +634,14 @@ def chat_page():
 @app.get("/admin")
 def admin_page():
     return send_from_directory(app.static_folder, "admin.html")
+
+@app.get("/vectors")
+def vectors_page():
+    return send_from_directory(app.static_folder, "vectors.html")
+
+@app.get("/maint")
+def maint_page():
+    return send_from_directory(app.static_folder, "maint.html")
 
 # ---------- DIAGNOSTICS ----------
 @app.get("/routes")
@@ -708,7 +705,7 @@ def set_model_api():
     set_active_model(model)
     return jsonify({"active": active_model()})
 
-# ---------- CHAT ----------
+# ---------- CHAT (JSON) ----------
 @app.post("/api/chat")
 def api_chat():
     allowed, remaining, reset = rate_limit_check(client_scope())
@@ -723,7 +720,7 @@ def api_chat():
     append_history(username, msg, out.get("reply",""))
     return jsonify({**out, "rate_limit":{"remaining":remaining,"reset":reset}})
 
-# ---------- STREAM (plain passthrough) ----------
+# ---------- STREAM: text-only ----------
 def sse_line(obj: Dict[str,Any]) -> str: return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
 
 @app.get("/api/chat/stream")
@@ -757,6 +754,33 @@ def api_chat_stream():
         append_history(username, message, "".join(final))
     return Response(stream_with_context(generate()), headers={"Content-Type":"text/event-stream","Cache-Control":"no-cache","Connection":"keep-alive","X-Accel-Buffering":"no"})
 
+# ---------- STREAM: tools + tokens ----------
+@app.get("/api/chat/stream_tools")
+def api_chat_stream_tools():
+    """Streams token deltas *and* emits events for tool calls/results."""
+    message = (request.args.get("message") or "").strip()
+    username = request.args.get("username") or "guest"
+    model = request.args.get("model") or active_model(username)
+    if not message: return jsonify({"error":"missing_message"}), 400
+
+    def generate():
+        # For simplicity, we run tool_loop (non-stream) to get traces, then stream the final text gradually,
+        # while also emitting the tool traces as discrete events (tool_start/tool_result).
+        out = tool_loop(model, message, username, max_hops=6)
+        traces = out.get("traces", [])
+        # Emit tool events first
+        for t in traces:
+            yield sse_line({"type":"tool_event","tool": t.get("tool"), "args": t.get("args"), "result": t.get("result")})
+        # Stream the final reply char-by-char for UX parity
+        reply = (out.get("reply") or "").strip() or "(no reply)"
+        for ch in reply:
+            yield sse_line({"type":"delta","delta": ch})
+            time.sleep(0.005)
+        yield sse_line({"type":"usage","usage": out.get("usage")})
+        yield sse_line({"type":"done"})
+        append_history(username, message, reply)
+    return Response(stream_with_context(generate()), headers={"Content-Type":"text/event-stream","Cache-Control":"no-cache","Connection":"keep-alive","X-Accel-Buffering":"no"})
+
 # ---------- HISTORY ----------
 @app.get("/api/history")
 def history_get():
@@ -773,26 +797,143 @@ def history_export():
     items = get_history(u, limit=1000)
     return Response(json.dumps(items, indent=2, ensure_ascii=False), mimetype="application/json", headers={"Content-Disposition": f'attachment; filename="history_{u}.json"'})
 
-# ---------- RAG APIs ----------
-@app.post("/api/rag/index")
-def api_rag_index():
+# ---------- RAG APIs (browse + admin ops) ----------
+@app.get("/api/rag/stats")
+def api_rag_stats():
+    backend = rag_backend()
+    out = {"backend": backend}
+    try:
+        if backend == "qdrant":
+            info = qdrant.get_collection(QDRANT_COLLECTION)
+            out["points_count"] = getattr(info, "points_count", None)
+        elif backend == "pgvector":
+            with pg.cursor() as cur:
+                cur.execute("SELECT count(*) FROM rag_chunks;")
+                out["rows"] = cur.fetchone()[0]
+                cur.execute("SELECT count(DISTINCT username) FROM rag_chunks;")
+                out["users"] = cur.fetchone()[0]
+        elif backend == "redis":
+            # rough: total length across all lists is not tracked – we expose per-user via query
+            out["note"] = "redis backend; per-user list under key rag:{username}:docs"
+    except Exception as e:
+        out["error"] = str(e)
+    return jsonify(out)
+
+@app.get("/api/rag/list")
+def api_rag_list():
+    """Paginate/browse chunks for a user. """
+    username = (request.args.get("username") or "guest").strip() or "guest"
+    limit = max(1, min(int(request.args.get("limit") or 20), 200))
+    offset = max(0, int(request.args.get("offset") or 0))
+    backend = rag_backend()
+    rows=[]; total=None
+    try:
+        if backend == "qdrant":
+            # basic scroll using offset/limit; no server-side scroll token here
+            res = qdrant.scroll(collection_name=QDRANT_COLLECTION, with_payload=True, limit=limit, offset=offset)
+            pts = res[0] or []
+            for p in pts:
+                pl = p.payload or {}
+                if pl.get("username") == username:
+                    rows.append({"id": str(p.id), "text": pl.get("text","")[:400], "metadata": pl.get("metadata",{})})
+            total = None
+        elif backend == "pgvector":
+            with pg.cursor() as cur:
+                cur.execute("SELECT count(*) FROM rag_chunks WHERE username=%s;", (username,))
+                total = cur.fetchone()[0]
+                cur.execute("SELECT id, text, metadata FROM rag_chunks WHERE username=%s ORDER BY id OFFSET %s LIMIT %s;", (username, offset, limit))
+                for rid, t, meta in cur.fetchall():
+                    rows.append({"id": str(rid), "text": (t or "")[:400], "metadata": meta or {}})
+        elif backend == "redis":
+            key = f"rag:{username}:docs"
+            all_items = r.lrange(key, 0, -1)
+            total = len(all_items)
+            page = all_items[offset: offset+limit]
+            for raw in page:
+                try:
+                    o = json.loads(raw)
+                    rows.append({"id": o.get("id"), "text": (o.get("text","")[:400]), "metadata": o.get("meta",{})})
+                except Exception:
+                    pass
+        else:
+            return jsonify({"error":"no_vector_backend"}), 503
+    except Exception as e:
+        return jsonify({"error": str(e), "backend": backend}), 500
+    return jsonify({"backend": backend, "username": username, "rows": rows, "limit": limit, "offset": offset, "total": total})
+
+@app.post("/api/rag/delete")
+def api_rag_delete():
     data = request.get_json(silent=True) or {}
     username = (data.get("username") or "guest").strip() or "guest"
-    docs = data.get("docs")
-    if not isinstance(docs, list) or not docs: return jsonify({"error":"missing_docs"}), 400
-    res = rag_index(username, docs)
-    return jsonify(res)
+    doc_id = (data.get("id") or "").strip()
+    delete_all = bool(data.get("all"))
+    backend = rag_backend()
+    try:
+        if backend == "qdrant":
+            if delete_all:
+                # delete by filter username
+                from qdrant_client.models import Filter, FieldCondition, MatchValue
+                qdrant.delete(collection_name=QDRANT_COLLECTION, points_selector=Filter(must=[FieldCondition(key="username", match=MatchValue(value=username))]))
+                return jsonify({"ok": True, "backend":"qdrant", "deleted":"all"})
+            if not doc_id: return jsonify({"error":"missing_id"}), 400
+            qdrant.delete(collection_name=QDRANT_COLLECTION, points_selector=[doc_id])
+            return jsonify({"ok": True, "backend":"qdrant", "deleted": doc_id})
 
-@app.post("/api/rag/query")
-def api_rag_query():
-    data = request.get_json(silent=True) or {}
-    username = (data.get("username") or "guest").strip() or "guest"
-    query = (data.get("query") or "").strip()
-    top_k = int(data.get("top_k") or 4)
-    if not query: return jsonify({"error":"missing_query"}), 400
-    return jsonify(rag_search(username, query, top_k))
+        elif backend == "pgvector":
+            with pg.cursor() as cur:
+                if delete_all:
+                    cur.execute("DELETE FROM rag_chunks WHERE username=%s;", (username,))
+                    return jsonify({"ok": True, "backend":"pgvector", "deleted": "all"})
+                if not doc_id: return jsonify({"error":"missing_id"}), 400
+                cur.execute("DELETE FROM rag_chunks WHERE id=%s AND username=%s;", (uuid.UUID(doc_id), username))
+                return jsonify({"ok": True, "backend":"pgvector", "deleted": doc_id})
 
-# ---------- Upload (role-based size enforcement + OCR) ----------
+        elif backend == "redis":
+            key = f"rag:{username}:docs"
+            if delete_all:
+                r.delete(key)
+                return jsonify({"ok": True, "backend":"redis", "deleted":"all"})
+            if not doc_id: return jsonify({"error":"missing_id"}), 400
+            items = r.lrange(key, 0, -1)
+            deleted = False
+            for it in items:
+                try:
+                    o = json.loads(it)
+                    if o.get("id")==doc_id:
+                        r.lrem(key, 1, it); deleted=True; break
+                except Exception: pass
+            return jsonify({"ok": True, "backend":"redis", "deleted": doc_id, "found": deleted})
+        else:
+            return jsonify({"error":"no_vector_backend"}), 503
+    except Exception as e:
+        return jsonify({"error": str(e), "backend": backend}), 500
+
+@app.post("/api/rag/compact")
+def api_rag_compact():
+    """Maintenance endpoint for PG: VACUUM/ANALYZE; reindex; Redis/Qdrant are no-ops."""
+    backend = rag_backend()
+    if backend == "pgvector":
+        try:
+            with pg.cursor() as cur:
+                cur.execute("VACUUM (VERBOSE, ANALYZE) rag_chunks;")
+                cur.execute("REINDEX TABLE rag_chunks;")
+            return jsonify({"ok": True, "backend":"pgvector", "action":"vacuum+reindex"})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+    return jsonify({"ok": True, "backend": backend, "note":"nothing to compact"})
+
+@app.post("/api/rag/qdrant/flush")
+def api_qdrant_flush():
+    backend = rag_backend()
+    if backend != "qdrant":
+        return jsonify({"ok": False, "backend": backend, "note":"not qdrant"}), 400
+    try:
+        qdrant.optimize_index(QDRANT_COLLECTION)
+        return jsonify({"ok": True, "backend":"qdrant", "action":"optimize"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ---------- Upload (role-based size + OCR) ----------
 @app.post("/api/upload")
 def upload_index():
     user = decode_jwt_from_header()
@@ -800,7 +941,6 @@ def upload_index():
     username = user.get("sub") or "guest"
     role = user.get("role") or "user"
 
-    # Enforce role-based size using Content-Length
     total = int(request.headers.get("Content-Length") or 0)
     limit_mb = UPLOAD_MAX_MB_ADMIN if role == "admin" else UPLOAD_MAX_MB_USER
     if total > 0 and total > (limit_mb * 1024 * 1024):
@@ -885,7 +1025,6 @@ def structured_json():
     prompt = (data.get("prompt") or "").strip()
     if not prompt: return jsonify({"error":"missing_prompt"}), 400
     model = (data.get("model") or active_model()).strip()
-    schema = {"type":"object","properties":{"json":{"type":"object"}}, "required":["json"]}
     if not OPENAI_KEY:
         return jsonify({"json":{"note":"dev no-key","echo": prompt[:120]}})
     from openai import OpenAI
@@ -922,6 +1061,7 @@ def method_not_allowed(_):
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=(os.getenv("FLASK_ENV","").lower()!="production"), threaded=True)
+
 
 
 
