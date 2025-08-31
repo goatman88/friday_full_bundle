@@ -36,6 +36,7 @@
     <input id="offset" type="number" min="0" value="0" style="width:90px">
     <button id="btnList" class="btn">List</button>
     <button id="btnSearch" class="btn">Search</button>
+    <button id="btnCSV" class="btn">Download CSV</button>
     <button id="btnDeleteAll" class="btn" style="background:linear-gradient(135deg,#ef4444,#f59e0b)">Delete ALL (user)</button>
   </div>
 
@@ -81,6 +82,10 @@ document.getElementById("btnSearch").onclick = async ()=>{
   const tb = document.getElementById("rows"); tb.innerHTML="";
   (j.matches||[]).forEach(it=> tb.appendChild(row(it.id, it.text, it.metadata)));
 };
+document.getElementById("btnCSV").onclick = ()=>{
+  const u = document.getElementById("username").value||"guest";
+  window.location = `/api/rag/export.csv?username=${encodeURIComponent(u)}`;
+};
 document.getElementById("btnDeleteAll").onclick = async ()=>{
   const u = document.getElementById("username").value||"guest";
   if(!confirm(`Delete ALL chunks for ${u}?`)) return;
@@ -91,3 +96,4 @@ document.getElementById("btnDeleteAll").onclick = async ()=>{
 </script>
 </body>
 </html>
+
