@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Friday AI • Stream+Tools++</title>
+<title>Friday AI • Supercharged</title>
 <style>
   :root { --bg:#0f172a; --panel:#0b1226; --muted:#94a3b8; --text:#e2e8f0; --accent:#60a5fa; --accent2:#a78bfa; --ok:#10b981; --warn:#f59e0b; --err:#ef4444; }
   *{box-sizing:border-box}
@@ -14,7 +14,7 @@
   .live{border-color: rgba(16,185,129,.5); color:#d1fae5;}
   .dev{border-color: rgba(245,158,11,.5); color:#fef3c7;}
   .warn{border-color: rgba(245,158,11,.5); color:#fde68a;}
-  main{max-width:1000px;margin:16px auto 120px;padding:0 16px}
+  main{max-width:1100px;margin:16px auto 120px;padding:0 16px}
   #chat{border:1px solid rgba(255,255,255,.07);border-radius:16px;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,.25)}
   .toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:10px;background:rgba(255,255,255,.02);border-bottom:1px solid rgba(255,255,255,.06)}
   .toolbar input,.toolbar select,.toolbar button{background:#0b1226;color:var(--text);border:1px solid rgba(255,255,255,.1);padding:8px 10px;border-radius:10px;outline:none}
@@ -59,7 +59,7 @@
   <section id="chat">
     <div class="toolbar">
       <span class="muted">User</span>
-      <input id="username" placeholder="username" style="width:180px">
+      <input id="username" placeholder="username" style="width:160px">
       <button id="saveUser" class="btn">Set</button>
 
       <span class="muted" style="margin-left:8px">Model</span>
@@ -74,8 +74,24 @@
         <option value="nonstream_tools">Non-stream (tools)</option>
       </select>
 
-      <button id="clearHistory" style="margin-left:auto">Clear history</button>
+      <span class="muted" style="margin-left:auto">Login</span>
+      <input id="password" type="password" placeholder="password (if set)" style="width:160px">
+      <input id="adminCode" type="text" placeholder="admin code (optional)" style="width:160px">
+      <button id="loginBtn">Login</button>
+
+      <span id="authBadge" class="pill warn" title="Auth">anon</span>
+      <button id="clearHistory">Clear history</button>
       <span id="rlBadge" class="pill warn" title="Rate-limit status">RL…</span>
+    </div>
+
+    <div class="toolbar" style="border-top:1px solid rgba(255,255,255,.06)">
+      <span class="muted">Upload (PDF/TXT) → RAG</span>
+      <input id="fileInput" type="file" multiple accept=".pdf,.txt,.md">
+      <button id="uploadBtn">Upload & Index</button>
+
+      <span class="muted" style="margin-left:12px">JSON mode test</span>
+      <input id="jsonPrompt" placeholder='e.g., "Summarize this as {title, bullets[]}"' style="min-width:320px">
+      <button id="jsonBtn">Run</button>
     </div>
 
     <div id="log"></div>
@@ -85,7 +101,7 @@
       <button id="send" class="send">Send</button>
     </div>
   </section>
-  <p class="muted" style="margin-top:8px">Tip: username & model saved in this browser. Use “Stream+ (tools)” for Jarvis vibes.</p>
+  <p class="muted" style="margin-top:8px">Tip: username & model saved in this browser. Use “Stream+ (tools)” for Jarvis vibes. Upload docs to ground answers.</p>
 </main>
 
 <script>
@@ -94,14 +110,26 @@ const log = $("#log"), input = $("#input"), sendBtn = $("#send");
 const userEl = $("#username"), saveUserBtn = $("#saveUser");
 const modelSel = $("#model"), useModelBtn = $("#useModel"), modelHint = $("#modelHint");
 const modeBadge = $("#modeBadge"), sendMode = $("#sendMode");
-const rlBadge = $("#rlBadge");
+const rlBadge = $("#rlBadge"); const authBadge = $("#authBadge");
 const clearBtn = $("#clearHistory");
+
+const loginBtn = $("#loginBtn"); const pwdEl = $("#password"); const adminEl = $("#adminCode");
+const fileInput = $("#fileInput"); const uploadBtn = $("#uploadBtn");
+const jsonPrompt = $("#jsonPrompt"); const jsonBtn = $("#jsonBtn");
 
 const state = {
   username: localStorage.getItem("friday.username") || "guest",
   model: localStorage.getItem("friday.model") || null,
+  token: localStorage.getItem("friday.token") || null,
+  role: localStorage.getItem("friday.role") || "anon",
 };
 userEl.value = state.username;
+
+function headersAuth(json=true){
+  const h = json ? {"Content-Type":"application/json"} : {};
+  if(state.token) h["Authorization"] = "Bearer " + state.token;
+  return h;
+}
 
 function add(role, text){
   const wrap = document.createElement("div");
@@ -125,7 +153,7 @@ function addTrace(parent, title, obj){
 }
 
 async function jsonFetch(url, opts={}){
-  const res = await fetch(url, { headers:{ "Content-Type":"application/json", ...(opts.headers||{}) }, ...opts });
+  const res = await fetch(url, { headers:{ ...headersAuth(true), ...(opts.headers||{}) }, ...opts });
   if(!res.ok){
     let msg = `${res.status} ${res.statusText}`;
     try{ const j = await res.json(); msg = j.error || j.reason || msg; }catch{}
@@ -136,7 +164,7 @@ async function jsonFetch(url, opts={}){
 
 async function checkHealth(){
   try{
-    const h = await jsonFetch("/debug/health");
+    const h = await jsonFetch("/debug/health", {headers: headersAuth(true)});
     const live = !!h.openai;
     modeBadge.textContent = live ? "Live (OpenAI)" : "Dev Echo";
     modeBadge.className = "badge " + (live ? "live" : "dev");
@@ -182,6 +210,16 @@ async function pollRL(){
   }
 }
 
+function updateAuthBadge(){
+  if(state.token){
+    authBadge.textContent = state.role || "user";
+    authBadge.className = "pill ok";
+  }else{
+    authBadge.textContent = "anon";
+    authBadge.className = "pill warn";
+  }
+}
+
 saveUserBtn.addEventListener("click", ()=>{
   state.username = (userEl.value||"guest").trim() || "guest";
   localStorage.setItem("friday.username", state.username);
@@ -206,6 +244,54 @@ clearBtn.addEventListener("click", async ()=>{
     add("assistant", "History cleared.");
   }catch(e){
     add("assistant", "Couldn’t clear history: "+e.message);
+  }
+});
+
+// Login → JWT
+loginBtn.addEventListener("click", async ()=>{
+  try{
+    const body = { username: (userEl.value||"guest").trim(), password: pwdEl.value, admin_code: adminEl.value };
+    const j = await jsonFetch("/api/auth/login", { method:"POST", body: JSON.stringify(body) });
+    state.token = j.token; state.role = j.user?.role || "user";
+    localStorage.setItem("friday.token", state.token);
+    localStorage.setItem("friday.role", state.role);
+    updateAuthBadge();
+    add("assistant", `Logged in as ${j.user.username} (${state.role}).`);
+  }catch(e){ add("assistant", "Login failed: " + e.message); }
+});
+
+// Upload → RAG
+uploadBtn.addEventListener("click", async ()=>{
+  const files = fileInput.files;
+  if(!files || !files.length){ add("assistant","Pick a file first."); return; }
+  if(!state.token){ add("assistant","Login first to upload."); return; }
+
+  const fd = new FormData();
+  Array.from(files).forEach(f => fd.append("files", f));
+  try{
+    const res = await fetch("/api/upload", { method:"POST", body: fd, headers: { ...(state.token ? {"Authorization":"Bearer "+state.token} : {}) }});
+    if(!res.ok){ const t = await res.text(); throw new Error(t); }
+    const j = await res.json();
+    add("assistant", `Indexed ${j.indexed_docs} docs (${j.chunks} chunks).`);
+  }catch(e){
+    add("assistant", "Upload failed: " + e.message);
+  }
+});
+
+// JSON mode test
+jsonBtn.addEventListener("click", async ()=>{
+  const p = (jsonPrompt.value||"").trim();
+  if(!p){ add("assistant","Type a JSON prompt first"); return; }
+  try{
+    const j = await jsonFetch("/api/structured", { method:"POST", body: JSON.stringify({ prompt: p, model: state.model||"" })});
+    add("assistant", "JSON Mode result:");
+    const last = log.lastChild;
+    const trace = document.createElement("div");
+    trace.className = "trace";
+    trace.innerHTML = `<strong>JSON</strong><pre>${JSON.stringify(j.json, null, 2)}</pre>`;
+    last.appendChild(trace);
+  }catch(e){
+    add("assistant", "Structured failed: " + e.message);
   }
 });
 
@@ -295,6 +381,12 @@ input.addEventListener("keydown", (e)=>{
 });
 
 // init
+function initAuth(){
+  state.token = localStorage.getItem("friday.token");
+  state.role = localStorage.getItem("friday.role") || "anon";
+  updateAuthBadge();
+}
+initAuth();
 checkHealth();
 loadModels();
 loadHistory();
@@ -303,5 +395,6 @@ setInterval(pollRL, 15000);
 </script>
 </body>
 </html>
+
 
 
