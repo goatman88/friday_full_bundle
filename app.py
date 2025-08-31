@@ -3,6 +3,16 @@ import os, json, time, secrets
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Generator
 
+# --- Load .env locally only (Option 3) ---
+try:
+    from dotenv import load_dotenv
+    # If FLASK_ENV is NOT production, load local .env. In production (Render) you set env vars in the dashboard.
+    if (os.getenv("FLASK_ENV", "").lower() != "production"):
+        load_dotenv(override=False)
+except Exception:
+    # dotenv not installed or other issue; keep going
+    pass
+
 from flask import (
     Flask, jsonify, request, send_from_directory,
     Response, stream_with_context
@@ -23,7 +33,7 @@ r = None
 try:
     REDIS_URL = os.getenv("REDIS_URL", "")
     if REDIS_URL:
-        import redis  # requires redis>=5
+        import redis  # pip install redis>=5
         r = redis.from_url(REDIS_URL, decode_responses=True)
 except Exception:
     r = None
@@ -33,7 +43,7 @@ def redis_ok() -> bool:
     try: r.ping(); return True
     except Exception: return False
 
-# ---------- Key helpers ----------
+# ---------- Keys & helpers ----------
 def k_history(username: str) -> str: return f"hist:{username}"
 def k_model_active() -> str: return "model:active"
 def k_user_model(username: str) -> str: return f"user:{username}:model"
@@ -61,19 +71,14 @@ def set_active_model(model: str, username: Optional[str] = None) -> str:
 
 def append_history(username: str, message: str, reply: str) -> None:
     if not r: return
-    entry = {
-        "ts": time.time(),
-        "username": username,
-        "message": message,
-        "reply": reply,
-    }
+    entry = {"ts": time.time(), "username": username, "message": message, "reply": reply}
     r.rpush(k_history(username), json.dumps(entry))
     r.ltrim(k_history(username), -500, -1)
 
 def get_history(username: str, limit: int = 200) -> List[Dict[str, Any]]:
     if not r: return []
     entries = r.lrange(k_history(username), max(-limit, -500), -1)
-    out = []
+    out: List[Dict[str, Any]] = []
     for raw in entries:
         try: out.append(json.loads(raw))
         except Exception: pass
@@ -103,11 +108,14 @@ def routes():
 
 @app.get("/debug/health")
 def health():
+    mode = "live" if OPENAI_KEY else "dev_echo"
     return jsonify({
         "ok": True,
         "commit": COMMIT,
         "redis": redis_ok(),
-        "model": active_model()
+        "model": active_model(),
+        "openai": bool(OPENAI_KEY),
+        "mode": mode
     })
 
 # ---------- Models ----------
@@ -123,7 +131,7 @@ def set_model_api():
     model = str(data.get("model", "")).strip()
     if not model:
         return jsonify({"error": "missing_model"}), 400
-    set_active_model(model, username=None)  # global set; switch to per-user if you prefer
+    set_active_model(model, username=None)  # global; switch to per-user if desired
     return jsonify({"active": active_model()})
 
 # ---------- Chat (non-streaming fallback) ----------
@@ -162,13 +170,9 @@ def sse_event(payload: Dict[str, Any]) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 def stream_openai(model: str, message: str) -> Generator[str, None, str]:
-    """
-    Yield SSE chunks with {"delta": "..."} as tokens arrive.
-    Return final text so we can store history.
-    """
     final_text = []
     if not OPENAI_KEY:
-        # Dev echo streamer: type it out slowly
+        # dev streamer (no key)
         demo = f"(dev echo) {message}"
         for ch in demo:
             final_text.append(ch)
@@ -190,12 +194,10 @@ def stream_openai(model: str, message: str) -> Generator[str, None, str]:
             stream=True,
         )
         last_heartbeat = time.time()
-        for chunk in stream:  # yields ChatCompletionChunk
-            # heartbeat every ~10s so proxies don’t cut us off
+        for chunk in stream:
             if time.time() - last_heartbeat > 10:
                 yield ":keepalive\n\n"
                 last_heartbeat = time.time()
-
             part = ""
             try:
                 part = chunk.choices[0].delta.content or ""
@@ -207,7 +209,6 @@ def stream_openai(model: str, message: str) -> Generator[str, None, str]:
         yield sse_event({"done": True})
         return "".join(final_text)
     except Exception as e:
-        # Emit an error event so the UI can show it
         yield sse_event({"error": str(e)})
         yield sse_event({"done": True})
         return f"[upstream_error] {e}"
@@ -222,15 +223,9 @@ def api_chat_stream():
 
     @stream_with_context
     def generate():
-        text_collected = ""
         for chunk in stream_openai(model, message):
             yield chunk
-            # capture final once generator returns (we can't read return value here)
-            if '"done": true' in chunk:
-                # best-effort; we’ll rebuild from previous deltas in UI, but store echo/nonstream for safety
-                pass
-        # As a fallback, also append non-stream reply to history (ensures something is saved)
-        # If you want perfection, refactor stream_openai to send final text via a terminal event and capture it in UI to POST /api/history/append.
+        # store a non-stream copy to guarantee history
         nonstream = openai_nonstream_reply(model, message)
         append_history(username, message, nonstream)
 
@@ -318,7 +313,9 @@ def method_not_allowed(_):
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
-    app.run(host="0.0.0.0", port=port, debug=True, threaded=True)
+    # Set FLASK_ENV=production in Render; locally leave it unset or set to development.
+    app.run(host="0.0.0.0", port=port, debug=(os.getenv("FLASK_ENV","").lower()!="production"), threaded=True)
+
 
 
 
