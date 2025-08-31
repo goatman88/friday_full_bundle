@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Friday Maintenance</title>
+<style>
+  body{margin:0;background:#0f172a;color:#e2e8f0;font:16px/1.5 system-ui,-apple-system,Segoe UI,Inter,Roboto,Arial}
+  header{padding:12px 16px;border-bottom:1px solid rgba(255,255,255,.08);display:flex;justify-content:space-between}
+  .wrap{max-width:900px;margin:16px auto;padding:0 16px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+  button{background:linear-gradient(135deg,#60a5fa,#a78bfa);color:#fff;border:none;padding:10px 12px;border-radius:10px;font-weight:600}
+  pre{background:#0b1226;border:1px solid rgba(255,255,255,.08);padding:8px;border-radius:8px;white-space:pre-wrap;font-size:12px;max-height:320px;overflow:auto}
+  a{color:#93c5fd;text-decoration:none}
+</style>
+</head>
+<body>
+<header>
+  <div><strong>Friday</strong> • Maintenance</div>
+  <div><a href="/admin">← admin</a></div>
+</header>
+
+<div class="wrap">
+  <div class="row">
+    <button id="btnBackend">Backend / Stats</button>
+    <button id="btnPG">PG: VACUUM + REINDEX</button>
+    <button id="btnQdrant">Qdrant: Optimize</button>
+  </div>
+  <pre id="out">…</pre>
+</div>
+
+<script>
+const out = document.getElementById("out");
+const H = j => JSON.stringify(j, null, 2);
+
+document.getElementById("btnBackend").onclick = async ()=>{
+  const r = await fetch("/api/rag/stats"); const j = await r.json(); out.textContent = H(j);
+};
+document.getElementById("btnPG").onclick = async ()=>{
+  if(!confirm("Run VACUUM/REINDEX on PG table rag_chunks?")) return;
+  const r = await fetch("/api/rag/compact",{method:"POST"}); const j = await r.json(); out.textContent = H(j);
+};
+document.getElementById("btnQdrant").onclick = async ()=>{
+  if(!confirm("Optimize Qdrant collection?")) return;
+  const r = await fetch("/api/rag/qdrant/flush",{method:"POST"}); const j = await r.json(); out.textContent = H(j);
+};
+</script>
+</body>
+</html>
