@@ -1,13 +1,61 @@
-[![CI](https://github.com/GOATMAN88/friday_full_bundle/actions/workflows/ci.yml/badge.svg)](https://github.com/GOATMAN88/friday_full_bundle/actions/workflows/ci.yml)
+# Friday AI (Flask) – with Redis History
 
-# Friday AI — Flask Starter (Multi-tenant, Guardrails, RAG, Tools)
+A tiny Flask service + static chat UI. Works out-of-the-box with **dev echo** replies and supports OpenAI, persistent history (Redis), and basic admin mint/redeem for access codes.
 
-## New capabilities
-- **Per-user file buckets**: uploads live in `/uploads/<org|noorg>/<user|anon>/`
-- **Orgs + invite codes** (optional): set `INVITE_REQUIRED=true`, create invites via `POST /api/admin/invite` (header `X-Admin-Token`)
-- **pgvector (Postgres)**: set `PG_URL`; RAG search switches to vector index automatically
-- **Tool calling**: the model auto-routes simple “weather in X” or “calc 2+2” using safe tools
-- **Telemetry**: Sentry (dsn), optional OpenTelemetry (OTLP) if `OTEL_ENABLED=true`
+---
+
+## Endpoints
+
+- **UI**
+  - `GET /` and `GET /chat` → serves `static/chat.html`
+- **Diagnostics**
+  - `GET /routes`
+  - `GET /debug/health`
+- **Chat**
+  - `POST /api/chat` → `{ "message": "...", "username": "guest", "model": "gpt-4o-mini" }`
+  - `GET  /api/chat/stream?message=..&username=..` (simple SSE demo)
+- **History**
+  - `GET /api/history?username=guest`
+  - `GET /api/history/export?username=guest` → downloads JSON
+- **Models**
+  - `GET  /api/models`
+  - `POST /api/model` → `{ "model": "gpt-4o" }` (global)
+- **Admin**
+  - `POST /api/admin/mint` → header `Authorization: Bearer <ADMIN_TOKEN>`, body `{ "count": 1 }`
+  - `POST /api/auth/redeem` → `{ "code": "<token>", "username": "newuser" }`
+
+---
+
+## Environment variables
+
+| Name                | Required | Example / Notes |
+|---------------------|----------|-----------------|
+| `PORT`              | no       | Render injects this automatically. Locally defaults to `5000`. |
+| `OPENAI_API_KEY`    | optional | Set to use real completions. If absent, the API returns a friendly dev-echo. |
+| `OPENAI_MODEL`      | optional | Default active model. e.g. `gpt-4o-mini` |
+| `REDIS_URL`         | optional (recommended) | `redis://default:<password>@<host>:6379/0` |
+| `ADMIN_TOKEN`       | optional | Enables `/api/admin/mint` (Bearer). Set a long random secret. |
+| `CORS_ALLOW_ORIGINS`| optional | Defaults to `*` |
+
+> **Render tip (Redis URL):** if you also created a Render **Redis** instance, open it → **Connect** → copy the `redis://...` string and paste into your web service’s **Environment** as `REDIS_URL`.
+
+---
+
+## Local dev
+
+```bash
+# create venv
+python -m venv .venv
+# activate (mac/linux)
+source .venv/bin/activate
+# activate (Windows PowerShell)
+# .venv\Scripts\Activate.ps1
+
+pip install -r requirements.txt
+# Run with dev echo replies (no OpenAI key needed)
+python app.py
+# open http://localhost:5000/chat
+
 
 ## Quick start
 ```bash
