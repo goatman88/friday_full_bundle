@@ -1,5 +1,5 @@
 # app.py
-import os, io, json, time, math, secrets, hashlib, mimetypes, uuid, zipfile
+import os, io, json, time, math, secrets, hashlib, mimetypes, uuid, zipfile, csv
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -35,8 +35,6 @@ except Exception:
 
 # ---------- Flask ----------
 app = Flask(__name__, static_folder="static", template_folder="templates")
-
-# CORS
 CORS(app, resources={r"/*": {"origins": [o.strip() for o in os.getenv("CORS_ALLOW_ORIGINS", "*").split(",")]}})
 
 COMMIT = (os.getenv("RENDER_GIT_COMMIT", "")[:7] or os.getenv("COMMIT", "") or "dev")
@@ -257,8 +255,11 @@ def price_estimate(model: str, p_tok: int, c_tok: int) -> float:
     p = PRICES.get(model, PRICES.get("gpt-4o-mini"))
     return (p_tok/1000.0)*p["in"] + (c_tok/1000.0)*p["out"]
 
-def embed_texts(texts: List[str]) -> List[List[float]]:
+def embed_texts(texts: List[str], model: Optional[str] = None) -> List[List[float]]:
+    """Embed texts with selected model (default EMBED_MODEL)."""
+    model = model or EMBED_MODEL
     if not OPENAI_KEY:
+        # dev fallback hash-vector
         def cheap_vec(s: str, dim=64):
             v = [0.0]*dim
             for i,ch in enumerate(s.encode("utf-8")):
@@ -268,7 +269,7 @@ def embed_texts(texts: List[str]) -> List[List[float]]:
         return [cheap_vec(t) for t in texts]
     from openai import OpenAI
     client = OpenAI(api_key=OPENAI_KEY)
-    res = client.embeddings.create(model=EMBED_MODEL, input=texts)
+    res = client.embeddings.create(model=model, input=texts)
     return [d.embedding for d in res.data]
 
 def moderate_text(text: str) -> Dict[str, Any]:
@@ -356,10 +357,12 @@ def rag_backend() -> str:
     if r: return "redis"
     return "none"
 
-# ---------- RAG index/search (unchanged logic) ----------
+# ---------- RAG index/search ----------
 def rag_index(username: str, docs: List[Dict[str, Any]]) -> Dict[str, Any]:
-    texts = [d.get("text","") for d in docs]
-    vecs = embed_texts(texts)
+    vecs = embed_texts([d.get("text","") for d in docs])
+    # sanity check dimension (if using real embeddings)
+    if vecs and OPENAI_KEY and len(vecs[0]) != EMBED_DIM:
+        return {"ok": False, "reason": f"embedding_dim_mismatch expected {EMBED_DIM}, got {len(vecs[0])}"}
     for d, v in zip(docs, vecs):
         d["vec"] = v
 
@@ -414,6 +417,8 @@ def cosine(a: List[float], b: List[float]) -> float:
 
 def rag_search(username: str, query: str, top_k: int = 4) -> Dict[str, Any]:
     qvec = embed_texts([query])[0]
+    if qvec and OPENAI_KEY and len(qvec) != EMBED_DIM:
+        return {"ok": False, "reason": f"embedding_dim_mismatch expected {EMBED_DIM}, got {len(qvec)}"}
     backend = rag_backend()
 
     if backend == "qdrant":
@@ -458,7 +463,7 @@ def rag_search(username: str, query: str, top_k: int = 4) -> Dict[str, Any]:
                         (Vector(qvec), username, Vector(qvec), top_k)
                     )
                 for rid, t, meta, score in cur.fetchall():
-                    rows.append({"id": str(rid), "text": t, "metadata": meta or {}, "score": round(float(score or 0), 4)})
+                    rows.append({"id": str(rid), "text": t or "", "metadata": meta or {}, "score": round(float(score or 0), 4)})
             return {"ok": True, "matches": rows, "backend": "pgvector"}
         except Exception as e:
             return {"ok": False, "reason": f"pgvector_search_failed:{e}"}
@@ -746,7 +751,7 @@ def api_chat_stream():
         for chunk in stream:
             part = ""
             try: part = chunk.choices[0].delta.content or ""
-            except Exception: pass
+            except Exception: part = ""
             if part:
                 final.append(part)
                 yield sse_line({"type":"delta","delta": part})
@@ -764,19 +769,16 @@ def api_chat_stream_tools():
     if not message: return jsonify({"error":"missing_message"}), 400
 
     def generate():
-        # For simplicity, we run tool_loop (non-stream) to get traces, then stream the final text gradually,
-        # while also emitting the tool traces as discrete events (tool_start/tool_result).
         out = tool_loop(model, message, username, max_hops=6)
         traces = out.get("traces", [])
-        # Emit tool events first
+        # tool events first
         for t in traces:
             yield sse_line({"type":"tool_event","tool": t.get("tool"), "args": t.get("args"), "result": t.get("result")})
-        # Stream the final reply char-by-char for UX parity
+        # then stream text
         reply = (out.get("reply") or "").strip() or "(no reply)"
         for ch in reply:
-            yield sse_line({"type":"delta","delta": ch})
-            time.sleep(0.005)
-        yield sse_line({"type":"usage","usage": out.get("usage")})
+            yield sse_line({"type":"delta","delta": ch}); time.sleep(0.005)
+        if out.get("usage"): yield sse_line({"type":"usage","usage": out["usage"]})
         yield sse_line({"type":"done"})
         append_history(username, message, reply)
     return Response(stream_with_context(generate()), headers={"Content-Type":"text/event-stream","Cache-Control":"no-cache","Connection":"keep-alive","X-Accel-Buffering":"no"})
@@ -798,6 +800,18 @@ def history_export():
     return Response(json.dumps(items, indent=2, ensure_ascii=False), mimetype="application/json", headers={"Content-Disposition": f'attachment; filename="history_{u}.json"'})
 
 # ---------- RAG APIs (browse + admin ops) ----------
+
+@app.post("/api/rag/query")
+def api_rag_query():
+    """Semantic search endpoint used by vectors UI."""
+    data = request.get_json(force=True) or {}
+    username = (data.get("username") or "guest").strip() or "guest"
+    query = (data.get("query") or "").strip()
+    top_k = int(data.get("top_k") or 6)
+    if not query: return jsonify({"error":"missing_query"}), 400
+    res = rag_search(username, query, top_k)
+    return jsonify(res), (200 if res.get("ok", True) else 500)
+
 @app.get("/api/rag/stats")
 def api_rag_stats():
     backend = rag_backend()
@@ -813,7 +827,6 @@ def api_rag_stats():
                 cur.execute("SELECT count(DISTINCT username) FROM rag_chunks;")
                 out["users"] = cur.fetchone()[0]
         elif backend == "redis":
-            # rough: total length across all lists is not tracked – we expose per-user via query
             out["note"] = "redis backend; per-user list under key rag:{username}:docs"
     except Exception as e:
         out["error"] = str(e)
@@ -821,7 +834,6 @@ def api_rag_stats():
 
 @app.get("/api/rag/list")
 def api_rag_list():
-    """Paginate/browse chunks for a user. """
     username = (request.args.get("username") or "guest").strip() or "guest"
     limit = max(1, min(int(request.args.get("limit") or 20), 200))
     offset = max(0, int(request.args.get("offset") or 0))
@@ -829,7 +841,6 @@ def api_rag_list():
     rows=[]; total=None
     try:
         if backend == "qdrant":
-            # basic scroll using offset/limit; no server-side scroll token here
             res = qdrant.scroll(collection_name=QDRANT_COLLECTION, with_payload=True, limit=limit, offset=offset)
             pts = res[0] or []
             for p in pts:
@@ -871,7 +882,6 @@ def api_rag_delete():
     try:
         if backend == "qdrant":
             if delete_all:
-                # delete by filter username
                 from qdrant_client.models import Filter, FieldCondition, MatchValue
                 qdrant.delete(collection_name=QDRANT_COLLECTION, points_selector=Filter(must=[FieldCondition(key="username", match=MatchValue(value=username))]))
                 return jsonify({"ok": True, "backend":"qdrant", "deleted":"all"})
@@ -910,7 +920,6 @@ def api_rag_delete():
 
 @app.post("/api/rag/compact")
 def api_rag_compact():
-    """Maintenance endpoint for PG: VACUUM/ANALYZE; reindex; Redis/Qdrant are no-ops."""
     backend = rag_backend()
     if backend == "pgvector":
         try:
@@ -932,6 +941,178 @@ def api_qdrant_flush():
         return jsonify({"ok": True, "backend":"qdrant", "action":"optimize"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+# ---------- RAG: CSV Export ----------
+@app.get("/api/rag/export.csv")
+def api_rag_export_csv():
+    username = (request.args.get("username") or "").strip()
+    if not username:
+        return jsonify({"error":"missing_username"}), 400
+    backend = rag_backend()
+    rows=[]
+    try:
+        if backend == "qdrant":
+            # naive scroll; filter after fetch
+            collected = 0
+            offset = None
+            while True:
+                page, offset, _ = qdrant.scroll(collection_name=QDRANT_COLLECTION, with_payload=True, limit=256, offset=offset)
+                if not page: break
+                for p in page:
+                    pl = p.payload or {}
+                    if pl.get("username")==username:
+                        rows.append({"id": str(p.id), "username": username, "text": pl.get("text",""), "metadata": json.dumps(pl.get("metadata",{}), ensure_ascii=False)})
+                collected += len(page)
+                if len(page) < 256 or len(rows) >= 5000:  # safety cap
+                    break
+
+        elif backend == "pgvector":
+            with pg.cursor() as cur:
+                cur.execute("SELECT id, text, metadata FROM rag_chunks WHERE username=%s ORDER BY id;", (username,))
+                for rid, t, meta in cur.fetchall():
+                    rows.append({"id": str(rid), "username": username, "text": t or "", "metadata": json.dumps(meta or {}, ensure_ascii=False)})
+
+        elif backend == "redis":
+            key = f"rag:{username}:docs"
+            for raw in r.lrange(key, 0, -1):
+                try:
+                    o = json.loads(raw)
+                    rows.append({"id": o.get("id"), "username": username, "text": o.get("text",""), "metadata": json.dumps(o.get("meta",{}), ensure_ascii=False)})
+                except Exception:
+                    pass
+        else:
+            return jsonify({"error":"no_vector_backend"}), 503
+    except Exception as e:
+        return jsonify({"error": str(e), "backend": backend}), 500
+
+    def gen_csv():
+        yield "id,username,text,metadata\n"
+        w = csv.writer(io.StringIO())  # dummy, not used; we’ll manual-escape commas via csv module on the fly
+        for row in rows:
+            # use csv to handle quoting
+            buf = io.StringIO()
+            csv.writer(buf).writerow([row["id"], row["username"], row["text"], row["metadata"]])
+            yield buf.getvalue()
+    return Response(gen_csv(), mimetype="text/csv", headers={"Content-Disposition": f'attachment; filename="rag_{username}.csv"'})
+
+# ---------- RAG: Re-embed / Reindex sweep (ADMIN) ----------
+def _reembed_qdrant(username: Optional[str], max_items: int, batch: int, embed_model: Optional[str]) -> Dict[str,Any]:
+    done=0; offset=None; updated=0
+    from qdrant_client.models import PointStruct
+    while done < max_items:
+        page, offset, _ = qdrant.scroll(collection_name=QDRANT_COLLECTION, with_payload=True, limit=min(256, max_items-done), offset=offset)
+        if not page: break
+        # filter and collect texts
+        pts=[]; texts=[]
+        for p in page:
+            pl = p.payload or {}
+            if username and pl.get("username") != username:
+                continue
+            txt = pl.get("text","")
+            pts.append(p); texts.append(txt)
+        if not texts:
+            done += len(page); 
+            if len(page) < 256: break
+            continue
+        # embed in batches
+        for i in range(0, len(texts), batch):
+            chunk = texts[i:i+batch]
+            vecs = embed_texts(chunk, model=embed_model)
+            if vecs and OPENAI_KEY and len(vecs[0]) != EMBED_DIM:
+                return {"ok": False, "reason": f"embedding_dim_mismatch expected {EMBED_DIM}, got {len(vecs[0])}"}
+            up=[]
+            for j, v in enumerate(vecs):
+                p0 = pts[i+j]
+                up.append(PointStruct(id=p0.id, vector=v, payload=p0.payload))
+            qdrant.upsert(collection_name=QDRANT_COLLECTION, points=up, wait=True)
+            updated += len(up)
+        done += len(page)
+        if len(page) < 256: break
+    return {"ok": True, "backend":"qdrant", "updated": updated}
+
+def _reembed_pg(username: Optional[str], max_items: int, batch: int, embed_model: Optional[str]) -> Dict[str,Any]:
+    from pgvector.psycopg import Vector
+    updated=0
+    with pg.cursor() as cur:
+        if username:
+            cur.execute("SELECT id, text FROM rag_chunks WHERE username=%s ORDER BY id LIMIT %s;", (username, max_items))
+        else:
+            cur.execute("SELECT id, text FROM rag_chunks ORDER BY id LIMIT %s;", (max_items,))
+        rows = cur.fetchall()
+    for i in range(0, len(rows), batch):
+        chunk = rows[i:i+batch]
+        texts = [t or "" for _, t in chunk]
+        vecs = embed_texts(texts, model=embed_model)
+        if vecs and OPENAI_KEY and len(vecs[0]) != EMBED_DIM:
+            return {"ok": False, "reason": f"embedding_dim_mismatch expected {EMBED_DIM}, got {len(vecs[0])}"}
+        with pg.cursor() as cur:
+            for (rid, _), v in zip(chunk, vecs):
+                cur.execute("UPDATE rag_chunks SET embedding=%s WHERE id=%s;", (Vector(v), rid))
+                updated += 1
+    return {"ok": True, "backend":"pgvector", "updated": updated}
+
+def _reembed_redis(username: Optional[str], max_items: int, batch: int, embed_model: Optional[str]) -> Dict[str,Any]:
+    if not username:
+        return {"ok": False, "reason":"redis_requires_username"}
+    key = f"rag:{username}:docs"
+    items = r.lrange(key, 0, max_items-1)
+    docs=[]
+    for raw in items:
+        try: docs.append(json.loads(raw))
+        except Exception: pass
+    texts=[d.get("text","") for d in docs]
+    updated=0
+    for i in range(0, len(texts), batch):
+        chunk=texts[i:i+batch]
+        vecs = embed_texts(chunk, model=embed_model)
+        if vecs and OPENAI_KEY and len(vecs[0]) != EMBED_DIM:
+            return {"ok": False, "reason": f"embedding_dim_mismatch expected {EMBED_DIM}, got {len(vecs[0])}"}
+        for j, v in enumerate(vecs):
+            docs[i+j]["vec"] = v
+            updated += 1
+    # rewrite list
+    pipe = r.pipeline()
+    r.delete(key)
+    for d in docs:
+        pipe.rpush(key, json.dumps(d))
+    pipe.execute()
+    return {"ok": True, "backend":"redis", "updated": updated}
+
+def _require_admin(req) -> bool:
+    data = decode_jwt_from_header()
+    if data and data.get("typ")=="access" and data.get("role")=="admin": return True
+    if not ADMIN_TOKEN: return False
+    auth = req.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "): return False
+    return secrets.compare_digest(auth.split(" ",1)[1].strip(), ADMIN_TOKEN)
+
+@app.post("/api/rag/reembed_all")
+def api_rag_reembed_all():
+    if not _require_admin(request): return jsonify({"error":"unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
+    username = (data.get("username") or "").strip() or None
+    max_items = max(1, min(int(data.get("max") or 500), 5000))
+    batch = max(1, min(int(data.get("batch") or 64), 256))
+    model_override = (data.get("embed_model") or "").strip() or None
+
+    backend = rag_backend()
+    try:
+        if backend == "qdrant":
+            res = _reembed_qdrant(username, max_items, batch, model_override)
+        elif backend == "pgvector":
+            res = _reembed_pg(username, max_items, batch, model_override)
+        elif backend == "redis":
+            res = _reembed_redis(username, max_items, batch, model_override)
+        else:
+            return jsonify({"error":"no_vector_backend"}), 503
+        return jsonify(res)
+    except Exception as e:
+        return jsonify({"error": str(e), "backend": backend}), 500
+
+# alias for convenience
+@app.post("/api/rag/reindex_all_users")
+def api_rag_reindex_all_users():
+    return api_rag_reembed_all()
 
 # ---------- Upload (role-based size + OCR) ----------
 @app.post("/api/upload")
@@ -979,12 +1160,7 @@ def upload_index():
 
 # ---------- Admin ----------
 def require_admin(req) -> bool:
-    data = decode_jwt_from_header()
-    if data and data.get("typ")=="access" and data.get("role")=="admin": return True
-    if not ADMIN_TOKEN: return False
-    auth = req.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "): return False
-    return secrets.compare_digest(auth.split(" ",1)[1].strip(), ADMIN_TOKEN)
+    return _require_admin(req)
 
 @app.post("/api/admin/mint")
 def admin_mint():
@@ -1061,6 +1237,7 @@ def method_not_allowed(_):
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=(os.getenv("FLASK_ENV","").lower()!="production"), threaded=True)
+
 
 
 
