@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Friday Admin</title>
+<style>
+  body{margin:0;background:#0f172a;color:#e2e8f0;font:16px/1.5 system-ui,-apple-system,Segoe UI,Inter,Roboto,Arial}
+  header{padding:12px 16px;border-bottom:1px solid rgba(255,255,255,.08);display:flex;justify-content:space-between}
+  .grid{max-width:1100px;margin:16px auto;padding:0 16px;display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
+  .card{background:#0b1226;border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:14px}
+  h2{margin:0 0 10px 0;font-size:18px}
+  input,button{background:#0b1226;color:#e2e8f0;border:1px solid rgba(255,255,255,.15);padding:8px 10px;border-radius:10px}
+  button.btn{background:linear-gradient(135deg,#60a5fa,#a78bfa);border:none;font-weight:600}
+  pre{font-size:12px;white-space:pre-wrap;background:#0b1226;border:1px solid rgba(255,255,255,.08);padding:8px;border-radius:8px;max-height:260px;overflow:auto}
+</style>
+</head>
+<body>
+<header>
+  <div><strong>Friday</strong> • Admin</div>
+  <div><a href="/chat" style="color:#93c5fd;text-decoration:none">← back to chat</a></div>
+</header>
+
+<div class="grid">
+  <div class="card">
+    <h2>Auth</h2>
+    <div style="display:flex;gap:8px;margin-bottom:8px">
+      <input id="username" placeholder="username" value="admin">
+      <input id="password" type="password" placeholder="password (if set)">
+      <input id="adminCode" placeholder="admin code">
+      <button id="login" class="btn">Login</button>
+    </div>
+    <div><small id="who">not logged in</small></div>
+  </div>
+
+  <div class="card">
+    <h2>Health</h2>
+    <button id="btnHealth" class="btn">Check</button>
+    <pre id="health">…</pre>
+  </div>
+
+  <div class="card">
+    <h2>Metrics</h2>
+    <button id="btnMetrics" class="btn">Fetch</button>
+    <pre id="metrics">…</pre>
+  </div>
+
+  <div class="card">
+    <h2>Mint Admin Codes</h2>
+    <div style="display:flex;gap:8px;margin-bottom:8px">
+      <input id="count" type="number" min="1" max="20" value="3">
+      <button id="mint" class="btn">Mint</button>
+    </div>
+    <pre id="mintOut">…</pre>
+  </div>
+
+  <div class="card">
+    <h2>History Ops</h2>
+    <div style="display:flex;gap:8px;margin-bottom:8px">
+      <input id="uClear" placeholder="username to clear" value="guest">
+      <button id="clearBtn" class="btn">Clear History</button>
+    </div>
+    <pre id="clearOut">…</pre>
+  </div>
+</div>
+
+<script>
+let access=null, refresh=null, role="anon";
+const Hjson = j => JSON.stringify(j,null,2);
+function hdrs(){ const h={"Content-Type":"application/json"}; if(access) h["Authorization"]="Bearer "+access; return h; }
+
+document.getElementById("login").onclick = async () => {
+  const body = {
+    username: document.getElementById("username").value || "admin",
+    password: document.getElementById("password").value || "",
+    admin_code: document.getElementById("adminCode").value || ""
+  };
+  const r = await fetch("/api/auth/login", {method:"POST", headers: hdrs(), body: JSON.stringify(body)});
+  const j = await r.json();
+  if(r.ok){ access=j.access_token; refresh=j.refresh_token; role=j.user?.role||"user"; document.getElementById("who").textContent=`logged in as ${body.username} (${role})`; } else { document.getElementById("who").textContent = "login failed: "+(j.error||j.reason); }
+};
+
+document.getElementById("btnHealth").onclick = async () => {
+  const r = await fetch("/debug/health"); const j = await r.json(); document.getElementById("health").textContent = Hjson(j);
+};
+document.getElementById("btnMetrics").onclick = async () => {
+  const r = await fetch("/api/metrics"); const j = await r.json(); document.getElementById("metrics").textContent = Hjson(j);
+};
+document.getElementById("mint").onclick = async () => {
+  const n = parseInt(document.getElementById("count").value||"3",10);
+  const r = await fetch("/api/admin/mint", {method:"POST", headers: hdrs(), body: JSON.stringify({count:n})});
+  const j = await r.json(); document.getElementById("mintOut").textContent = Hjson(j);
+};
+document.getElementById("clearBtn").onclick = async () => {
+  const u = document.getElementById("uClear").value||"guest";
+  const r = await fetch("/api/admin/history/clear", {method:"POST", headers: hdrs(), body: JSON.stringify({username:u})});
+  const j = await r.json(); document.getElementById("clearOut").textContent = Hjson(j);
+};
+</script>
+</body>
+</html>
