@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Friday AI • Tools + Streaming</title>
+<title>Friday AI • Stream+Tools</title>
 <style>
   :root { --bg:#0f172a; --panel:#0b1226; --muted:#94a3b8; --text:#e2e8f0; --accent:#60a5fa; --accent2:#a78bfa; --ok:#10b981; --warn:#f59e0b; }
   *{box-sizing:border-box}
@@ -19,19 +19,18 @@
   .toolbar input,.toolbar select,.toolbar button{background:#0b1226;color:var(--text);border:1px solid rgba(255,255,255,.1);padding:8px 10px;border-radius:10px;outline:none}
   .toolbar button.btn{background:linear-gradient(135deg,var(--accent),var(--accent2));border:none;font-weight:600}
   .muted{color:var(--muted);font-size:12px}
-  #log{max-height:56vh;overflow:auto;padding:12px}
+  #log{max-height:58vh;overflow:auto;padding:12px}
   .msg{margin:0 0 12px;padding:10px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.07);white-space:pre-wrap}
   .u{background:rgba(96,165,250,.08);border-color:rgba(96,165,250,.25)}
   .a{background:rgba(167,139,250,.08);border-color:rgba(167,139,250,.25)}
   .meta{font-size:12px;color:var(--muted);margin-bottom:6px}
+  .trace{background:rgba(255,255,255,.03); border:1px dashed rgba(255,255,255,.15); padding:8px 10px; border-radius:8px; margin-top:6px; font-size:12px; color:#d1d5db}
+  .trace pre{white-space:pre-wrap; margin:6px 0 0}
   .composer{display:flex;gap:10px;padding:10px;background:rgba(255,255,255,.02);border-top:1px solid rgba(255,255,255,.06)}
   #input{flex:1;background:#0b1226;border:1px solid rgba(255,255,255,.1);border-radius:12px;color:var(--text);padding:12px 14px;min-height:46px;max-height:160px;resize:vertical}
   .send{min-width:98px;border-radius:12px;border:none;background:linear-gradient(135deg,var(--accent),var(--accent2));color:white;font-weight:700}
   .links a{color:var(--muted);text-decoration:none;margin-left:10px;font-size:13px}
   .links a:hover{color:var(--text)}
-  details.trace{background:rgba(255,255,255,.03); border:1px dashed rgba(255,255,255,.15); padding:8px 10px; border-radius:8px; margin-top:8px}
-  details.trace summary{cursor:pointer; color:#cbd5e1}
-  code.block{display:block; white-space:pre-wrap; font-size:12px; color:#d1d5db}
 </style>
 </head>
 <body>
@@ -60,22 +59,22 @@
       <button id="useModel" class="btn">Use</button>
       <span id="modelHint" class="muted"></span>
 
-      <label style="display:flex;align-items:center;gap:6px;margin-left:12px">
-        <input id="useTools" type="checkbox" checked>
-        <span class="muted">Enable Tools</span>
-      </label>
-
-      <button id="streamToggle" class="btn" title="Streaming uses SSE and ignores tools (for now)">Mode: Stream</button>
+      <span class="muted" style="margin-left:8px">Mode</span>
+      <select id="sendMode">
+        <option value="stream_plus" selected>Stream+ (tools)</option>
+        <option value="stream_legacy">Legacy Stream</option>
+        <option value="nonstream_tools">Non-stream (tools)</option>
+      </select>
     </div>
 
     <div id="log"></div>
 
     <div class="composer">
-      <textarea id="input" placeholder="Ask for weather in Paris, web search on CUDA, or just chat…"></textarea>
+      <textarea id="input" placeholder="Ask: weather in Paris, search CUDA Graphs, or anything…"></textarea>
       <button id="send" class="send">Send</button>
     </div>
   </section>
-  <p class="muted" style="margin-top:8px">Tip: username, model & tool pref are saved in this browser.</p>
+  <p class="muted" style="margin-top:8px">Tip: username & model saved in this browser.</p>
 </main>
 
 <script>
@@ -83,21 +82,15 @@ const $ = sel => document.querySelector(sel);
 const log = $("#log"), input = $("#input"), sendBtn = $("#send");
 const userEl = $("#username"), saveUserBtn = $("#saveUser");
 const modelSel = $("#model"), useModelBtn = $("#useModel"), modelHint = $("#modelHint");
-const modeBadge = $("#modeBadge");
-const useToolsEl = $("#useTools");
-const streamToggle = $("#streamToggle");
+const modeBadge = $("#modeBadge"), sendMode = $("#sendMode");
 
 const state = {
   username: localStorage.getItem("friday.username") || "guest",
   model: localStorage.getItem("friday.model") || null,
-  tools: (localStorage.getItem("friday.tools") ?? "1") === "1",
-  stream: true, // stream (no tools) vs non-stream (tools)
 };
 userEl.value = state.username;
-useToolsEl.checked = state.tools;
-streamToggle.textContent = state.stream ? "Mode: Stream" : "Mode: Tools";
 
-function add(role, text, traces){
+function add(role, text){
   const wrap = document.createElement("div");
   wrap.className = "msg " + (role === "user" ? "u" : "a");
   const meta = document.createElement("div");
@@ -106,22 +99,16 @@ function add(role, text, traces){
   const body = document.createElement("div");
   body.textContent = text;
   wrap.appendChild(meta); wrap.appendChild(body);
-
-  if (traces && traces.length){
-    const det = document.createElement("details");
-    det.className = "trace";
-    const sum = document.createElement("summary");
-    sum.textContent = `Tool trace (${traces.length})`;
-    det.appendChild(sum);
-    const pre = document.createElement("code");
-    pre.className = "block";
-    pre.textContent = JSON.stringify(traces, null, 2);
-    det.appendChild(pre);
-    wrap.appendChild(det);
-  }
-
   log.appendChild(wrap); log.scrollTop = log.scrollHeight;
-  return body;
+  return {wrap, body};
+}
+
+function addTrace(parent, title, obj){
+  const d = document.createElement("div");
+  d.className = "trace";
+  d.innerHTML = `<strong>${title}</strong><pre>${JSON.stringify(obj, null, 2)}</pre>`;
+  parent.appendChild(d);
+  log.scrollTop = log.scrollHeight;
 }
 
 async function jsonFetch(url, opts={}){
@@ -183,19 +170,35 @@ useModelBtn.addEventListener("click", async ()=>{
   }catch(e){ add("assistant", "Couldn’t set model: "+e.message); }
 });
 
-useToolsEl.addEventListener("change", ()=>{
-  state.tools = !!useToolsEl.checked;
-  localStorage.setItem("friday.tools", state.tools ? "1" : "0");
-});
-
-streamToggle.addEventListener("click", ()=>{
-  state.stream = !state.stream;
-  streamToggle.textContent = state.stream ? "Mode: Stream" : "Mode: Tools";
-});
-
-function sendStreaming(text){
+// --- Sending modes ---
+function sendStreamPlus(text){
   add("user", text);
-  const target = add("assistant", "");
+  const {wrap, body} = add("assistant", "");
+  const params = new URLSearchParams({
+    message: text,
+    username: state.username || "guest",
+    model: state.model || ""
+  });
+  const es = new EventSource(`/api/chat/stream-tools?${params.toString()}`);
+  let closed = false;
+  es.onmessage = (ev) => {
+    if(!ev.data) return;
+    try{
+      const obj = JSON.parse(ev.data);
+      if(obj.type === "delta"){ body.textContent += obj.delta; }
+      else if(obj.type === "tool_call"){ addTrace(wrap, `Calling tool: ${obj.name}`, obj); }
+      else if(obj.type === "tool_result"){ addTrace(wrap, `Tool result: ${obj.name}`, obj); }
+      else if(obj.type === "error"){ addTrace(wrap, "Error", obj); }
+      else if(obj.type === "done"){ es.close(); closed = true; }
+      log.scrollTop = log.scrollHeight;
+    }catch{}
+  };
+  es.onerror = () => { if(!closed) es.close(); };
+}
+
+function sendLegacyStream(text){
+  add("user", text);
+  const {body} = add("assistant", "");
   const params = new URLSearchParams({
     message: text,
     username: state.username || "guest",
@@ -207,17 +210,18 @@ function sendStreaming(text){
     if(!ev.data) return;
     try{
       const obj = JSON.parse(ev.data);
-      if(obj.delta){ target.textContent += obj.delta; }
+      if(obj.delta){ body.textContent += obj.delta; }
       if(obj.done){ es.close(); closed = true; }
-      if(obj.error){ target.textContent += `\n[error] ${obj.error}`; }
+      if(obj.error){ body.textContent += `\n[error] ${obj.error}`; }
       log.scrollTop = log.scrollHeight;
     }catch{}
   };
   es.onerror = () => { if(!closed) es.close(); };
 }
 
-async function sendTools(text){
+async function sendNonstreamTools(text){
   add("user", text);
+  const {wrap} = add("assistant", "…");
   try{
     const res = await jsonFetch("/api/chat", {
       method:"POST",
@@ -225,12 +229,13 @@ async function sendTools(text){
         message: text,
         username: state.username || "guest",
         model: state.model || "",
-        tools: state.tools
+        tools: true
       })
     });
-    add("assistant", res.reply || "(no reply)", res.traces || []);
+    wrap.lastChild.textContent = res.reply || "(no reply)";
+    if (res.traces && res.traces.length) addTrace(wrap, "Tool trace", res.traces);
   }catch(e){
-    add("assistant", "Error: " + e.message);
+    wrap.lastChild.textContent = "Error: " + e.message;
   }
 }
 
@@ -238,14 +243,17 @@ sendBtn.addEventListener("click", ()=>{
   const text = (input.value||"").trim();
   if(!text) return;
   input.value = "";
-  if (state.stream) sendStreaming(text);
-  else sendTools(text);
+  const mode = sendMode.value;
+  if (mode === "stream_plus") sendStreamPlus(text);
+  else if (mode === "stream_legacy") sendLegacyStream(text);
+  else sendNonstreamTools(text);
 });
 
 input.addEventListener("keydown", (e)=>{
   if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); sendBtn.click(); }
 });
 
+// init
 checkHealth();
 loadModels();
 loadHistory();
