@@ -13,7 +13,7 @@ except Exception:
 
 from flask import (
     Flask, jsonify, request, send_from_directory,
-    Response, stream_with_context
+    Response, stream_with_context, make_response
 )
 from flask_cors import CORS
 from flask_compress import Compress
@@ -37,7 +37,7 @@ PROMPT_PRESETS = {
 SYSTEM_PROMPT_DEFAULT = os.getenv("PROMPT_SYSTEM", PROMPT_PRESETS["concise"])
 
 EMBED_MODEL = os.getenv("EMBED_MODEL", "text-embedding-3-small")
-EMBED_DIM = int(os.getenv("EMBED_DIM", "1536"))  # small=1536, large=3072
+EMBED_DIM = int(os.getenv("EMBED_DIM", "1536"))  # small=1536 (default), large=3072
 
 # rate limit
 RL_WINDOW = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60"))
@@ -85,7 +85,7 @@ def _log_req(resp):
         pass
     return resp
 
-# ---- Redis (history + RL + cache) ------------------------------------------
+# ---- Redis (history + RL + cache + vectors) --------------------------------
 r = None
 try:
     REDIS_URL = os.getenv("REDIS_URL","")
@@ -105,6 +105,8 @@ def k_rl(scope):  return f"rl:{scope}"
 def k_user_preset(u): return f"user:{u}:preset"
 def k_user_model(u):  return f"user:{u}:model"
 def k_cache(pfx, k):  return f"cache:{pfx}:{k}"
+def k_rag(u): return f"rag:{u}:docs"             # list of doc rows
+def k_rag_meta(u): return f"rag:{u}:meta"        # counters, etc.
 
 def client_scope() -> str:
     uname = request.args.get("username") or ((request.json or {}).get("username") if request.is_json else None)
@@ -161,7 +163,7 @@ def clear_history(username: str) -> int:
     if not r: return 0
     return r.delete(k_history(username)) or 0
 
-# ---- Token-aware chunking (for future ingestion) ----------------------------
+# ---- Token-aware chunking (for ingestion) -----------------------------------
 def _tok_chunk(text: str, target=900, overlap=200) -> List[str]:
     text = (text or "").strip()
     if not text: return []
@@ -178,7 +180,6 @@ def _tok_chunk(text: str, target=900, overlap=200) -> List[str]:
             i += step
         return out
     except Exception:
-        # fallback char windowing
         out=[]; i=0; size= target*4; step=max(1,size-overlap*4)
         while i < len(text):
             out.append(text[i:i+size]); i+=step
@@ -188,6 +189,7 @@ def _tok_chunk(text: str, target=900, overlap=200) -> List[str]:
 def embed_texts(texts: List[str], model: Optional[str]=None) -> List[List[float]]:
     model = model or EMBED_MODEL
     if not OPENAI_KEY:
+        # cheap local vector for dev mode
         def cheap_vec(s: str, dim=64):
             v=[0.0]*dim
             for i,ch in enumerate(s.encode()):
@@ -229,25 +231,33 @@ def safe_chat(messages, temperature=0.6, tools=None, tool_choice="auto"):
             continue
     return {"text":"Upstream busy, try again shortly.", "errors": tried, "model_used": order[-1]}
 
-# ---- minimal RAG (in-memory via Redis) --------------------------------------
+# ---- tiny similarity + RAG store -------------------------------------------
 def _cos(a: List[float], b: List[float]) -> float:
     s=sum(x*y for x,y in zip(a,b))
     na=math.sqrt(sum(x*x for x in a)) or 1.0
     nb=math.sqrt(sum(x*x for x in b)) or 1.0
     return s/(na*nb)
 
-def rag_key(u): return f"rag:{u}:docs"
+def rag_key(u): return k_rag(u)
 
 def rag_index(username: str, docs: List[Dict[str,Any]]) -> int:
     if not r: return 0
     vecs = embed_texts([d.get("text","") for d in docs])
     pipe = r.pipeline()
+    cnt = 0
     for d,v in zip(docs, vecs):
-        row={"id": d.get("id") or secrets.token_urlsafe(6), "text": d.get("text",""), "meta": d.get("metadata",{}), "vec": v}
+        row={
+            "id": d.get("id") or secrets.token_urlsafe(6),
+            "text": d.get("text",""),
+            "meta": d.get("metadata",{}),
+            "vec": v
+        }
         pipe.rpush(rag_key(username), json.dumps(row))
+        cnt += 1
     pipe.execute()
-    r.ltrim(rag_key(username), -2000, -1)
-    return len(docs)
+    r.ltrim(rag_key(username), -5000, -1)
+    r.hincrby(k_rag_meta(username), "count", cnt)
+    return cnt
 
 def rag_search(username: str, query: str, top_k=4) -> Dict[str,Any]:
     if not r: return {"ok": False, "reason":"no_redis"}
@@ -262,7 +272,27 @@ def rag_search(username: str, query: str, top_k=4) -> Dict[str,Any]:
             pass
     scored.sort(key=lambda t:t[0], reverse=True)
     matches=[{"score": round(s,4), "id": x["id"], "text": x["text"], "metadata": x.get("meta",{})} for s,x in scored[:top_k]]
-    return {"ok": True, "matches": matches, "backend":"redis"}
+    return {"ok": True, "matches": matches, "backend":"redis", "total": len(items)}
+
+def rag_clear(username: str) -> int:
+    if not r: return 0
+    n = r.delete(rag_key(username))
+    r.delete(k_rag_meta(username))
+    return n or 0
+
+def rag_list(username: str, limit=50) -> Dict[str,Any]:
+    if not r: return {"ok": False, "reason":"no_redis"}
+    total = r.llen(rag_key(username))
+    sample = r.lrange(rag_key(username), max(-limit, -total), -1)
+    rows=[]
+    for raw in sample:
+        try:
+            row=json.loads(raw)
+            rows.append({"id":row.get("id"), "text":(row.get("text","")[:160]+"…") if len(row.get("text",""))>160 else row.get("text",""),
+                         "metadata": row.get("meta",{})})
+        except Exception:
+            pass
+    return {"ok": True, "total": total, "sample": rows}
 
 # ---- tiny cache helpers -----------------------------------------------------
 def cache_get(prefix: str, key: str):
@@ -331,7 +361,7 @@ OPENAI_TOOLS = [
     {"type":"function","function":{"name":"rag_search","description":"Search user’s indexed docs for grounding","parameters":{"type":"object","properties":{"username":{"type":"string"},"query":{"type":"string"},"top_k":{"type":"integer","minimum":1,"maximum":10}},"required":["username","query"]}}}
 ]
 
-# ---- tool planner (non-stream) with citations --------------------------------
+# ---- tool planner (non-stream) with citations -------------------------------
 def tool_loop(model: str, user_msg: str, username: str, preset: str, max_hops=5) -> Dict[str,Any]:
     if not moderate_text(user_msg):
         return {"reply":"I can’t help with that request.", "traces":[{"tool":"moderation","result":{"flagged": True}}]}
@@ -369,7 +399,6 @@ def tool_loop(model: str, user_msg: str, username: str, preset: str, max_hops=5)
         msg = r0.choices[0].message
         if not getattr(msg, "tool_calls", None):
             text = (msg.content or "").strip() or "(no reply)"
-            # attach citations if any
             if citations:
                 src_lines=[]
                 for i,c in enumerate(citations,1):
@@ -386,7 +415,6 @@ def tool_loop(model: str, user_msg: str, username: str, preset: str, max_hops=5)
             elif name == "web_search":  res = tool_web(args.get("query",""))
             elif name == "rag_search":
                 res = rag_search(args.get("username") or username, args.get("query",""), int(args.get("top_k") or 4))
-                # collect citations
                 for m in res.get("matches",[]):
                     citations.append({"id": m["id"], "meta": m.get("metadata",{})})
             else: res = {"ok": False, "reason": f"unknown_tool:{name}"}
@@ -398,11 +426,9 @@ def tool_loop(model: str, user_msg: str, username: str, preset: str, max_hops=5)
 
 # ---- auto-history summarizer ------------------------------------------------
 def maybe_summarize_history(username: str):
-    """Every 20 turns, compress older messages into a short memory."""
     if not r or not OPENAI_KEY: return
     items = r.lrange(k_history(username), 0, -1)
     if len(items) < 40: return
-    # summarize first 20 and keep the rest
     first = items[:-20]
     try:
         convo = []
@@ -421,7 +447,6 @@ def maybe_summarize_history(username: str):
             temperature=0.2
         )
         summary = (resp.choices[0].message.content or "").strip()
-        # replace the list with a memory + the last 20 real turns
         last20 = items[-20:]
         r.delete(k_history(username))
         r.rpush(k_history(username), json.dumps({"ts": time.time(), "message": "(memory)", "reply": summary, "memory": True}))
@@ -517,7 +542,6 @@ def _sse(obj: Dict[str,Any]) -> str: return f"data: {json.dumps(obj, ensure_asci
 
 @app.get("/api/chat/stream_tools")
 def api_chat_stream_tools():
-    # mirror RL here too
     allowed, _, _ = rate_limit_check(client_scope())
     if not allowed:
         return jsonify({"error":"rate_limited"}), 429
@@ -547,6 +571,89 @@ def api_chat_stream_tools():
     return Response(stream_with_context(generate()),
         headers={"Content-Type":"text/event-stream","Cache-Control":"no-cache","Connection":"keep-alive","X-Accel-Buffering":"no"})
 
+# ---- RAG: REST endpoints (upload + paste + search + list + clear + export) --
+@app.post("/api/rag/index_text")
+def rag_index_text():
+    """JSON: {username, filename?, text} -> chunk, embed, store"""
+    if not r: return jsonify({"ok": False, "error":"no_redis"}), 503
+    data = request.get_json(force=True) or {}
+    username = (data.get("username") or "guest").strip() or "guest"
+    filename = (data.get("filename") or f"pasted-{int(time.time())}.txt").strip()
+    text = (data.get("text") or "").strip()
+    if not text: return jsonify({"ok": False, "error":"missing_text"}), 400
+    chunks = _tok_chunk(text, target=900, overlap=200)
+    docs=[]
+    for i,chunk in enumerate(chunks):
+        docs.append({"text": chunk, "metadata": {"filename": filename, "chunk": i}})
+    added = rag_index(username, docs)
+    return jsonify({"ok": True, "added": added, "filename": filename})
+
+@app.post("/api/rag/upload")
+def rag_upload():
+    """multipart form: username, files[] (.txt/.md/.csv)"""
+    if not r: return jsonify({"ok": False, "error":"no_redis"}), 503
+    username = (request.form.get("username") or "guest").strip() or "guest"
+    if "files" not in request.files: return jsonify({"ok": False, "error":"missing_files"}), 400
+    files = request.files.getlist("files")
+    total_added=0; accepted_ext={".txt",".md",".csv"}
+    for f in files:
+        name = f.filename or f"upload-{secrets.token_urlsafe(4)}.txt"
+        ext = "." + name.split(".")[-1].lower() if "." in name else ".txt"
+        if ext not in accepted_ext:
+            # skip unsupported to keep deps minimal
+            continue
+        raw = f.read().decode("utf-8", errors="ignore")
+        chunks = _tok_chunk(raw, target=900, overlap=200)
+        docs=[]
+        for i,chunk in enumerate(chunks):
+            docs.append({"text": chunk, "metadata": {"filename": name, "chunk": i}})
+        total_added += rag_index(username, docs)
+    return jsonify({"ok": True, "added": total_added})
+
+@app.get("/api/rag/search")
+def rag_http_search():
+    if not r: return jsonify({"ok": False, "error":"no_redis"}), 503
+    username = (request.args.get("username") or "guest").strip() or "guest"
+    query = (request.args.get("query") or "").strip()
+    k = int(request.args.get("k") or 4)
+    if not query: return jsonify({"ok": False, "error":"missing_query"}), 400
+    res = rag_search(username, query, k)
+    return jsonify(res)
+
+@app.get("/api/rag/list")
+def rag_http_list():
+    if not r: return jsonify({"ok": False, "error":"no_redis"}), 503
+    username = (request.args.get("username") or "guest").strip() or "guest"
+    lim = int(request.args.get("limit") or 50)
+    return jsonify(rag_list(username, lim))
+
+@app.post("/api/rag/clear")
+def rag_http_clear():
+    if not r: return jsonify({"ok": False, "error":"no_redis"}), 503
+    username = (request.get_json(silent=True) or {}).get("username") or "guest"
+    n = rag_clear(username)
+    return jsonify({"ok": True, "cleared": bool(n), "removed": n})
+
+@app.get("/api/rag/export_csv")
+def rag_export_csv():
+    if not r: return jsonify({"ok": False, "error":"no_redis"}), 503
+    username = (request.args.get("username") or "guest").strip() or "guest"
+    items = r.lrange(rag_key(username), 0, -1)
+    si = io.StringIO()
+    w = csv.writer(si)
+    w.writerow(["id","filename","chunk","text"])
+    for raw in items:
+        try:
+            row=json.loads(raw)
+            meta=row.get("meta",{})
+            w.writerow([row.get("id",""), meta.get("filename",""), meta.get("chunk",""), row.get("text","").replace("\n"," ")])
+        except Exception:
+            pass
+    out = make_response(si.getvalue())
+    out.headers["Content-Type"] = "text/csv; charset=utf-8"
+    out.headers["Content-Disposition"] = f'attachment; filename="{username}-rag.csv"'
+    return out
+
 # ---- static passthrough -----------------------------------------------------
 @app.get("/static/<path:filename>")
 def static_files(filename):
@@ -568,6 +675,7 @@ def method_not_allowed(_):
 if __name__ == "__main__":
     port = int(os.getenv("PORT","5000"))
     app.run(host="0.0.0.0", port=port, debug=(os.getenv("FLASK_ENV","").lower()!="production"), threaded=True)
+
 
 
 
