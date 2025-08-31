@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Friday Vectors</title>
+<style>
+  body{margin:0;background:#0f172a;color:#e2e8f0;font:16px/1.5 system-ui,-apple-system,Segoe UI,Inter,Roboto,Arial}
+  header{padding:12px 16px;border-bottom:1px solid rgba(255,255,255,.08);display:flex;justify-content:space-between}
+  .wrap{max-width:1200px;margin:16px auto;padding:0 16px}
+  .row{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+  input,button,select{background:#0b1226;color:#e2e8f0;border:1px solid rgba(255,255,255,.15);padding:8px 10px;border-radius:10px}
+  button.btn{background:linear-gradient(135deg,#60a5fa,#a78bfa);border:none;font-weight:600}
+  table{width:100%;border-collapse:collapse}
+  th,td{border-bottom:1px solid rgba(255,255,255,.08);padding:8px;vertical-align:top}
+  pre{white-space:pre-wrap;font-size:12px}
+  a{color:#93c5fd;text-decoration:none}
+</style>
+</head>
+<body>
+<header>
+  <div><strong>Friday</strong> • Vectors</div>
+  <div><a href="/admin">← admin</a></div>
+</header>
+
+<div class="wrap">
+  <div class="row">
+    <button id="btnStats" class="btn">Stats</button>
+    <span id="stats">…</span>
+  </div>
+
+  <div class="row">
+    <input id="username" placeholder="username" value="guest">
+    <input id="query" placeholder="semantic search (optional)">
+    <input id="limit" type="number" min="1" max="200" value="20" style="width:90px">
+    <input id="offset" type="number" min="0" value="0" style="width:90px">
+    <button id="btnList" class="btn">List</button>
+    <button id="btnSearch" class="btn">Search</button>
+    <button id="btnDeleteAll" class="btn" style="background:linear-gradient(135deg,#ef4444,#f59e0b)">Delete ALL (user)</button>
+  </div>
+
+  <table>
+    <thead><tr><th style="width:22ch">ID</th><th>Text</th><th style="width:22ch">Meta</th><th style="width:10ch">Action</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+</div>
+
+<script>
+const H = j => JSON.stringify(j,null,2);
+function htmlEscape(s){return s.replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"}[m]))}
+function row(id, text, meta){
+  const tr=document.createElement("tr");
+  tr.innerHTML = `<td><code>${id}</code></td><td><pre>${htmlEscape(text||"")}</pre></td><td><pre>${htmlEscape(H(meta||{}))}</pre></td><td><button data-id="${id}" class="del">Delete</button></td>`;
+  tr.querySelector(".del").onclick = async (e)=>{
+    const _id = e.target.getAttribute("data-id");
+    const r = await fetch("/api/rag/delete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:_id,username:document.getElementById("username").value||"guest"})});
+    const j = await r.json();
+    alert("Deleted: "+H(j));
+    e.target.closest("tr").remove();
+  };
+  return tr;
+}
+document.getElementById("btnStats").onclick = async ()=>{
+  const r = await fetch("/api/rag/stats"); const j = await r.json();
+  document.getElementById("stats").textContent = `backend: ${j.backend}${j.points_count? " • points:"+j.points_count:""}${j.rows? " • rows:"+j.rows:""}${j.users? " • users:"+j.users:""}`;
+};
+document.getElementById("btnList").onclick = async ()=>{
+  const u = document.getElementById("username").value||"guest";
+  const limit = parseInt(document.getElementById("limit").value||"20",10);
+  const offset = parseInt(document.getElementById("offset").value||"0",10);
+  const r = await fetch(`/api/rag/list?username=${encodeURIComponent(u)}&limit=${limit}&offset=${offset}`);
+  const j = await r.json();
+  const tb = document.getElementById("rows"); tb.innerHTML="";
+  (j.rows||[]).forEach(it=> tb.appendChild(row(it.id, it.text, it.metadata)));
+};
+document.getElementById("btnSearch").onclick = async ()=>{
+  const u = document.getElementById("username").value||"guest";
+  const q = (document.getElementById("query").value||"").trim(); if(!q){ alert("type a query"); return; }
+  const r = await fetch("/api/rag/query",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:u, query:q, top_k:8})});
+  const j = await r.json();
+  const tb = document.getElementById("rows"); tb.innerHTML="";
+  (j.matches||[]).forEach(it=> tb.appendChild(row(it.id, it.text, it.metadata)));
+};
+document.getElementById("btnDeleteAll").onclick = async ()=>{
+  const u = document.getElementById("username").value||"guest";
+  if(!confirm(`Delete ALL chunks for ${u}?`)) return;
+  const r = await fetch("/api/rag/delete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:u, all:true})});
+  const j = await r.json(); alert(H(j));
+  document.getElementById("rows").innerHTML="";
+};
+</script>
+</body>
+</html>
