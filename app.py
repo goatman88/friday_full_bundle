@@ -1,12 +1,12 @@
 # app.py
-import os, json, time, math, secrets
+import os, json, time, math, secrets, hashlib
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Generator, Tuple
 
-# --- Load .env locally only ---
+# --- Load .env locally (non-prod) ---
 try:
     from dotenv import load_dotenv
-    if (os.getenv("FLASK_ENV", "").lower() != "production"):
+    if (os.getenv("FLASK_ENV","").lower() != "production"):
         load_dotenv(override=False)
 except Exception:
     pass
@@ -32,17 +32,22 @@ try:
             release=os.getenv("RENDER_GIT_COMMIT", "")[:7] or os.getenv("COMMIT", "")
         )
 except Exception:
-    # don’t crash if sentry not installed
-    pass
+    pass  # do not crash if sentry not installed
 
 # ---------- App & config ----------
 app = Flask(__name__, static_folder="static", template_folder="templates")
-CORS(app)
+
+# CORS allowlist (comma-separated), default open for dev
+cors_allow = [o.strip() for o in os.getenv("CORS_ALLOW_ORIGINS", "*").split(",")]
+CORS(app, resources={r"/*": {"origins": cors_allow}})
 
 COMMIT = (os.getenv("RENDER_GIT_COMMIT", "")[:7] or os.getenv("COMMIT", "") or "dev")
 OPENAI_KEY = os.getenv("OPENAI_API_KEY", "")
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
+
+# Persona/system prompt
+SYSTEM_PROMPT = os.getenv("PROMPT_SYSTEM", "You are Friday AI: fast, helpful, concise. Use tools when helpful. Keep answers tight.")
 
 # Embeddings (for RAG)
 EMBED_MODEL = os.getenv("EMBED_MODEL", "text-embedding-3-small")
@@ -51,7 +56,15 @@ EMBED_MODEL = os.getenv("EMBED_MODEL", "text-embedding-3-small")
 RL_WINDOW = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60"))  # seconds
 RL_MAX = int(os.getenv("RATE_LIMIT_MAX", "60"))                # requests per window
 
-# ---------- Redis (history, rate-limit, RAG store) ----------
+# Pricing table (rough, USD) — adjust as you wish
+PRICES = {
+    "gpt-4o":        {"in": 0.0025, "out": 0.0100},  # $/1k tokens (example)
+    "gpt-4o-mini":   {"in": 0.0005, "out": 0.0015},
+    "gpt-4.1-mini":  {"in": 0.0006, "out": 0.0018},
+    "o3-mini":       {"in": 0.0005, "out": 0.0015},
+}
+
+# ---------- Redis (history, rate-limit, cache, RAG) ----------
 r = None
 try:
     REDIS_URL = os.getenv("REDIS_URL", "")
@@ -74,7 +87,8 @@ def k_admin_code(code: str) -> str: return f"admin:code:{code}"
 def k_user_authed(username: str) -> str: return f"user:{username}:authed"
 
 def k_rl(scope: str) -> str: return f"rl:{scope}"
-def k_rag_docs(username: str) -> str: return f"rag:{username}:docs"  # list of JSON {id,text,meta,vec}
+def k_rag_docs(username: str) -> str: return f"rag:{username}:docs"
+def k_cache(prefix: str, key: str) -> str: return f"cache:{prefix}:{key}"
 
 def active_model(username: Optional[str] = None) -> str:
     if r:
@@ -110,26 +124,25 @@ def get_history(username: str, limit: int = 200) -> List[Dict[str, Any]]:
         except Exception: pass
     return out
 
+def clear_history(username: str) -> int:
+    if not r: return 0
+    return r.delete(k_history(username)) or 0
+
 def client_scope() -> str:
-    """Use username if provided else IP. Good enough for basic RL."""
-    uname = request.args.get("username") or (request.json or {}).get("username") if request.is_json else None
+    uname = request.args.get("username") or ((request.json or {}).get("username") if request.is_json else None)
     if uname: return f"user:{uname}"
     fwd = request.headers.get("X-Forwarded-For", "") or request.remote_addr or "unknown"
     ip = fwd.split(",")[0].strip()
     return f"ip:{ip}"
 
 def rate_limit_check(scope: str) -> Tuple[bool, int, int]:
-    """
-    Returns (allowed, remaining, reset_epoch_sec).
-    Uses Redis INCR+EXPIRE. If no Redis, allow all.
-    """
-    if not r:  # soft-disable
+    if not r:
         return (True, RL_MAX, int(time.time()) + RL_WINDOW)
     key = k_rl(scope)
     try:
         current = r.incr(key)
         ttl = r.ttl(key)
-        if ttl < 0:  # no ttl yet
+        if ttl < 0:
             r.expire(key, RL_WINDOW)
             ttl = RL_WINDOW
         remaining = max(0, RL_MAX - current)
@@ -171,11 +184,18 @@ def health():
         "model": active_model(),
         "openai": bool(OPENAI_KEY),
         "mode": mode,
-        "rate_limit": {
-            "window_seconds": RL_WINDOW,
-            "max": RL_MAX,
-            "enabled": bool(r)
-        }
+        "rate_limit": {"window_seconds": RL_WINDOW, "max": RL_MAX, "enabled": bool(r)}
+    })
+
+@app.get("/api/metrics")
+def metrics():
+    scope = client_scope()
+    allowed, remaining, reset = rate_limit_check(scope)
+    return jsonify({
+        "commit": COMMIT,
+        "redis": redis_ok(),
+        "model": active_model(),
+        "rate_limit": {"allowed": allowed, "remaining": remaining, "reset": reset}
     })
 
 # ---------- Models ----------
@@ -190,21 +210,19 @@ def set_model_api():
     allowed, remaining, reset = rate_limit_check(client_scope())
     if not allowed:
         return jsonify({"error":"rate_limited","retry_after":reset - int(time.time())}), 429
-
     data = request.get_json(silent=True) or {}
     model = str(data.get("model", "")).strip()
     if not model:
         return jsonify({"error": "missing_model"}), 400
-    set_active_model(model, username=None)  # global
+    set_active_model(model, username=None)
     return jsonify({"active": active_model(), "rate_limit":{"remaining":remaining,"reset":reset}})
 
-# ---------- HTTP retry helper ----------
+# ---------- HTTP with retries ----------
 def http_get(url: str, params: Dict[str, Any], timeout=8, tries=3, backoff=0.6) -> requests.Response:
     last_exc = None
     for i in range(tries):
         try:
             res = requests.get(url, params=params, timeout=timeout)
-            # Retry on 5xx
             if res.status_code >= 500:
                 raise requests.HTTPError(f"Server {res.status_code}")
             return res
@@ -213,13 +231,45 @@ def http_get(url: str, params: Dict[str, Any], timeout=8, tries=3, backoff=0.6) 
             time.sleep(backoff * (2**i))
     raise last_exc if last_exc else RuntimeError("request failed")
 
-# ---------- Tools (with retries/backoff) ----------
+def cache_get(prefix: str, key: str):
+    if not r: return None
+    return r.get(k_cache(prefix, key))
+
+def cache_set(prefix: str, key: str, value: Any, ttl: int = 300):
+    if not r: return
+    r.setex(k_cache(prefix, key), ttl, json.dumps(value))
+
+# ---------- Moderation guard ----------
+def moderate_text(text: str) -> Dict[str, Any]:
+    if not OPENAI_KEY:
+        return {"ok": True}  # dev pass-through
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_KEY)
+        m = client.moderations.create(model="omni-moderation-latest", input=text)
+        flagged = any((c.get("flagged") for c in (m.results[0].categories if hasattr(m.results[0], "categories") else []))) if hasattr(m.results[0],"categories") else (m.results[0].flagged if hasattr(m.results[0],"flagged") else False)
+        return {"ok": not flagged, "raw": m.model_dump() if hasattr(m,"model_dump") else None}
+    except Exception as e:
+        # On moderation error, be permissive but log
+        return {"ok": True, "error": str(e)}
+
+# ---------- Tools (with caching) ----------
 def tool_weather_city(city: str) -> Dict[str, Any]:
+    if not city:
+        return {"ok": False, "reason": "missing_city"}
+    key = hashlib.sha256(city.strip().lower().encode()).hexdigest()
+    cached = cache_get("weather", key)
+    if cached:
+        try: return json.loads(cached)
+        except Exception: pass
     try:
         g = http_get("https://geocoding-api.open-meteo.com/v1/search",
                      {"name": city, "count": 1}, timeout=8, tries=3)
         gd = g.json()
-        if not gd.get("results"): return {"ok": False, "reason": "city_not_found"}
+        if not gd.get("results"): 
+            out = {"ok": False, "reason": "city_not_found"}
+            cache_set("weather", key, out, ttl=120)
+            return out
         lat = gd["results"][0]["latitude"]; lon = gd["results"][0]["longitude"]
         name = gd["results"][0]["name"]; country = gd["results"][0].get("country","")
 
@@ -227,12 +277,14 @@ def tool_weather_city(city: str) -> Dict[str, Any]:
                      {"latitude": lat, "longitude": lon, "current_weather": "true"}, timeout=8, tries=3)
         wd = w.json()
         cw = wd.get("current_weather") or {}
-        return {
+        out = {
             "ok": True, "city": f"{name}, {country}".strip(", "),
             "latitude": lat, "longitude": lon,
             "temperature_c": cw.get("temperature"), "windspeed_kmh": cw.get("windspeed"),
             "time": cw.get("time"), "raw": cw
         }
+        cache_set("weather", key, out, ttl=180)  # 3 min
+        return out
     except Exception as e:
         return {"ok": False, "reason": str(e)}
 
@@ -241,6 +293,13 @@ def tool_sysinfo() -> Dict[str, Any]:
             "commit": COMMIT, "redis": redis_ok(), "model": active_model()}
 
 def tool_web_search_ddg(query: str) -> Dict[str, Any]:
+    if not query:
+        return {"ok": False, "reason": "missing_query"}
+    key = hashlib.sha256(query.strip().lower().encode()).hexdigest()
+    cached = cache_get("ddg", key)
+    if cached:
+        try: return json.loads(cached)
+        except Exception: pass
     try:
         res = http_get("https://api.duckduckgo.com/",
                        {"q": query, "format": "json", "no_html": 1, "skip_disambig": 1},
@@ -251,23 +310,23 @@ def tool_web_search_ddg(query: str) -> Dict[str, Any]:
         related = [{"Text": r.get("Text"), "FirstURL": r.get("FirstURL")}
                    for r in (data.get("RelatedTopics") or [])[:5]
                    if isinstance(r, dict) and r.get("Text") and r.get("FirstURL")]
-        return {"ok": True, "heading": heading, "summary": abstract, "related": related}
+        out = {"ok": True, "heading": heading, "summary": abstract, "related": related}
+        cache_set("ddg", key, out, ttl=300)  # 5 min
+        return out
     except Exception as e:
         return {"ok": False, "reason": str(e)}
 
-# ---------- RAG: embeddings via OpenAI ----------
+# ---------- RAG ----------
 def embed_texts(texts: List[str]) -> List[List[float]]:
     if not OPENAI_KEY:
-        # Dev fallback: deterministic tiny hash embedding (terrible but unblocks flow)
+        # cheap local embedding to keep flow in dev
         def cheap_vec(s: str, dim=64):
             v = [0.0]*dim
             for i,ch in enumerate(s.encode("utf-8")):
                 v[i % dim] += (ch % 13) / 13.0
-            # L2 normalize
             norm = math.sqrt(sum(x*x for x in v)) or 1.0
             return [x/norm for x in v]
         return [cheap_vec(t) for t in texts]
-
     from openai import OpenAI
     client = OpenAI(api_key=OPENAI_KEY)
     resp = client.embeddings.create(model=EMBED_MODEL, input=texts)
@@ -281,12 +340,7 @@ def cosine(a: List[float], b: List[float]) -> float:
     return s/(na*nb)
 
 def rag_index(username: str, docs: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """
-    docs: [{id, text, metadata?}]
-    Stored in Redis list k_rag_docs(username) as JSON with 'vec'.
-    """
-    if not r:
-        return {"ok": False, "reason": "redis_unavailable"}
+    if not r: return {"ok": False, "reason": "redis_unavailable"}
     texts = [d.get("text","") for d in docs]
     vecs = embed_texts(texts)
     pipe = r.pipeline()
@@ -297,7 +351,6 @@ def rag_index(username: str, docs: List[Dict[str, Any]]) -> Dict[str, Any]:
                "vec": v}
         pipe.rpush(k_rag_docs(username), json.dumps(row))
     pipe.execute()
-    # keep last 2000 chunks
     r.ltrim(k_rag_docs(username), -2000, -1)
     return {"ok": True, "count": len(docs)}
 
@@ -319,99 +372,94 @@ def rag_search(username: str, query: str, top_k: int = 4) -> Dict[str, Any]:
                for s, r0 in scored[:max(1, min(top_k, 10))]]
     return {"ok": True, "matches": matches}
 
-# Expose RAG as a tool
 def tool_rag_search(username: str, query: str, top_k: int = 4) -> Dict[str, Any]:
     return rag_search(username, query, top_k)
 
-# ---------- OpenAI tool schemas (including RAG) ----------
+# ---------- Tool schemas ----------
 OPENAI_TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "get_weather",
-            "description": "Get current weather for a city name.",
-            "parameters": {
-                "type": "object",
-                "properties": {"city": {"type": "string"}},
-                "required": ["city"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "web_search",
-            "description": "Quick web search using DuckDuckGo Instant Answer.",
-            "parameters": {
-                "type": "object",
-                "properties": {"query": {"type": "string"}},
-                "required": ["query"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "system_info",
-            "description": "Return server/system info and current active model.",
-            "parameters": {"type": "object", "properties": {}}
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "rag_search",
-            "description": "Search the user's indexed documents and return the top matches for grounding.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "username": {"type": "string"},
-                    "query": {"type": "string"},
-                    "top_k": {"type": "integer", "minimum": 1, "maximum": 10}
-                },
-                "required": ["username", "query"]
-            }
-        }
-    }
+    {"type": "function", "function": {
+        "name": "get_weather",
+        "description": "Get current weather for a city name.",
+        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+    }},
+    {"type": "function", "function": {
+        "name": "web_search",
+        "description": "Quick web search using DuckDuckGo Instant Answer.",
+        "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}
+    }},
+    {"type": "function", "function": {
+        "name": "system_info",
+        "description": "Return server/system info and current active model.",
+        "parameters": {"type": "object", "properties": {}}
+    }},
+    {"type": "function", "function": {
+        "name": "rag_search",
+        "description": "Search the user's indexed documents and return the top matches for grounding.",
+        "parameters": {"type": "object", "properties": {
+            "username": {"type": "string"},
+            "query": {"type": "string"},
+            "top_k": {"type": "integer", "minimum": 1, "maximum": 10}
+        }, "required": ["username", "query"]}
+    }}
 ]
 
-# ---------- Basic non-stream tool loop ----------
+# ---------- OpenAI helpers ----------
+def price_estimate(model: str, prompt_tokens: int, comp_tokens: int) -> float:
+    p = PRICES.get(model, PRICES.get("gpt-4o-mini"))
+    return (prompt_tokens/1000.0)*p["in"] + (comp_tokens/1000.0)*p["out"]
+
+# ---------- Non-stream tool loop (with moderation + usage) ----------
 def openai_tool_calling(model: str, user_msg: str, username: str) -> Dict[str, Any]:
-    # dev heuristics
+    # Pre moderation
+    pre_mod = moderate_text(user_msg)
+    if not pre_mod.get("ok", True):
+        return {"reply": "I can’t help with that request.", "traces":[{"tool":"moderation_pre","result":pre_mod}]}
+
     if not OPENAI_KEY:
         lw = user_msg.lower()
+        traces=[]
         if "weather" in lw:
             city = user_msg.split()[-1]
-            out = tool_weather_city(city)
-            if out.get("ok"):
-                return {"reply": f"Temp in {out['city']}: {out['temperature_c']}°C",
-                        "traces":[{"tool":"get_weather","args":{"city":city},"result":out}]}
-            return {"reply": f"Weather failed: {out.get('reason','unknown')}", "traces":[]}
+            out = tool_weather_city(city); traces.append({"tool":"get_weather","args":{"city":city},"result":out})
+            return {"reply": f"Temp in {out.get('city','?')}: {out.get('temperature_c','?')}°C", "traces":traces, "usage": {"dev": True}}
         if "search" in lw:
-            out = tool_web_search_ddg(user_msg)
-            if out.get("ok"):
-                return {"reply": (out.get("summary") or out.get("heading") or "(no result)"),
-                        "traces":[{"tool":"web_search","args":{"query":user_msg},"result":out}]}
+            out = tool_web_search_ddg(user_msg); traces.append({"tool":"web_search","args":{"query":user_msg},"result":out})
+            return {"reply": (out.get("summary") or out.get("heading") or "(no result)"), "traces":traces, "usage": {"dev": True}}
         if "rag" in lw or "doc" in lw:
-            out = rag_search(username, user_msg, 4)
-            return {"reply": f"Top matches: {len(out.get('matches',[]))}", "traces":[{"tool":"rag_search","result":out}]}
-        return {"reply": f"(dev echo) {user_msg}", "traces":[]}
+            out = rag_search(username, user_msg, 4); traces.append({"tool":"rag_search","result":out})
+            return {"reply": f"Top matches: {len(out.get('matches',[]))}", "traces":traces, "usage": {"dev": True}}
+        return {"reply": f"(dev echo) {user_msg}", "traces":[], "usage": {"dev": True}}
 
     from openai import OpenAI
     client = OpenAI(api_key=OPENAI_KEY)
     messages = [
-        {"role": "system", "content": "You are Friday AI. Use tools when helpful and keep answers tight."},
+        {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": user_msg},
     ]
     traces: List[Dict[str, Any]] = []
+    prompt_tokens_used = 0
+    completion_tokens_used = 0
 
     for _ in range(3):
         resp = client.chat.completions.create(
             model=model, messages=messages, tools=OPENAI_TOOLS, tool_choice="auto", temperature=0.5
         )
+        # usage (if provided)
+        u = getattr(resp, "usage", None)
+        if u:
+            prompt_tokens_used += int(getattr(u, "prompt_tokens", 0))
+            completion_tokens_used += int(getattr(u, "completion_tokens", 0))
+
         msg = resp.choices[0].message
         if not getattr(msg, "tool_calls", None):
-            return {"reply": (msg.content or "").strip() or "(no reply)", "traces": traces}
+            final = (msg.content or "").strip() or "(no reply)"
+            # Post moderation
+            post_mod = moderate_text(final)
+            if not post_mod.get("ok", True):
+                final = "I rewrote that for safety. Here’s a safer version: I can’t share that content."
+                traces.append({"tool":"moderation_post","result":post_mod})
+            cost = price_estimate(model, prompt_tokens_used, completion_tokens_used)
+            return {"reply": final, "traces": traces, "usage": {"prompt_tokens":prompt_tokens_used, "completion_tokens":completion_tokens_used, "est_cost_usd": round(cost,6)}}
 
         for tc in msg.tool_calls:
             name = tc.function.name
@@ -431,7 +479,7 @@ def openai_tool_calling(model: str, user_msg: str, username: str) -> Dict[str, A
             messages.append({"role": "tool", "tool_call_id": tc.id, "name": name, "content": json.dumps(res)})
     return {"reply": "I tried tools but couldn’t finish. Try rephrasing.", "traces": traces}
 
-# ---------- Non-stream chat (tools) ----------
+# ---------- Non-stream chat ----------
 @app.post("/api/chat")
 def api_chat():
     allowed, remaining, reset = rate_limit_check(client_scope())
@@ -448,27 +496,31 @@ def api_chat():
 
     if use_tools:
         result = openai_tool_calling(model, message, username)
-        reply = result.get("reply",""); traces = result.get("traces",[])
+        reply = result.get("reply",""); traces = result.get("traces",[]); usage = result.get("usage",{})
     else:
-        reply = f"(dev echo) {message}"
+        reply = f"(dev echo) {message}"; traces=[]; usage={}
         if OPENAI_KEY:
             try:
                 from openai import OpenAI
                 client = OpenAI(api_key=OPENAI_KEY)
                 r0 = client.chat.completions.create(
                     model=model,
-                    messages=[{"role":"system","content":"You are Friday AI."},{"role":"user","content": message}],
+                    messages=[{"role":"system","content":SYSTEM_PROMPT},{"role":"user","content": message}],
                     temperature=0.6
                 )
                 reply = (r0.choices[0].message.content or "").strip() or reply
+                u = getattr(r0, "usage", None)
+                if u:
+                    usage = {"prompt_tokens": int(getattr(u,"prompt_tokens",0)),
+                             "completion_tokens": int(getattr(u,"completion_tokens",0)),
+                             "est_cost_usd": round(price_estimate(model, int(getattr(u,"prompt_tokens",0)), int(getattr(u,"completion_tokens",0))),6)}
             except Exception as e:
                 reply = f"[upstream_error] {e}"
-        traces = []
 
     append_history(username, message, reply)
-    return jsonify({"reply": reply, "traces": traces, "rate_limit":{"remaining":remaining,"reset":reset}})
+    return jsonify({"reply": reply, "traces": traces, "usage": usage, "rate_limit":{"remaining":remaining,"reset":reset}})
 
-# ---------- SSE helpers (heartbeats) ----------
+# ---------- SSE helpers ----------
 def sse(payload: Dict[str, Any]) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
@@ -479,7 +531,7 @@ def yield_heartbeat(last_hb: float, interval: float = 10.0) -> float:
         return now
     return last_hb
 
-# ---------- Stream+Tools (SSE) ----------
+# ---------- Stream+Tools ----------
 @app.get("/api/chat/stream-tools")
 def api_chat_stream_tools():
     allowed, remaining, reset = rate_limit_check(client_scope())
@@ -491,6 +543,19 @@ def api_chat_stream_tools():
     model = request.args.get("model") or active_model(username)
     if not user_msg:
         return jsonify({"error": "missing_message"}), 400
+
+    # Pre moderation
+    pre_mod = moderate_text(user_msg)
+    if not pre_mod.get("ok", True):
+        def quick():
+            yield sse({"type":"delta","delta":"I can’t help with that request."})
+            yield sse({"type":"done"})
+        return Response(stream_with_context(quick()), headers={
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        })
 
     @stream_with_context
     def generate():
@@ -505,7 +570,7 @@ def api_chat_stream_tools():
         from openai import OpenAI
         client = OpenAI(api_key=OPENAI_KEY)
         messages: List[Dict[str, Any]] = [
-            {"role":"system","content":"You are Friday AI. Call tools judiciously and keep answers tight."},
+            {"role":"system","content":SYSTEM_PROMPT},
             {"role":"user","content": user_msg},
         ]
 
@@ -560,15 +625,12 @@ def api_chat_stream_tools():
                     }
                     for idx, call in sorted(tool_calls.items())
                 ]})
-
-                # Execute
                 for idx, call in sorted(tool_calls.items()):
                     name = call["function"]["name"]
                     try:
                         args = json.loads(call["function"]["arguments"] or "{}")
                     except Exception:
                         args = {}
-
                     if name == "get_weather":
                         result = tool_weather_city(args.get("city",""))
                     elif name == "web_search":
@@ -579,7 +641,6 @@ def api_chat_stream_tools():
                         result = tool_rag_search(args.get("username") or username, args.get("query",""), int(args.get("top_k") or 4))
                     else:
                         result = {"ok": False, "reason": f"unknown_tool:{name}"}
-
                     yield sse({"type":"tool_result","name": name, "args": args, "result": result})
                     messages.append({
                         "role":"tool",
@@ -587,14 +648,16 @@ def api_chat_stream_tools():
                         "name": name,
                         "content": json.dumps(result, ensure_ascii=False)
                     })
-                # loop again to let model integrate
                 continue
-
-            # no tool calls → done
             break
 
-        yield sse({"type":"done"})
+        # Post moderation
         final_text = "".join(final_text_all).strip() or "(no reply)"
+        post_mod = moderate_text(final_text)
+        if not post_mod.get("ok", True):
+            final_text = "I rewrote that for safety. Here’s a safer version: I can’t share that content."
+        # stream the final token if needed (already done), then done
+        yield sse({"type":"done"})
         append_history(username, user_msg, final_text)
 
     headers = {
@@ -620,7 +683,7 @@ def stream_openai_plain(model: str, message: str) -> Generator[str, None, str]:
     client = OpenAI(api_key=OPENAI_KEY)
     stream = client.chat.completions.create(
         model=model,
-        messages=[{"role":"system","content":"You are Friday AI."},{"role":"user","content": message}],
+        messages=[{"role":"system","content":SYSTEM_PROMPT},{"role":"user","content": message}],
         temperature=0.6, stream=True
     )
     last_hb = time.time()
@@ -651,15 +714,15 @@ def api_chat_stream_plain():
     def generate():
         for chunk in stream_openai_plain(model, message):
             yield chunk
-        # Quick non-stream copy for history
+        # store a copy for history continuity
         final_copy = f"(dev echo) {message}"
         if OPENAI_KEY:
-            from openai import OpenAI
-            client = OpenAI(api_key=OPENAI_KEY)
             try:
+                from openai import OpenAI
+                client = OpenAI(api_key=OPENAI_KEY)
                 r0 = client.chat.completions.create(
                     model=model,
-                    messages=[{"role":"system","content":"You are Friday AI."},{"role":"user","content": message}],
+                    messages=[{"role":"system","content":SYSTEM_PROMPT},{"role":"user","content": message}],
                     temperature=0.6
                 )
                 final_copy = (r0.choices[0].message.content or "").strip() or final_copy
@@ -675,7 +738,30 @@ def api_chat_stream_plain():
     }
     return Response(generate(), headers=headers)
 
-# ---------- RAG API ----------
+# ---------- History APIs ----------
+@app.get("/api/history")
+def get_history_api():
+    username = request.args.get("username") or "guest"
+    items = get_history(username, limit=int(request.args.get("limit") or 200))
+    return jsonify(items)
+
+@app.post("/api/history/clear")
+def clear_history_api():
+    username = (request.get_json(silent=True) or {}).get("username") or "guest"
+    n = clear_history(username)
+    return jsonify({"ok": True, "cleared": bool(n)})
+
+@app.get("/api/history/export")
+def export_history():
+    username = request.args.get("username") or "guest"
+    items = get_history(username, limit=1000)
+    payload = json.dumps(items, indent=2, ensure_ascii=False)
+    return Response(
+        payload, mimetype="application/json",
+        headers={"Content-Disposition": f'attachment; filename="history_{username}.json"'}
+    )
+
+# ---------- RAG APIs ----------
 @app.post("/api/rag/index")
 def api_rag_index():
     allowed, remaining, reset = rate_limit_check(client_scope())
@@ -764,12 +850,8 @@ def method_not_allowed(_):
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
-    app.run(
-        host="0.0.0.0",
-        port=port,
-        debug=(os.getenv("FLASK_ENV","").lower()!="production"),
-        threaded=True
-    )
+    app.run(host="0.0.0.0", port=port, debug=(os.getenv("FLASK_ENV","").lower()!="production"), threaded=True)
+
 
 
 
