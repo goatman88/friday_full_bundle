@@ -1,20 +1,23 @@
-# Friday AI — Vector + Refresh
+# Friday AI — Admin + OCR + Role Upload Limits + Qdrant
 
-**What you get**
-- Chat UI (`/chat`) with models and login
-- JWT auth with short-lived access tokens + long-lived refresh tokens
-- File uploads (PDF/TXT/MD/DOCX/HTML) → embeddings → vector DB (PGVector). Falls back to Redis if PG isn’t set.
-- RAG tools + JSON-mode endpoint
-- Admin-only actions with UI guard (mint codes)
+## Features
+- Chat UI `/chat`, Admin UI `/admin`
+- JWT auth: access + refresh, role-based (user/admin)
+- Uploads: PDF/TXT/MD/DOCX/HTML; optional OCR on DOCX images (Tesseract)
+- Vector store priority: **Qdrant** → **PGVector** → Redis fallback
+- RAG tools, JSON-mode, history export/clear
 
-## Quick Start
-
-### Local (no vector DB)
+## Quick Start (local)
 ```bash
 python -m venv .venv && . .venv/bin/activate  # Windows: .venv\Scripts\Activate
 pip install -r requirements.txt
-set OPENAI_API_KEY=sk-...   # PowerShell: $env:OPENAI_API_KEY="sk-..."
+# (optional) docker compose up -d pg qdrant
+# choose a vector backend:
+#   Qdrant:  export QDRANT_URL=http://localhost:6333
+#   PG:      export PG_URL=postgresql://friday:password@localhost:5432/fridaydb
+export OPENAI_API_KEY=sk-...
 python app.py
+
 
 
 
