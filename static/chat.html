@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Friday Chat</title>
 <style>
-  :root { --bg:#0f172a; --panel:#0b1226; --text:#e2e8f0; --muted:#94a3b8; --border:rgba(255,255,255,.08); }
+  :root { --bg:#0f172a; --panel:#0b1226; --text:#e2e8f0; --muted:#94a3b8; --border:rgba(255,255,255,.08); --accent:#60a5fa; }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,Segoe UI,Inter,Roboto,Arial}
   header{position:sticky;top:0;z-index:10;background:rgba(15,23,42,.75);backdrop-filter:saturate(1.2) blur(6px);
@@ -28,13 +28,19 @@
   small{color:var(--muted)}
   pre{white-space:pre-wrap}
   code{background:rgba(255,255,255,.06);padding:2px 6px;border-radius:6px}
-  .log{padding:10px 12px;height:200px;overflow:auto;font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;font-size:12px;background:#071023;border-top:1px solid var(--border)}
+  .log{padding:10px 12px;height:200px;overflow:auto;font-family:ui-monospace, Menlo, Consolas, monospace;font-size:12px;background:#071023;border-top:1px solid var(--border)}
   a{color:#93c5fd;text-decoration:none}
   .pill{font-size:12px;background:rgba(255,255,255,.07);padding:2px 6px;border-radius:999px;border:1px solid var(--border)}
   .sources{font-size:13px;color:#c7d2fe;margin-top:6px}
-  .k{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px; color:#cbd5e1}
+  .k{font-family:ui-monospace, Menlo, Consolas, monospace; font-size:12px; color:#cbd5e1}
   table{width:100%;border-collapse:collapse}
   th,td{border-bottom:1px solid var(--border);padding:6px 8px;vertical-align:top}
+  #drop{border:2px dashed var(--border); border-radius:12px; padding:16px; text-align:center; transition: all .15s ease}
+  #drop.active{border-color:var(--accent); background:rgba(96,165,250,.08)}
+  .files{max-height:20vh; overflow:auto; border:1px solid var(--border); border-radius:10px; padding:8px}
+  .file-row{display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 0; border-bottom:1px dashed var(--border)}
+  .file-row:last-child{border-bottom:none}
+  .danger{background:#ef44441a;border-color:#ef4444}
 </style>
 </head>
 <body>
@@ -49,7 +55,7 @@
 </header>
 
 <main>
-  <!-- Chat panel -->
+  <!-- Chat -->
   <div class="card">
     <div class="section col">
       <div class="row">
@@ -69,7 +75,7 @@
     <div class="log" id="log"></div>
   </div>
 
-  <!-- RAG panel -->
+  <!-- RAG -->
   <div class="card">
     <div class="section col">
       <div class="row" style="justify-content:space-between">
@@ -77,17 +83,19 @@
         <div class="row">
           <button id="btnList" class="pill">List</button>
           <button id="btnExport" class="pill">Export CSV</button>
-          <button id="btnClearRag" class="pill" title="remove all vectors">Clear</button>
+          <button id="btnClearRag" class="pill danger" title="remove all vectors">Clear All</button>
         </div>
       </div>
 
-      <div class="col" style="gap:6px;border:1px dashed var(--border);padding:10px;border-radius:10px">
-        <div class="k">Upload .txt / .md / .csv</div>
+      <!-- drag & drop + click select -->
+      <div id="drop">
+        <div class="k">Drag & drop files here (.txt .md .csv .pdf .docx) or</div>
         <input id="fileInput" type="file" multiple>
-        <button id="btnUpload">Upload & Index</button>
+        <div style="margin-top:6px"><button id="btnUpload">Upload & Index</button></div>
+        <div class="k" id="uploadStatus" style="margin-top:6px"></div>
       </div>
 
-      <div class="col" style="gap:6px;border:1px dashed var(--border);padding:10px;border-radius:10px">
+      <div class="col" style="gap:6px;border:1px dashed var(--border);padding:10px;border-radius:10px;margin-top:10px">
         <div class="k">Paste text</div>
         <input id="pasteFilename" placeholder="filename (optional)" style="width:60%">
         <textarea id="pasteText" placeholder="Paste raw text to index…"></textarea>
@@ -100,7 +108,13 @@
         <button id="btnRagSearch" class="primary">Search</button>
       </div>
 
-      <div id="ragResult" style="max-height:52vh;overflow:auto"></div>
+      <div style="margin-top:10px">
+        <div class="k" style="margin:6px 0">Indexed Files</div>
+        <div class="files" id="files"></div>
+      </div>
+
+      <div class="k" style="margin-top:10px">Results</div>
+      <div id="ragResult" style="max-height:40vh;overflow:auto"></div>
     </div>
   </div>
 </main>
@@ -159,11 +173,6 @@ async function savePreset(){
 async function loadRate(){
   const r = await fetch("/api/metrics"); const j = await r.json();
   const rl = j.rate_limit||{}; $("#rlPill").textContent = `rate: ${rl.remaining ?? "?"} left`;
-}
-async function loadHistory(){
-  const u=$("#username").value||"guest";
-  const r = await fetch(`/api/history?username=${encodeURIComponent(u)}&limit=200`);
-  const j = await r.json(); const h=$("#history"); if(h){h.innerHTML="";}
 }
 
 $("#model").addEventListener("change", saveModel);
@@ -227,6 +236,29 @@ $("#send").onclick = send;
 $("#input").addEventListener("keydown", (e)=>{ if(e.key==="Enter" && (e.ctrlKey||e.metaKey)){ send(); } });
 
 // ---------- RAG UI ----------
+function fmtWhen(ts){ try{ return new Date(ts*1000).toLocaleString(); }catch(_){ return "" } }
+
+function renderFiles(list){
+  const box=$("#files"); box.innerHTML="";
+  if(!list || !list.files || !list.files.length){ box.textContent="(no files yet)"; return; }
+  list.files.forEach(meta=>{
+    const row=document.createElement("div"); row.className="file-row";
+    const left=document.createElement("div");
+    left.innerHTML = `<div><strong>${escapeHTML(meta.filename||"")}</strong></div><div class="k">${escapeHTML(meta.file_id||"")} • ${meta.chunks||0} chunks • ${fmtWhen(meta.ts||0)}</div>`;
+    const del=document.createElement("button"); del.className="pill danger"; del.textContent="Delete";
+    del.onclick = async ()=>{
+      const u=$("#username").value||"guest";
+      del.disabled=true; del.textContent="Deleting…";
+      const r = await fetch("/api/rag/delete_file",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u, file_id: meta.file_id})});
+      const j = await r.json();
+      await refreshFiles();
+      $("#ragResult").textContent = j.ok ? `Removed ${j.removed||0} chunks.` : (j.error||"delete failed");
+    };
+    row.appendChild(left); row.appendChild(del);
+    box.appendChild(row);
+  });
+}
+
 function renderList(list){
   const div=$("#ragResult"); div.innerHTML="";
   if(!list || !list.sample){ div.textContent="(no docs)"; return; }
@@ -240,7 +272,7 @@ function renderList(list){
     const tr=document.createElement("tr");
     const fn=(r.metadata && (r.metadata.filename||""))||"";
     const ck=(r.metadata && (r.metadata.chunk??""))||"";
-    tr.innerHTML = `<td>${i+1}</td><td>${escapeHTML(fn)}</td><td>${ck}</td><td>${escapeHTML(r.text||"")}</td>`;
+    tr.innerHTML = `<td>${i+1}</td><td>${escapeHTML(fn)}</td><td>${ck}</td><td>${escapeHTML((r.text||"").slice(0,240).replace(/\n/g," "))}</td>`;
     tb.appendChild(tr);
   });
   div.appendChild(table);
@@ -266,6 +298,12 @@ function renderMatches(res){
   div.appendChild(table);
 }
 
+async function refreshFiles(){
+  const u=$("#username").value||"guest";
+  const r = await fetch(`/api/rag/files?username=${encodeURIComponent(u)}`);
+  renderFiles(await r.json());
+}
+
 $("#btnList").onclick = async ()=>{
   const u=$("#username").value||"guest";
   const r = await fetch(`/api/rag/list?username=${encodeURIComponent(u)}&limit=50`);
@@ -282,19 +320,34 @@ $("#btnClearRag").onclick = async ()=>{
   const r = await fetch("/api/rag/clear",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u})});
   const j = await r.json();
   $("#ragResult").textContent = j.cleared ? "Vectors cleared." : "Nothing to clear.";
+  await refreshFiles();
 };
 
-$("#btnUpload").onclick = async ()=>{
+$("#btnUpload").onclick = async ()=>{ await doUpload($("#fileInput").files); };
+
+async function doUpload(fileList){
   const u=$("#username").value||"guest";
-  const files = $("#fileInput").files;
-  if(!files || !files.length){ alert("Pick at least one .txt/.md/.csv file"); return; }
+  const files = fileList;
+  if(!files || !files.length){ alert("Pick at least one file"); return; }
   const fd = new FormData();
   fd.append("username", u);
   for(const f of files) fd.append("files", f, f.name);
+  $("#uploadStatus").textContent = "Uploading…";
   const r = await fetch("/api/rag/upload",{method:"POST", body: fd});
   const j = await r.json();
-  $("#ragResult").textContent = j.ok ? `Added ${j.added} chunks.` : (j.error || "upload failed");
-};
+  $("#uploadStatus").textContent = j.ok ? `Indexed ${j.added} chunks across ${j.files?.length||0} files.` : (j.error || "upload failed");
+  await refreshFiles();
+}
+
+// drag & drop
+const drop = $("#drop");
+drop.addEventListener("dragover", (e)=>{ e.preventDefault(); drop.classList.add("active"); });
+drop.addEventListener("dragleave", ()=> drop.classList.remove("active"));
+drop.addEventListener("drop", async (e)=>{
+  e.preventDefault(); drop.classList.remove("active");
+  if(!e.dataTransfer || !e.dataTransfer.files?.length) return;
+  await doUpload(e.dataTransfer.files);
+});
 
 $("#btnIndexText").onclick = async ()=>{
   const u=$("#username").value||"guest";
@@ -304,6 +357,7 @@ $("#btnIndexText").onclick = async ()=>{
   const r = await fetch("/api/rag/index_text",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u, filename: fn||undefined, text: tx})});
   const j = await r.json();
   $("#ragResult").textContent = j.ok ? `Indexed ${j.added} chunks from ${j.filename}` : (j.error || "index failed");
+  await refreshFiles();
 };
 
 $("#btnRagSearch").onclick = async ()=>{
@@ -317,10 +371,12 @@ $("#btnRagSearch").onclick = async ()=>{
 // boot
 (async function init(){
   await Promise.all([loadModels(), loadPresets(), loadRate()]);
+  await refreshFiles();
 })();
 </script>
 </body>
 </html>
+
 
 
 
