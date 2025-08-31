@@ -13,12 +13,17 @@
   input,button{background:#0b1226;color:#e2e8f0;border:1px solid rgba(255,255,255,.15);padding:8px 10px;border-radius:10px}
   button.btn{background:linear-gradient(135deg,#60a5fa,#a78bfa);border:none;font-weight:600}
   pre{font-size:12px;white-space:pre-wrap;background:#0b1226;border:1px solid rgba(255,255,255,.08);padding:8px;border-radius:8px;max-height:260px;overflow:auto}
+  a{color:#93c5fd;text-decoration:none}
 </style>
 </head>
 <body>
 <header>
   <div><strong>Friday</strong> • Admin</div>
-  <div><a href="/chat" style="color:#93c5fd;text-decoration:none">← back to chat</a></div>
+  <div style="display:flex;gap:12px">
+    <a href="/chat">← back to chat</a>
+    <a href="/vectors" target="_blank">Vectors</a>
+    <a href="/maint" target="_blank">Maintenance</a>
+  </div>
 </header>
 
 <div class="grid">
@@ -99,3 +104,4 @@ document.getElementById("clearBtn").onclick = async () => {
 </script>
 </body>
 </html>
+
