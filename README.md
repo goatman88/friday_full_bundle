@@ -1,14 +1,13 @@
-# Friday AI — Flask Starter
+# Friday AI — Flask Starter (Batteries Included)
 
-Chat UI + persistent history (Redis/SQLite/memory), admin panel, backup/restore, moderation, image gen, and file uploads.
+Chat UI + persistent history (SQLite/Redis), admin panel, backup/restore, JWT auth, moderation guardrails, RAG (embeddings), image generation, file uploads, usage tracking, weather tool, and CI.
 
-## Quick Start (Local)
+## Run locally
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+python3 -m venv .venv && source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-export OPENAI_API_KEY=sk-xxx
-export ADMIN_TOKEN=super-secure
-export ASSET_CDN="https://fonts.googleapis.com,https://fonts.gstatic.com"
+cp .env.example .env  # fill values
 python app.py
+
 
