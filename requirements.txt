@@ -9,6 +9,14 @@ PyJWT>=2.8
 Werkzeug>=3.1
 requests>=2.32
 sentry-sdk>=2.9
+# RAG + tools
+psycopg[binary]>=3.2
+pgvector>=0.3.4
+asteval>=1.0.5
+# optional telemetry
+opentelemetry-sdk>=1.27.0
+opentelemetry-exporter-otlp>=1.27.0
+
 
 
 
