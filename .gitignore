@@ -1,20 +1,41 @@
-# Python
-__pycache__/
-*.pyc
-*.pyo
-
-# Virtual env
+# --- Python / venv
 .venv/
-env/
 venv/
+ENV/
+env/
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+*.pytest_cache/
+.pytest_cache/
 
-# Local files
-*.bak
+# --- Local configs / secrets
+.env
+.env.* 
+*.secret
+*.local
+
+# --- OS cruft
 .DS_Store
+Thumbs.db
 
-# IDE
+# --- Editors
 .vscode/
 .idea/
+
+# --- Build artifacts
+dist/
+build/
+*.egg-info/
+
+# --- Logs
+*.log
+
+# --- Node (if you ever add a small frontend build)
+node_modules/
+
+
 
 
 
