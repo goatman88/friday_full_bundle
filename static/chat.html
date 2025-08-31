@@ -16,18 +16,17 @@
   .card{background:var(--panel);border:1px solid var(--border);border-radius:14px;overflow:hidden}
   .section{padding:12px}
   .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .col{display:flex;flex-direction:column;gap:8px}
   input, select, button, textarea{background:var(--panel);color:var(--text);border:1px solid rgba(255,255,255,.15);border-radius:10px;padding:8px 10px}
   input, select{height:36px}
   textarea{width:100%;min-height:80px;resize:vertical}
   button.primary{background:linear-gradient(135deg,#60a5fa,#a78bfa);border:none;font-weight:700}
-  .col{display:flex;flex-direction:column;gap:8px}
   .messages{padding:10px 12px;max-height:58vh;overflow:auto}
   .msg{padding:10px;border:1px solid var(--border);border-radius:10px;margin:8px 0}
   .user{background:rgba(59,130,246,.08)}
   .bot{background:rgba(168,85,247,.08)}
   small{color:var(--muted)}
   pre{white-space:pre-wrap}
-  code{background:rgba(255,255,255,.06);padding:2px 6px;border-radius:6px}
   .log{padding:10px 12px;height:200px;overflow:auto;font-family:ui-monospace, Menlo, Consolas, monospace;font-size:12px;background:#071023;border-top:1px solid var(--border)}
   a{color:#93c5fd;text-decoration:none}
   .pill{font-size:12px;background:rgba(255,255,255,.07);padding:2px 6px;border-radius:999px;border:1px solid var(--border)}
@@ -48,6 +47,7 @@
   <div class="title">Friday</div>
   <div class="pill" id="modelPill">model: …</div>
   <div class="pill" id="presetPill">preset: …</div>
+  <div class="pill" id="projectPill">project: default</div>
   <div class="pill" id="rlPill">rate: …</div>
   <div style="margin-left:auto;display:flex;gap:10px">
     <a href="/routes" target="_blank">Routes</a>
@@ -59,16 +59,17 @@
   <div class="card">
     <div class="section col">
       <div class="row">
-        <input id="username" placeholder="username" value="guest" style="width:200px">
+        <input id="username" placeholder="username" value="guest" style="width:180px">
+        <input id="project" placeholder="project" value="default" style="width:160px" title="namespace your docs/chats">
         <select id="model" style="width:200px"></select>
         <select id="preset" style="width:180px"></select>
         <label class="row" style="gap:6px"><input type="checkbox" id="useStream" checked> Stream (tools)</label>
         <button id="btnClear" class="pill" title="clear history">Clear</button>
       </div>
-      <textarea id="input" placeholder="Type your question…"></textarea>
+      <textarea id="input" placeholder="Ask anything… ‘summarize the uploaded PDF on page 3’, ‘weather in Chicago’, ‘search NVIDIA earnings’"></textarea>
       <div class="row">
         <button id="send" class="primary">Send</button>
-        <small id="hint">Try “weather in Chicago” or “search NVIDIA earnings summary”.</small>
+        <small id="hint">Tip: switch <code>project</code> to keep work streams separate.</small>
       </div>
     </div>
     <div class="messages" id="messages"></div>
@@ -87,9 +88,8 @@
         </div>
       </div>
 
-      <!-- drag & drop + click select -->
       <div id="drop">
-        <div class="k">Drag & drop files here (.txt .md .csv .pdf .docx) or</div>
+        <div class="k">Drag & drop (.txt .md .csv .pdf .docx) or</div>
         <input id="fileInput" type="file" multiple>
         <div style="margin-top:6px"><button id="btnUpload">Upload & Index</button></div>
         <div class="k" id="uploadStatus" style="margin-top:6px"></div>
@@ -122,7 +122,7 @@
 <script>
 const $ = s => document.querySelector(s);
 const log = (...a) => { const l=$("#log"); l.textContent += a.map(x=>typeof x==="string"?x:JSON.stringify(x)).join(" ")+"\n"; l.scrollTop=l.scrollHeight; };
-const escapeHTML = s => (s||"").replace(/[&<>"']/g, m=>({"&":"&amp;","<":"&gt;","</": "&lt;/",">":"&gt;","\"":"&quot;","'":"&#039;"}[m]||m));
+const escapeHTML = s => (s||"").replace(/[&<>"']/g, m=>({"&":"&amp;","<":"&lt;","</": "&lt;/",">":"&gt;","\"":"&quot;","'":"&#039;"}[m]||m));
 
 function addMsg(role, text, citations){
   const wrap = document.createElement("div");
@@ -130,8 +130,10 @@ function addMsg(role, text, citations){
   let html = `<small>${role}</small><pre>${escapeHTML(text)}</pre>`;
   if (role!=="user" && citations && citations.length){
     const items = citations.map((c,i)=>{
-      const fn = (c.meta && (c.meta.filename || c.meta.file || "")) || c.id || `src-${i+1}`;
-      return `<div>${i+1}. ${escapeHTML(fn)}</div>`;
+      const meta = c.meta || {};
+      const fn = meta.filename || c.id || `src-${i+1}`;
+      const pg = meta.page ? ` (p.${meta.page})` : "";
+      return `<div>${i+1}. ${escapeHTML(fn)}${pg}</div>`;
     }).join("");
     html += `<div class="sources"><strong>Sources</strong>${items}</div>`;
   }
@@ -140,8 +142,11 @@ function addMsg(role, text, citations){
   $("#messages").scrollTop = $("#messages").scrollHeight;
 }
 
+function getUser(){ return ($("#username").value||"guest").trim() || "guest"; }
+function getProj(){ return ($("#project").value||"default").trim() || "default"; }
+
 async function loadModels(){
-  const u=$("#username").value||"guest";
+  const u=getUser();
   const r = await fetch(`/api/models?username=${encodeURIComponent(u)}`); const j = await r.json();
   $("#modelPill").textContent = "model: "+(j.active||"gpt-4o-mini");
   const sel = $("#model"); sel.innerHTML = "";
@@ -150,13 +155,13 @@ async function loadModels(){
   });
 }
 async function saveModel(){
-  const u=$("#username").value||"guest", m=$("#model").value;
+  const u=getUser(), m=$("#model").value;
   await fetch("/api/model",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u, model:m})});
   $("#modelPill").textContent = "model: "+m;
 }
 
 async function loadPresets(){
-  const u=$("#username").value||"guest";
+  const u=getUser();
   const r = await fetch(`/api/presets?username=${encodeURIComponent(u)}`); const j = await r.json();
   $("#presetPill").textContent = "preset: "+j.active;
   const sel=$("#preset"); sel.innerHTML="";
@@ -165,36 +170,38 @@ async function loadPresets(){
   });
 }
 async function savePreset(){
-  const u=$("#username").value||"guest", p=$("#preset").value;
+  const u=getUser(), p=$("#preset").value;
   await fetch("/api/presets",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u, preset:p})});
   $("#presetPill").textContent = "preset: "+p;
 }
 
 async function loadRate(){
   const r = await fetch("/api/metrics"); const j = await r.json();
-  const rl = j.rate_limit||{}; $("#rlPill").textContent = `rate: ${rl.remaining ?? "?"} left`;
+  const rl = j.rate_limit||{}; $("#rlPill").textContent = `rate: ${rl.remaining ?? "?"} left — ${j.backend||"redis"}`;
 }
+function updateProjectPill(){ $("#projectPill").textContent = "project: " + getProj(); }
 
 $("#model").addEventListener("change", saveModel);
 $("#preset").addEventListener("change", savePreset);
+$("#project").addEventListener("input", updateProjectPill);
+
 $("#btnClear").onclick = async ()=>{
-  const u=$("#username").value||"guest";
-  const r = await fetch("/api/history/clear",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u})});
+  const u=getUser(), p=getProj();
+  const r = await fetch("/api/history/clear",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u, project:p})});
   const j = await r.json(); addMsg("bot", `cleared: ${j.cleared}`);
 };
 
 async function send(){
   const q = $("#input").value.trim(); if(!q) return;
-  const u = $("#username").value||"guest";
-  const model = $("#model").value;
-  const preset = $("#preset").value;
+  const u = getUser(); const p = getProj();
+  const model = $("#model").value; const preset = $("#preset").value;
 
   addMsg("user", q);
   $("#input").value="";
   $("#log").textContent = "";
 
   if($("#useStream").checked){
-    const url = `/api/chat/stream_tools?message=${encodeURIComponent(q)}&username=${encodeURIComponent(u)}&model=${encodeURIComponent(model)}&preset=${encodeURIComponent(preset)}`;
+    const url = `/api/chat/stream_tools?message=${encodeURIComponent(q)}&username=${encodeURIComponent(u)}&project=${encodeURIComponent(p)}&model=${encodeURIComponent(model)}&preset=${encodeURIComponent(preset)}`;
     const es = new EventSource(url);
     let bot = document.createElement("div");
     bot.className="msg bot"; bot.innerHTML="<small>assistant</small><pre></pre>";
@@ -215,8 +222,10 @@ async function send(){
           const src = document.createElement("div");
           src.className="sources";
           src.innerHTML = "<strong>Sources</strong>" + finalCites.map((c,i)=>{
-            const fn = (c.meta && (c.meta.filename||c.meta.file||"")) || c.id || `src-${i+1}`;
-            return `<div>${i+1}. ${escapeHTML(fn)}</div>`;
+            const meta = c.meta || {};
+            const fn = meta.filename || c.id || `src-${i+1}`;
+            const pg = meta.page ? ` (p.${meta.page})` : "";
+            return `<div>${i+1}. ${escapeHTML(fn)}${pg}</div>`;
           }).join("");
           bot.appendChild(src);
         }
@@ -224,7 +233,7 @@ async function send(){
     };
     es.onerror = ()=>{ es.close(); log("stream error"); };
   } else {
-    const r = await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({message:q, username:u, model, preset})});
+    const r = await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({message:q, username:u, project:p, model, preset})});
     const j = await r.json();
     addMsg("bot", j.reply || j.error || "(no reply)", j.citations || []);
     if(j.traces){ j.traces.forEach(t=> log(`→ tool: ${t.tool}`, t.args||{}, t.result||{})); }
@@ -236,6 +245,68 @@ $("#send").onclick = send;
 $("#input").addEventListener("keydown", (e)=>{ if(e.key==="Enter" && (e.ctrlKey||e.metaKey)){ send(); } });
 
 // ---------- RAG UI ----------
+const drop = $("#drop");
+drop.addEventListener("dragover", (e)=>{ e.preventDefault(); drop.classList.add("active"); });
+drop.addEventListener("dragleave", ()=> drop.classList.remove("active"));
+drop.addEventListener("drop", async (e)=>{
+  e.preventDefault(); drop.classList.remove("active");
+  if(!e.dataTransfer || !e.dataTransfer.files?.length) return;
+  await doUpload(e.dataTransfer.files);
+});
+
+$("#btnUpload").onclick = async ()=>{ await doUpload($("#fileInput").files); };
+
+async function doUpload(fileList){
+  const u=getUser(), p=getProj();
+  if(!fileList || !fileList.length){ alert("Pick at least one file"); return; }
+  const fd = new FormData(); fd.append("username", u); fd.append("project", p);
+  for(const f of fileList) fd.append("files", f, f.name);
+  $("#uploadStatus").textContent = "Uploading…";
+  const r = await fetch("/api/rag/upload",{method:"POST", body: fd});
+  const j = await r.json();
+  $("#uploadStatus").textContent = j.ok ? `Indexed ${j.added} chunks across ${j.files?.length||0} files (${j.backend}).` : (j.error || "upload failed");
+  await refreshFiles();
+}
+
+$("#btnIndexText").onclick = async ()=>{
+  const u=getUser(), p=getProj();
+  const fn= $("#pasteFilename").value.trim() || "";
+  const tx= $("#pasteText").value.trim();
+  if(!tx){ alert("Paste some text first"); return; }
+  const r = await fetch("/api/rag/index_text",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u, project:p, filename: fn||undefined, text: tx})});
+  const j = await r.json();
+  $("#ragResult").textContent = j.ok ? `Indexed ${j.added} chunks from ${j.filename}` : (j.error || "index failed");
+  await refreshFiles();
+};
+
+$("#btnRagSearch").onclick = async ()=>{
+  const u=getUser(), p=getProj();
+  const q=$("#ragQuery").value.trim(); const k= $("#ragK").value || 4;
+  if(!q){ alert("Type a query"); return; }
+  const r = await fetch(`/api/rag/search?username=${encodeURIComponent(u)}&project=${encodeURIComponent(p)}&query=${encodeURIComponent(q)}&k=${encodeURIComponent(k)}`);
+  renderMatches(await r.json());
+};
+
+$("#btnList").onclick = async ()=>{ await listDocs(); };
+async function listDocs(){
+  const u=getUser(), p=getProj();
+  const r = await fetch(`/api/rag/list?username=${encodeURIComponent(u)}&project=${encodeURIComponent(p)}&limit=50`);
+  renderList(await r.json());
+}
+
+$("#btnExport").onclick = ()=>{
+  const u=getUser(), p=getProj();
+  window.location = `/api/rag/export_csv?username=${encodeURIComponent(u)}&project=${encodeURIComponent(p)}`;
+};
+
+$("#btnClearRag").onclick = async ()=>{
+  const u=getUser(), p=getProj();
+  const r = await fetch("/api/rag/clear",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u, project:p})});
+  const j = await r.json();
+  $("#ragResult").textContent = j.cleared ? "Vectors cleared." : "Nothing to clear.";
+  await refreshFiles();
+};
+
 function fmtWhen(ts){ try{ return new Date(ts*1000).toLocaleString(); }catch(_){ return "" } }
 
 function renderFiles(list){
@@ -244,12 +315,13 @@ function renderFiles(list){
   list.files.forEach(meta=>{
     const row=document.createElement("div"); row.className="file-row";
     const left=document.createElement("div");
+    const pgHint = meta.pages ? ` • pages ${meta.pages}` : "";
     left.innerHTML = `<div><strong>${escapeHTML(meta.filename||"")}</strong></div><div class="k">${escapeHTML(meta.file_id||"")} • ${meta.chunks||0} chunks • ${fmtWhen(meta.ts||0)}</div>`;
     const del=document.createElement("button"); del.className="pill danger"; del.textContent="Delete";
     del.onclick = async ()=>{
-      const u=$("#username").value||"guest";
+      const u=getUser(), p=getProj();
       del.disabled=true; del.textContent="Deleting…";
-      const r = await fetch("/api/rag/delete_file",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u, file_id: meta.file_id})});
+      const r = await fetch("/api/rag/delete_file",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u, project:p, file_id: meta.file_id})});
       const j = await r.json();
       await refreshFiles();
       $("#ragResult").textContent = j.ok ? `Removed ${j.removed||0} chunks.` : (j.error||"delete failed");
@@ -266,13 +338,14 @@ function renderList(list){
   head.className="k"; head.textContent = `Total chunks: ${list.total} (showing last ${list.sample.length})`;
   div.appendChild(head);
   const table = document.createElement("table");
-  table.innerHTML = `<thead><tr><th>#</th><th>File</th><th>Chunk</th><th>Text</th></tr></thead><tbody></tbody>`;
+  table.innerHTML = `<thead><tr><th>#</th><th>File</th><th>Page</th><th>Chunk</th><th>Text</th></tr></thead><tbody></tbody>`;
   const tb = table.querySelector("tbody");
   list.sample.forEach((r,i)=>{
-    const tr=document.createElement("tr");
     const fn=(r.metadata && (r.metadata.filename||""))||"";
+    const pg=(r.metadata && (r.metadata.page??""))||"";
     const ck=(r.metadata && (r.metadata.chunk??""))||"";
-    tr.innerHTML = `<td>${i+1}</td><td>${escapeHTML(fn)}</td><td>${ck}</td><td>${escapeHTML((r.text||"").slice(0,240).replace(/\n/g," "))}</td>`;
+    const tr=document.createElement("tr");
+    tr.innerHTML = `<td>${i+1}</td><td>${escapeHTML(fn)}</td><td>${pg||""}</td><td>${ck}</td><td>${escapeHTML((r.text||"").slice(0,240).replace(/\n/g," "))}</td>`;
     tb.appendChild(tr);
   });
   div.appendChild(table);
@@ -282,94 +355,32 @@ function renderMatches(res){
   const div=$("#ragResult"); div.innerHTML="";
   if(!res || !res.matches || !res.matches.length){ div.textContent="(no matches)"; return; }
   const head = document.createElement("div");
-  head.className="k"; head.textContent = `Top ${res.matches.length} of ${res.total||"?"}`;
+  head.className="k"; head.textContent = `Top ${res.matches.length} ${res.backend?`via ${res.backend}`:""}`;
   div.appendChild(head);
   const table = document.createElement("table");
-  table.innerHTML = `<thead><tr><th>Score</th><th>File</th><th>Chunk</th><th>Snippet</th></tr></thead><tbody></tbody>`;
+  table.innerHTML = `<thead><tr><th>Score</th><th>File</th><th>Page</th><th>Chunk</th><th>Snippet</th></tr></thead><tbody></tbody>`;
   const tb = table.querySelector("tbody");
   res.matches.forEach(m=>{
     const fn=(m.metadata && (m.metadata.filename||""))||"";
     const ck=(m.metadata && (m.metadata.chunk??""))||"";
+    const pg=(m.metadata && (m.metadata.page??""))||"";
     const snip=(m.text||"").slice(0,240).replace(/\n/g," ");
     const tr=document.createElement("tr");
-    tr.innerHTML = `<td>${m.score}</td><td>${escapeHTML(fn)}</td><td>${ck}</td><td>${escapeHTML(snip)}</td>`;
+    tr.innerHTML = `<td>${m.score ?? ""}</td><td>${escapeHTML(fn)}</td><td>${pg||""}</td><td>${ck}</td><td>${escapeHTML(snip)}</td>`;
     tb.appendChild(tr);
   });
   div.appendChild(table);
 }
 
 async function refreshFiles(){
-  const u=$("#username").value||"guest";
-  const r = await fetch(`/api/rag/files?username=${encodeURIComponent(u)}`);
+  const u=getUser(), p=getProj();
+  const r = await fetch(`/api/rag/files?username=${encodeURIComponent(u)}&project=${encodeURIComponent(p)}`);
   renderFiles(await r.json());
 }
 
-$("#btnList").onclick = async ()=>{
-  const u=$("#username").value||"guest";
-  const r = await fetch(`/api/rag/list?username=${encodeURIComponent(u)}&limit=50`);
-  renderList(await r.json());
-};
-
-$("#btnExport").onclick = ()=>{
-  const u=$("#username").value||"guest";
-  window.location = `/api/rag/export_csv?username=${encodeURIComponent(u)}`;
-};
-
-$("#btnClearRag").onclick = async ()=>{
-  const u=$("#username").value||"guest";
-  const r = await fetch("/api/rag/clear",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u})});
-  const j = await r.json();
-  $("#ragResult").textContent = j.cleared ? "Vectors cleared." : "Nothing to clear.";
-  await refreshFiles();
-};
-
-$("#btnUpload").onclick = async ()=>{ await doUpload($("#fileInput").files); };
-
-async function doUpload(fileList){
-  const u=$("#username").value||"guest";
-  const files = fileList;
-  if(!files || !files.length){ alert("Pick at least one file"); return; }
-  const fd = new FormData();
-  fd.append("username", u);
-  for(const f of files) fd.append("files", f, f.name);
-  $("#uploadStatus").textContent = "Uploading…";
-  const r = await fetch("/api/rag/upload",{method:"POST", body: fd});
-  const j = await r.json();
-  $("#uploadStatus").textContent = j.ok ? `Indexed ${j.added} chunks across ${j.files?.length||0} files.` : (j.error || "upload failed");
-  await refreshFiles();
-}
-
-// drag & drop
-const drop = $("#drop");
-drop.addEventListener("dragover", (e)=>{ e.preventDefault(); drop.classList.add("active"); });
-drop.addEventListener("dragleave", ()=> drop.classList.remove("active"));
-drop.addEventListener("drop", async (e)=>{
-  e.preventDefault(); drop.classList.remove("active");
-  if(!e.dataTransfer || !e.dataTransfer.files?.length) return;
-  await doUpload(e.dataTransfer.files);
-});
-
-$("#btnIndexText").onclick = async ()=>{
-  const u=$("#username").value||"guest";
-  const fn= $("#pasteFilename").value.trim() || "";
-  const tx= $("#pasteText").value.trim();
-  if(!tx){ alert("Paste some text first"); return; }
-  const r = await fetch("/api/rag/index_text",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u, filename: fn||undefined, text: tx})});
-  const j = await r.json();
-  $("#ragResult").textContent = j.ok ? `Indexed ${j.added} chunks from ${j.filename}` : (j.error || "index failed");
-  await refreshFiles();
-};
-
-$("#btnRagSearch").onclick = async ()=>{
-  const u=$("#username").value||"guest";
-  const q=$("#ragQuery").value.trim(); const k= $("#ragK").value || 4;
-  if(!q){ alert("Type a query"); return; }
-  const r = await fetch(`/api/rag/search?username=${encodeURIComponent(u)}&query=${encodeURIComponent(q)}&k=${encodeURIComponent(k)}`);
-  renderMatches(await r.json());
-};
-
 // boot
 (async function init(){
+  updateProjectPill();
   await Promise.all([loadModels(), loadPresets(), loadRate()]);
   await refreshFiles();
 })();
