@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Friday AI • Streaming Chat</title>
+<style>
+  :root { --bg:#0f172a; --panel:#0b1226; --muted:#94a3b8; --text:#e2e8f0; --accent:#60a5fa; --accent2:#a78bfa; }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1200px 1200px at 10% -20%, #1d2b54 0, transparent 55%),var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,Segoe UI,Inter,Roboto,Arial,sans-serif}
+  header{position:sticky;top:0;display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 16px;background:linear-gradient(180deg, rgba(15,23,42,.9), rgba(15,23,42,.55) 70%, transparent);backdrop-filter:blur(6px);border-bottom:1px solid rgba(255,255,255,.06)}
+  .brand{display:flex;gap:10px;align-items:center;font-weight:700}
+  .badge{font-size:12px;color:#94a3b8;border:1px solid rgba(148,163,184,.35);padding:2px 8px;border-radius:999px}
+  main{max-width:900px;margin:16px auto 120px;padding:0 16px}
+  #chat{border:1px solid rgba(255,255,255,.07);border-radius:16px;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,.25)}
+  .toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:10px;background:rgba(255,255,255,.02);border-bottom:1px solid rgba(255,255,255,.06)}
+  .toolbar input,.toolbar select,.toolbar button{background:#0b1226;color:var(--text);border:1px solid rgba(255,255,255,.1);padding:8px 10px;border-radius:10px;outline:none}
+  .toolbar button.btn{background:linear-gradient(135deg,var(--accent),var(--accent2));border:none;font-weight:600}
+  .muted{color:var(--muted);font-size:12px}
+  #log{max-height:60vh;overflow:auto;padding:12px}
+  .msg{margin:0 0 12px;padding:10px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.07);white-space:pre-wrap}
+  .u{background:rgba(96,165,250,.08);border-color:rgba(96,165,250,.25)}
+  .a{background:rgba(167,139,250,.08);border-color:rgba(167,139,250,.25)}
+  .meta{font-size:12px;color:var(--muted);margin-bottom:6px}
+  .composer{display:flex;gap:10px;padding:10px;background:rgba(255,255,255,.02);border-top:1px solid rgba(255,255,255,.06)}
+  #input{flex:1;background:#0b1226;border:1px solid rgba(255,255,255,.1);border-radius:12px;color:var(--text);padding:12px 14px;min-height:46px;max-height:160px;resize:vertical}
+  .send{min-width:98px;border-radius:12px;border:none;background:linear-gradient(135deg,var(--accent),var(--accent2));color:white;font-weight:700}
+  .links a{color:var(--muted);text-decoration:none;margin-left:10px;font-size:13px}
+  .links a:hover{color:var(--text)}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <svg width="26" height="26" viewBox="0 0 48 48" fill="none"><defs><linearGradient id="g" x1="0" y1="48" x2="48" y2="0"><stop stop-color="#60a5fa"/><stop offset="1" stop-color="#a78bfa"/></linearGradient></defs><rect rx="12" width="48" height="48" fill="url(#g)"/></svg>
+    <div>Friday AI</div><div class="badge">streaming</div>
+  </div>
+  <div class="links">
+    <a href="/routes" target="_blank">routes</a>
+    <a href="/debug/health" target="_blank">health</a>
+    <a href="/api/history" target="_blank">history</a>
+  </div>
+</header>
+
+<main>
+  <section id="chat">
+    <div class="toolbar">
+      <span class="muted">User</span>
+      <input id="username" placeholder="username" style="width:180px">
+      <button id="saveUser" class="btn">Set</button>
+      <span class="muted" style="margin-left:8px">Model</span>
+      <select id="model" style="width:180px"></select>
+      <button id="useModel" class="btn">Use</button>
+      <span id="modelHint" class="muted"></span>
+    </div>
+
+    <div id="log"></div>
+
+    <div class="composer">
+      <textarea id="input" placeholder="Type a message…"></textarea>
+      <button id="send" class="send">Send</button>
+    </div>
+  </section>
+  <p class="muted" style="margin-top:8px">Tip: username & model are saved in this browser (localStorage).</p>
+</main>
+
+<script>
+const $ = sel => document.querySelector(sel);
+const log = $("#log"), input = $("#input"), sendBtn = $("#send");
+const userEl = $("#username"), saveUserBtn = $("#saveUser");
+const modelSel = $("#model"), useModelBtn = $("#useModel"), modelHint = $("#modelHint");
+
+const state = {
+  username: localStorage.getItem("friday.username") || "guest",
+  model: localStorage.getItem("friday.model") || null
+};
+userEl.value = state.username;
+
+function add(role, text){
+  const wrap = document.createElement("div");
+  wrap.className = "msg " + (role === "user" ? "u" : "a");
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  meta.textContent = `${role === "user" ? (state.username || "guest") : "Friday"} • ${new Date().toLocaleTimeString()}`;
+  const body = document.createElement("div");
+  body.textContent = text;
+  wrap.appendChild(meta); wrap.appendChild(body);
+  log.appendChild(wrap); log.scrollTop = log.scrollHeight;
+  return body; // so we can live-append for streaming
+}
+
+async function jsonFetch(url, opts={}){
+  const res = await fetch(url, { headers:{ "Content-Type":"application/json", ...(opts.headers||{}) }, ...opts });
+  if(!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json();
+}
+
+async function loadModels(){
+  try{
+    const data = await jsonFetch("/api/models");
+    modelSel.innerHTML = "";
+    (data.available||[]).forEach(m=>{
+      const opt = document.createElement("option");
+      opt.value=m; opt.textContent=m;
+      if((state.model && state.model===m) || (!state.model && data.active===m)) opt.selected = true;
+      modelSel.appendChild(opt);
+    });
+    modelHint.textContent = `active: ${data.active}`;
+    if(!state.model) { state.model = data.active; localStorage.setItem("friday.model", state.model); }
+  }catch{ modelHint.textContent = "models unavailable"; }
+}
+
+async function loadHistory(){
+  try{
+    const items = await jsonFetch(`/api/history?username=${encodeURIComponent(state.username)}`);
+    if(Array.isArray(items)){
+      items.forEach(it=>{ add("user", it.message); add("assistant", it.reply); });
+    }
+  }catch{}
+}
+
+saveUserBtn.addEventListener("click", ()=>{
+  state.username = (userEl.value||"guest").trim() || "guest";
+  localStorage.setItem("friday.username", state.username);
+  add("assistant", `Got it, hi ${state.username}!`);
+});
+
+useModelBtn.addEventListener("click", async ()=>{
+  const m = modelSel.value;
+  try{
+    const res = await jsonFetch("/api/model", { method:"POST", body: JSON.stringify({ model: m })});
+    state.model = res.active || m;
+    localStorage.setItem("friday.model", state.model);
+    modelHint.textContent = `active: ${state.model}`;
+    add("assistant", `Using model: ${state.model}`);
+  }catch(e){ add("assistant", "Couldn’t set model: "+e.message); }
+});
+
+async function sendStreaming(text){
+  // Add user message
+  add("user", text);
+  // Pre-create assistant bubble to stream into
+  const target = add("assistant", "");
+  const params = new URLSearchParams({
+    message: text,
+    username: state.username || "guest",
+    model: state.model || ""
+  });
+  const url = `/api/chat/stream?${params.toString()}`;
+  const es = new EventSource(url);
+
+  let closed = false;
+  es.onmessage = (ev) => {
+    if(!ev.data) return;
+    try{
+      const obj = JSON.parse(ev.data);
+      if(obj.delta){ target.textContent += obj.delta; }
+      if(obj.done){ es.close(); closed = true; }
+      if(obj.error){ target.textContent += `\n[error] ${obj.error}`; }
+      log.scrollTop = log.scrollHeight;
+    }catch{}
+  };
+  es.onerror = () => {
+    // If network hiccup, close to avoid zombie connections
+    if(!closed) es.close();
+  };
+}
+
+sendBtn.addEventListener("click", ()=>{
+  const text = (input.value||"").trim();
+  if(!text) return;
+  input.value = "";
+  sendStreaming(text);
+});
+input.addEventListener("keydown", (e)=>{
+  if(e.key==="Enter" && !e.shiftKey){
+    e.preventDefault(); sendBtn.click();
+  }
+});
+
+loadModels();
+loadHistory();
+</script>
+</body>
+</html>
