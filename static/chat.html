@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Friday AI • Vector + Refresh</title>
+<title>Friday AI • Chat</title>
 <style>
   :root { --bg:#0f172a; --panel:#0b1226; --muted:#94a3b8; --text:#e2e8f0; --accent:#60a5fa; --accent2:#a78bfa; --ok:#10b981; --warn:#f59e0b; --err:#ef4444; }
   *{box-sizing:border-box}
@@ -32,7 +32,6 @@
   .pill{padding:2px 8px;border-radius:999px;border:1px solid rgba(255,255,255,.15); font-size:12px}
   .ok{border-color:rgba(16,185,129,.45); color:#d1fae5}
   .warn{border-color:rgba(245,158,11,.45); color:#fde68a}
-  .err{border-color:rgba(239,68,68,.45); color:#fecaca}
   .links a{color:#94a3b8;text-decoration:none;margin-left:10px;font-size:13px}
   .links a:hover{color:#e2e8f0}
   .admin-only{display:none}
@@ -51,6 +50,7 @@
     <a href="/debug/health" target="_blank">health</a>
     <a href="/api/history" target="_blank">history</a>
     <a href="/api/metrics" target="_blank">metrics</a>
+    <a href="/admin" target="_blank" class="admin-only">admin</a>
   </div>
 </header>
 
@@ -140,11 +140,9 @@ function headers(json=true){
   return h;
 }
 
-// Fetch helper with auto-refresh on 401
 async function fetchAuth(url, opts={}){
   let res = await fetch(url, {headers:{...headers(true), ...(opts.headers||{})}, ...opts});
   if(res.status !== 401) return res;
-  // try refresh
   if(!state.refresh) return res;
   try{
     const r = await fetch("/api/auth/refresh", {
@@ -158,7 +156,6 @@ async function fetchAuth(url, opts={}){
     localStorage.setItem("friday.access", state.access);
     localStorage.setItem("friday.role", state.role);
     setAuthUI();
-    // retry original
     res = await fetch(url, {headers:{...headers(true), ...(opts.headers||{})}, ...opts});
     return res;
   }catch{ return res; }
@@ -174,7 +171,7 @@ async function jsonFetch(url, opts={}){
   return res.json();
 }
 
-// UI init
+// Init
 $("#username").value = state.username;
 
 async function checkHealth(){
@@ -187,7 +184,6 @@ async function checkHealth(){
     const m = $("#mode"); m.textContent = "unknown"; m.className = "badge";
   }
 }
-
 async function loadModels(){
   try{
     const j = await jsonFetch("/api/models");
@@ -201,7 +197,6 @@ async function loadModels(){
     Array.from(sel.options).forEach(o=>{ if(o.value===state.model) o.selected=true; });
   }catch{}
 }
-
 async function loadHistory(){
   try{
     const j = await jsonFetch(`/api/history?username=${encodeURIComponent(state.username)}`);
@@ -215,7 +210,6 @@ $("#saveUser").onclick = () => {
   localStorage.setItem("friday.username", state.username);
   add("assistant", `Yo ${state.username}, locked in.`);
 };
-
 $("#useModel").onclick = async () => {
   const m = $("#model").value;
   try{
@@ -225,7 +219,6 @@ $("#useModel").onclick = async () => {
     add("assistant", `Using model: ${state.model}`);
   }catch(e){ add("assistant", "Set model failed: " + e.message); }
 };
-
 $("#loginBtn").onclick = async () => {
   const body = {username: ($("#username").value||"guest").trim(), password: $("#password").value, admin_code: $("#adminCode").value};
   try{
@@ -238,13 +231,11 @@ $("#loginBtn").onclick = async () => {
     add("assistant", `Logged in as ${j.user.username} (${state.role}).`);
   }catch(e){ add("assistant", "Login failed: " + e.message); }
 };
-
 $("#logoutBtn").onclick = () => {
   state.access = null; state.refresh = null; state.role = "anon";
   localStorage.removeItem("friday.access"); localStorage.removeItem("friday.refresh"); localStorage.setItem("friday.role","anon");
   setAuthUI(); add("assistant", "Logged out.");
 };
-
 $("#uploadBtn").onclick = async () => {
   const files = $("#fileInput").files;
   if(!files || !files.length){ add("assistant","Pick files first."); return; }
@@ -254,10 +245,9 @@ $("#uploadBtn").onclick = async () => {
     const res = await fetch("/api/upload", {method:"POST", body: fd, headers: state.access ? {"Authorization":"Bearer "+state.access} : {}});
     if(!res.ok){ const t = await res.text(); throw new Error(t); }
     const j = await res.json();
-    add("assistant", `Indexed ${j.indexed_docs} docs (${j.chunks} chunks) via ${j.backend}.`);
+    add("assistant", `Indexed ${j.indexed_docs} docs (${j.chunks} chunks) via ${j.backend}. OCR blocks: ${j.ocr_blocks||0}. Limit: ${j.limit_mb} MB (${j.role}).`);
   }catch(e){ add("assistant", "Upload failed: " + e.message); }
 };
-
 $("#jsonBtn").onclick = async () => {
   const p = ($("#jsonPrompt").value||"").trim(); if(!p){ add("assistant","Type a JSON-mode prompt."); return; }
   try{
@@ -268,7 +258,6 @@ $("#jsonBtn").onclick = async () => {
     wrap.appendChild(tr);
   }catch(e){ add("assistant","Structured failed: "+e.message); }
 };
-
 $("#mintBtn").onclick = async () => {
   if(state.role !== "admin"){ add("assistant","Admin only."); return; }
   try{
@@ -279,17 +268,13 @@ $("#mintBtn").onclick = async () => {
     wrap.appendChild(tr);
   }catch(e){ add("assistant","Mint failed: "+e.message); }
 };
-
 $("#send").onclick = async () => {
   const text = ($("#input").value||"").trim(); if(!text) return;
   $("#input").value = "";
   add("user", text);
   const {wrap} = add("assistant", "…");
   try{
-    const j = await jsonFetch("/api/chat", {
-      method:"POST",
-      body: JSON.stringify({message: text, username: state.username || "guest", model: state.model || ""})
-    });
+    const j = await jsonFetch("/api/chat", {method:"POST", body: JSON.stringify({message: text, username: state.username || "guest", model: state.model || ""})});
     wrap.lastChild.textContent = j.reply || "(no reply)";
     if (j.traces && j.traces.length){
       const tr = document.createElement("div"); tr.className="trace";
@@ -300,11 +285,8 @@ $("#send").onclick = async () => {
 };
 
 // init
-(async function init(){
-  setAuthUI();
-  await checkHealth();
-  await loadModels();
-  await loadHistory();
+(function init(){
+  setAuthUI(); checkHealth(); loadModels(); loadHistory();
 })();
 </script>
 </body>
