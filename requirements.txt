@@ -6,6 +6,9 @@ openai==1.102.0
 redis==5.0.8
 requests==2.32.3
 sentry-sdk==2.13.0
+PyJWT==2.9.0
+PyPDF2==3.0.1
+
 
 
 
