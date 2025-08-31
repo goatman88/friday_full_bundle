@@ -9,12 +9,17 @@ redis==5.0.8
 psycopg[binary]==3.2.1
 pgvector==0.2.5
 
+qdrant-client==1.9.2
+
 requests==2.32.3
 sentry-sdk==2.13.0
 PyJWT==2.9.0
 PyPDF2==3.0.1
 python-docx==1.1.2
 beautifulsoup4==4.12.3
+
+pytesseract==0.3.13
+Pillow==10.4.0
 
 
 
