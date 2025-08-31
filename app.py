@@ -37,7 +37,7 @@ PROMPT_PRESETS = {
 SYSTEM_PROMPT_DEFAULT = os.getenv("PROMPT_SYSTEM", PROMPT_PRESETS["concise"])
 
 EMBED_MODEL = os.getenv("EMBED_MODEL", "text-embedding-3-small")
-EMBED_DIM = int(os.getenv("EMBED_DIM", "1536"))  # small=1536 (default), large=3072
+EMBED_DIM = int(os.getenv("EMBED_DIM", "1536"))
 
 # rate limit
 RL_WINDOW = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60"))
@@ -85,7 +85,7 @@ def _log_req(resp):
         pass
     return resp
 
-# ---- Redis (history + RL + cache + vectors) --------------------------------
+# ---- Redis (history + RL + cache + vectors + files) -------------------------
 r = None
 try:
     REDIS_URL = os.getenv("REDIS_URL","")
@@ -100,13 +100,13 @@ def redis_ok() -> bool:
     try: r.ping(); return True
     except Exception: return False
 
-def k_history(u): return f"hist:{u}"
-def k_rl(scope):  return f"rl:{scope}"
+def k_history(u):   return f"hist:{u}"
+def k_rl(scope):    return f"rl:{scope}"
 def k_user_preset(u): return f"user:{u}:preset"
 def k_user_model(u):  return f"user:{u}:model"
 def k_cache(pfx, k):  return f"cache:{pfx}:{k}"
-def k_rag(u): return f"rag:{u}:docs"             # list of doc rows
-def k_rag_meta(u): return f"rag:{u}:meta"        # counters, etc.
+def k_rag_docs(u):    return f"rag:{u}:docs"   # list of doc rows (chunks)
+def k_rag_files(u):   return f"rag:{u}:files"  # hash: file_id -> meta json
 
 def client_scope() -> str:
     uname = request.args.get("username") or ((request.json or {}).get("username") if request.is_json else None)
@@ -163,7 +163,7 @@ def clear_history(username: str) -> int:
     if not r: return 0
     return r.delete(k_history(username)) or 0
 
-# ---- Token-aware chunking (for ingestion) -----------------------------------
+# ---- Token-aware chunking ---------------------------------------------------
 def _tok_chunk(text: str, target=900, overlap=200) -> List[str]:
     text = (text or "").strip()
     if not text: return []
@@ -213,7 +213,6 @@ def moderate_text(text: str) -> bool:
         return True
 
 def safe_chat(messages, temperature=0.6, tools=None, tool_choice="auto"):
-    """non-stream fallback loop with model fallbacks"""
     if not OPENAI_KEY:
         return {"text":"(dev echo) no OPENAI_API_KEY", "usage":None, "model_used":"dev"}
     from openai import OpenAI
@@ -238,31 +237,32 @@ def _cos(a: List[float], b: List[float]) -> float:
     nb=math.sqrt(sum(x*x for x in b)) or 1.0
     return s/(na*nb)
 
-def rag_key(u): return k_rag(u)
-
-def rag_index(username: str, docs: List[Dict[str,Any]]) -> int:
+def rag_index(username: str, file_id: str, filename: str, chunks: List[str]) -> int:
+    """Index all chunks for a file; write docs list + files hash."""
     if not r: return 0
-    vecs = embed_texts([d.get("text","") for d in docs])
+    vecs = embed_texts(chunks)
     pipe = r.pipeline()
-    cnt = 0
-    for d,v in zip(docs, vecs):
-        row={
-            "id": d.get("id") or secrets.token_urlsafe(6),
-            "text": d.get("text",""),
-            "meta": d.get("metadata",{}),
-            "vec": v
+    added = 0
+    for i, (txt, vec) in enumerate(zip(chunks, vecs)):
+        row = {
+            "id": secrets.token_urlsafe(6),
+            "text": txt,
+            "meta": {"filename": filename, "chunk": i, "file_id": file_id},
+            "vec": vec
         }
-        pipe.rpush(rag_key(username), json.dumps(row))
-        cnt += 1
+        pipe.rpush(k_rag_docs(username), json.dumps(row))
+        added += 1
     pipe.execute()
-    r.ltrim(rag_key(username), -5000, -1)
-    r.hincrby(k_rag_meta(username), "count", cnt)
-    return cnt
+    # trim list, then update file meta
+    r.ltrim(k_rag_docs(username), -5000, -1)
+    meta = {"file_id": file_id, "filename": filename, "chunks": added, "ts": int(time.time())}
+    r.hset(k_rag_files(username), file_id, json.dumps(meta))
+    return added
 
 def rag_search(username: str, query: str, top_k=4) -> Dict[str,Any]:
     if not r: return {"ok": False, "reason":"no_redis"}
     qv = embed_texts([query])[0]
-    items = r.lrange(rag_key(username), 0, -1)
+    items = r.lrange(k_rag_docs(username), 0, -1)
     scored=[]
     for raw in items:
         try:
@@ -274,16 +274,10 @@ def rag_search(username: str, query: str, top_k=4) -> Dict[str,Any]:
     matches=[{"score": round(s,4), "id": x["id"], "text": x["text"], "metadata": x.get("meta",{})} for s,x in scored[:top_k]]
     return {"ok": True, "matches": matches, "backend":"redis", "total": len(items)}
 
-def rag_clear(username: str) -> int:
-    if not r: return 0
-    n = r.delete(rag_key(username))
-    r.delete(k_rag_meta(username))
-    return n or 0
-
 def rag_list(username: str, limit=50) -> Dict[str,Any]:
     if not r: return {"ok": False, "reason":"no_redis"}
-    total = r.llen(rag_key(username))
-    sample = r.lrange(rag_key(username), max(-limit, -total), -1)
+    total = r.llen(k_rag_docs(username))
+    sample = r.lrange(k_rag_docs(username), max(-limit, -total), -1)
     rows=[]
     for raw in sample:
         try:
@@ -292,7 +286,45 @@ def rag_list(username: str, limit=50) -> Dict[str,Any]:
                          "metadata": row.get("meta",{})})
         except Exception:
             pass
-    return {"ok": True, "total": total, "sample": rows}
+    # files inventory
+    files = {}
+    try:
+        raw_map = r.hgetall(k_rag_files(username)) or {}
+        for fid, meta in raw_map.items():
+            try: files[fid] = json.loads(meta)
+            except Exception: pass
+    except Exception:
+        files = {}
+    return {"ok": True, "total": total, "sample": rows, "files": list(files.values())}
+
+def rag_clear(username: str) -> int:
+    if not r: return 0
+    n = r.delete(k_rag_docs(username))
+    r.delete(k_rag_files(username))
+    return n or 0
+
+def rag_delete_file(username: str, file_id: str) -> Dict[str,Any]:
+    """Remove all chunks with meta.file_id == file_id; rewrite list; drop file meta."""
+    if not r: return {"ok": False, "error":"no_redis"}
+    all_items = r.lrange(k_rag_docs(username), 0, -1)
+    keep=[]
+    removed=0
+    for raw in all_items:
+        try:
+            row=json.loads(raw)
+            if row.get("meta",{}).get("file_id") == file_id:
+                removed += 1
+            else:
+                keep.append(raw)
+        except Exception:
+            keep.append(raw)
+    pipe = r.pipeline()
+    pipe.delete(k_rag_docs(username))
+    if keep:
+        pipe.rpush(k_rag_docs(username), *keep)
+    pipe.hdel(k_rag_files(username), file_id)
+    pipe.execute()
+    return {"ok": True, "removed": removed}
 
 # ---- tiny cache helpers -----------------------------------------------------
 def cache_get(prefix: str, key: str):
@@ -571,10 +603,32 @@ def api_chat_stream_tools():
     return Response(stream_with_context(generate()),
         headers={"Content-Type":"text/event-stream","Cache-Control":"no-cache","Connection":"keep-alive","X-Accel-Buffering":"no"})
 
-# ---- RAG: REST endpoints (upload + paste + search + list + clear + export) --
+# ---- RAG: helpers to extract text from uploads ------------------------------
+def _read_pdf_bytes(b: bytes) -> str:
+    try:
+        from pypdf import PdfReader
+        with io.BytesIO(b) as bio:
+            reader = PdfReader(bio)
+            parts=[]
+            for page in reader.pages:
+                t = page.extract_text() or ""
+                parts.append(t)
+            return "\n".join(parts)
+    except Exception as e:
+        return ""
+
+def _read_docx_bytes(b: bytes) -> str:
+    try:
+        import docx  # python-docx
+        with open("/tmp/_up.docx","wb") as f: f.write(b)
+        d = docx.Document("/tmp/_up.docx")
+        return "\n".join(p.text for p in d.paragraphs)
+    except Exception:
+        return ""
+
+# ---- RAG: REST endpoints ----------------------------------------------------
 @app.post("/api/rag/index_text")
 def rag_index_text():
-    """JSON: {username, filename?, text} -> chunk, embed, store"""
     if not r: return jsonify({"ok": False, "error":"no_redis"}), 503
     data = request.get_json(force=True) or {}
     username = (data.get("username") or "guest").strip() or "guest"
@@ -582,33 +636,45 @@ def rag_index_text():
     text = (data.get("text") or "").strip()
     if not text: return jsonify({"ok": False, "error":"missing_text"}), 400
     chunks = _tok_chunk(text, target=900, overlap=200)
-    docs=[]
-    for i,chunk in enumerate(chunks):
-        docs.append({"text": chunk, "metadata": {"filename": filename, "chunk": i}})
-    added = rag_index(username, docs)
-    return jsonify({"ok": True, "added": added, "filename": filename})
+    file_id = secrets.token_urlsafe(8)
+    added = rag_index(username, file_id, filename, chunks)
+    return jsonify({"ok": True, "added": added, "filename": filename, "file_id": file_id})
 
 @app.post("/api/rag/upload")
 def rag_upload():
-    """multipart form: username, files[] (.txt/.md/.csv)"""
+    """multipart form: username, files[] (.txt/.md/.csv/.pdf/.docx)"""
     if not r: return jsonify({"ok": False, "error":"no_redis"}), 503
     username = (request.form.get("username") or "guest").strip() or "guest"
     if "files" not in request.files: return jsonify({"ok": False, "error":"missing_files"}), 400
     files = request.files.getlist("files")
-    total_added=0; accepted_ext={".txt",".md",".csv"}
+    total_added=0; accepted_ext={".txt",".md",".csv",".pdf",".docx"}
+    processed=[]
+
     for f in files:
         name = f.filename or f"upload-{secrets.token_urlsafe(4)}.txt"
         ext = "." + name.split(".")[-1].lower() if "." in name else ".txt"
         if ext not in accepted_ext:
-            # skip unsupported to keep deps minimal
             continue
-        raw = f.read().decode("utf-8", errors="ignore")
-        chunks = _tok_chunk(raw, target=900, overlap=200)
-        docs=[]
-        for i,chunk in enumerate(chunks):
-            docs.append({"text": chunk, "metadata": {"filename": name, "chunk": i}})
-        total_added += rag_index(username, docs)
-    return jsonify({"ok": True, "added": total_added})
+        rawb = f.read()
+        text = ""
+        if ext in {".txt",".md",".csv"}:
+            text = rawb.decode("utf-8", errors="ignore")
+        elif ext == ".pdf":
+            text = _read_pdf_bytes(rawb)
+        elif ext == ".docx":
+            text = _read_docx_bytes(rawb)
+
+        text = (text or "").strip()
+        if not text: 
+            processed.append({"filename":name, "added":0, "note":"no text extracted"})
+            continue
+        chunks = _tok_chunk(text, target=900, overlap=200)
+        file_id = secrets.token_urlsafe(8)
+        added = rag_index(username, file_id, name, chunks)
+        total_added += added
+        processed.append({"filename": name, "file_id": file_id, "added": added})
+
+    return jsonify({"ok": True, "added": total_added, "files": processed})
 
 @app.get("/api/rag/search")
 def rag_http_search():
@@ -627,6 +693,28 @@ def rag_http_list():
     lim = int(request.args.get("limit") or 50)
     return jsonify(rag_list(username, lim))
 
+@app.get("/api/rag/files")
+def rag_http_files():
+    if not r: return jsonify({"ok": False, "error":"no_redis"}), 503
+    username = (request.args.get("username") or "guest").strip() or "guest"
+    raw = r.hgetall(k_rag_files(username)) or {}
+    out=[]
+    for fid, meta in raw.items():
+        try: out.append(json.loads(meta))
+        except Exception: pass
+    out.sort(key=lambda m: m.get("ts",0), reverse=True)
+    return jsonify({"ok": True, "files": out})
+
+@app.post("/api/rag/delete_file")
+def rag_http_delete_file():
+    if not r: return jsonify({"ok": False, "error":"no_redis"}), 503
+    body = request.get_json(force=True) or {}
+    username = (body.get("username") or "guest").strip() or "guest"
+    file_id = (body.get("file_id") or "").strip()
+    if not file_id: return jsonify({"ok": False, "error":"missing_file_id"}), 400
+    res = rag_delete_file(username, file_id)
+    return jsonify(res)
+
 @app.post("/api/rag/clear")
 def rag_http_clear():
     if not r: return jsonify({"ok": False, "error":"no_redis"}), 503
@@ -638,15 +726,15 @@ def rag_http_clear():
 def rag_export_csv():
     if not r: return jsonify({"ok": False, "error":"no_redis"}), 503
     username = (request.args.get("username") or "guest").strip() or "guest"
-    items = r.lrange(rag_key(username), 0, -1)
+    items = r.lrange(k_rag_docs(username), 0, -1)
     si = io.StringIO()
     w = csv.writer(si)
-    w.writerow(["id","filename","chunk","text"])
+    w.writerow(["id","file_id","filename","chunk","text"])
     for raw in items:
         try:
             row=json.loads(raw)
             meta=row.get("meta",{})
-            w.writerow([row.get("id",""), meta.get("filename",""), meta.get("chunk",""), row.get("text","").replace("\n"," ")])
+            w.writerow([row.get("id",""), meta.get("file_id",""), meta.get("filename",""), meta.get("chunk",""), row.get("text","").replace("\n"," ")])
         except Exception:
             pass
     out = make_response(si.getvalue())
@@ -675,6 +763,7 @@ def method_not_allowed(_):
 if __name__ == "__main__":
     port = int(os.getenv("PORT","5000"))
     app.run(host="0.0.0.0", port=port, debug=(os.getenv("FLASK_ENV","").lower()!="production"), threaded=True)
+
 
 
 
