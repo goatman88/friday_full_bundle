@@ -17,6 +17,13 @@ pip install -r requirements.txt
 #   PG:      export PG_URL=postgresql://friday:password@localhost:5432/fridaydb
 export OPENAI_API_KEY=sk-...
 python app.py
+## New Admin Goodies
+- **Vectors dashboard:** `/vectors` to browse/search/delete user chunks and view stats
+- **Maintenance:** `/maint` to run PG VACUUM/REINDEX or Qdrant optimize
+- **Tool streaming:** `/api/chat/stream_tools` — SSE emits:
+  - `{"type":"tool_event","tool":...,"args":...,"result":...}`
+  - `{"type":"delta","delta":"…"}` tokens
+  - `{"type":"usage",...}`, then `{"type":"done"}`
 
 
 
