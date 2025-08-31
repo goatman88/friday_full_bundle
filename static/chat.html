@@ -8,9 +8,9 @@
   :root { --bg:#0f172a; --panel:#0b1226; --text:#e2e8f0; --muted:#94a3b8; --border:rgba(255,255,255,.08); }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,Segoe UI,Inter,Roboto,Arial}
-  header{position:sticky;top:0;z-index:10;background:rgba(15,23,42,.8);backdrop-filter:saturate(1.2) blur(6px);
+  header{position:sticky;top:0;z-index:10;background:rgba(15,23,42,.75);backdrop-filter:saturate(1.2) blur(6px);
          border-bottom:1px solid var(--border);display:flex;gap:12px;align-items:center;padding:10px 14px}
-  header .title{font-weight:700}
+  header .title{font-weight:800}
   main{max-width:1200px;margin:16px auto;padding:0 16px;display:grid;grid-template-columns:2fr 1fr;gap:16px}
   @media (max-width:980px){ main{grid-template-columns:1fr} }
   .card{background:var(--panel);border:1px solid var(--border);border-radius:14px;overflow:hidden}
@@ -31,16 +31,17 @@
   .log{padding:10px 12px;height:200px;overflow:auto;font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;font-size:12px;background:#071023;border-top:1px solid var(--border)}
   a{color:#93c5fd;text-decoration:none}
   .pill{font-size:12px;background:rgba(255,255,255,.07);padding:2px 6px;border-radius:999px;border:1px solid var(--border)}
+  .sources{font-size:13px;color:#c7d2fe;margin-top:6px}
 </style>
 </head>
 <body>
 <header>
   <div class="title">Friday</div>
   <div class="pill" id="modelPill">model: …</div>
+  <div class="pill" id="presetPill">preset: …</div>
   <div class="pill" id="rlPill">rate: …</div>
   <div style="margin-left:auto;display:flex;gap:10px">
-    <a href="/admin" target="_blank">Admin</a>
-    <a href="/vectors" target="_blank">Vectors</a>
+    <a href="/routes" target="_blank">Routes</a>
   </div>
 </header>
 
@@ -50,13 +51,14 @@
       <div class="row">
         <input id="username" placeholder="username" value="guest" style="width:200px">
         <select id="model" style="width:200px"></select>
+        <select id="preset" style="width:180px"></select>
         <label class="row" style="gap:6px"><input type="checkbox" id="useStream" checked> Stream (tools)</label>
-        <button id="btnClear" class="pill" title="clear history">Clear History</button>
+        <button id="btnClear" class="pill" title="clear history">Clear</button>
       </div>
       <textarea id="input" placeholder="Type your question…"></textarea>
       <div class="row">
         <button id="send" class="primary">Send</button>
-        <small id="hint">Tip: try “weather in Paris” or “search NVIDIA earnings summary”.</small>
+        <small id="hint">Try “weather in Chicago” or “search NVIDIA earnings summary”.</small>
       </div>
     </div>
     <div class="messages" id="messages"></div>
@@ -75,88 +77,128 @@
 </main>
 
 <script>
-const $ = sel => document.querySelector(sel);
-const $$ = sel => document.querySelectorAll(sel);
+const $ = s => document.querySelector(s);
 const log = (...a) => { const l=$("#log"); l.textContent += a.map(x=>typeof x==="string"?x:JSON.stringify(x)).join(" ")+"\n"; l.scrollTop=l.scrollHeight; };
-const asText = (x)=> (typeof x==="string"? x: JSON.stringify(x,null,2));
+const escapeHTML = s => (s||"").replace(/[&<>"']/g, m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"}[m]));
 
-function addMsg(role, text){
+function addMsg(role, text, citations){
   const wrap = document.createElement("div");
   wrap.className = "msg "+(role==="user"?"user":"bot");
-  wrap.innerHTML = `<small>${role}</small><pre>${asText(text)}</pre>`;
+  let html = `<small>${role}</small><pre>${escapeHTML(text)}</pre>`;
+  if (role!=="user" && citations && citations.length){
+    const items = citations.map((c,i)=>{
+      const fn = (c.meta && (c.meta.filename || c.meta.file || "")) || c.id || `src-${i+1}`;
+      return `<div>${i+1}. ${escapeHTML(fn)}</div>`;
+    }).join("");
+    html += `<div class="sources"><strong>Sources</strong>${items}</div>`;
+  }
+  wrap.innerHTML = html;
   $("#messages").appendChild(wrap);
   $("#messages").scrollTop = $("#messages").scrollHeight;
 }
 
 async function loadModels(){
-  const r = await fetch("/api/models"); const j = await r.json();
+  const u=$("#username").value||"guest";
+  const r = await fetch(`/api/models?username=${encodeURIComponent(u)}`); const j = await r.json();
   $("#modelPill").textContent = "model: "+(j.active||"gpt-4o-mini");
   const sel = $("#model"); sel.innerHTML = "";
   (j.available||["gpt-4o-mini"]).forEach(m=>{
-    const o = document.createElement("option"); o.value=m; o.textContent=m; if(m===j.active) o.selected=true; sel.appendChild(o);
+    const o=document.createElement("option"); o.value=m; o.textContent=m; if(m===j.active) o.selected=true; sel.appendChild(o);
   });
+}
+async function saveModel(){
+  const u=$("#username").value||"guest", m=$("#model").value;
+  await fetch("/api/model",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u, model:m})});
+  $("#modelPill").textContent = "model: "+m;
+}
+
+async function loadPresets(){
+  const u=$("#username").value||"guest";
+  const r = await fetch(`/api/presets?username=${encodeURIComponent(u)}`); const j = await r.json();
+  $("#presetPill").textContent = "preset: "+j.active;
+  const sel=$("#preset"); sel.innerHTML="";
+  (j.presets||["concise"]).forEach(p=>{
+    const o=document.createElement("option"); o.value=p; o.textContent=p; if(p===j.active) o.selected=true; sel.appendChild(o);
+  });
+}
+async function savePreset(){
+  const u=$("#username").value||"guest", p=$("#preset").value;
+  await fetch("/api/presets",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u, preset:p})});
+  $("#presetPill").textContent = "preset: "+p;
 }
 
 async function loadRate(){
   const r = await fetch("/api/metrics"); const j = await r.json();
   const rl = j.rate_limit||{}; $("#rlPill").textContent = `rate: ${rl.remaining ?? "?"} left`;
 }
-
 async function loadHistory(){
-  const u = $("#username").value||"guest";
+  const u=$("#username").value||"guest";
   const r = await fetch(`/api/history?username=${encodeURIComponent(u)}&limit=200`);
-  const j = await r.json();
-  const h = $("#history"); h.innerHTML = "";
+  const j = await r.json(); const h=$("#history"); h.innerHTML="";
   j.forEach(it=>{
     const d=document.createElement("div");
     const when = new Date((it.ts||0)*1000).toLocaleString();
-    d.className="msg"; d.innerHTML = `<small>${when}</small><div><strong>Q:</strong> ${asText(it.message)}</div><div><strong>A:</strong> ${asText(it.reply)}</div>`;
+    const mem = it.memory ? " (memory)" : "";
+    d.className="msg"; d.innerHTML = `<small>${when}${mem}</small><div><strong>Q:</strong> ${escapeHTML(it.message||"")}</div><div><strong>A:</strong> ${escapeHTML(it.reply||"")}</div>`;
     h.appendChild(d);
   });
 }
 
+$("#model").addEventListener("change", saveModel);
+$("#preset").addEventListener("change", savePreset);
 $("#refresh").onclick = loadHistory;
 $("#btnClear").onclick = async ()=>{
   const u=$("#username").value||"guest";
-  const r = await fetch("/api/history/clear",{method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u})});
-  const j = await r.json(); addMsg("bot", `cleared: ${j.cleared}`); loadHistory();
+  const r = await fetch("/api/history/clear",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u})});
+  const j = await r.json(); addMsg("bot", `cleared: ${j.cleared}`);
+  loadHistory();
 };
 
 async function send(){
   const q = $("#input").value.trim(); if(!q) return;
   const u = $("#username").value||"guest";
   const model = $("#model").value;
+  const preset = $("#preset").value;
+
   addMsg("user", q);
   $("#input").value="";
   $("#log").textContent = "";
 
   if($("#useStream").checked){
-    const es = new EventSource(`/api/chat/stream_tools?message=${encodeURIComponent(q)}&username=${encodeURIComponent(u)}&model=${encodeURIComponent(model)}`);
-    let curBot = document.createElement("div");
-    curBot.className="msg bot"; curBot.innerHTML="<small>assistant</small><pre></pre>";
-    $("#messages").appendChild(curBot);
-    const pre = curBot.querySelector("pre");
+    const url = `/api/chat/stream_tools?message=${encodeURIComponent(q)}&username=${encodeURIComponent(u)}&model=${encodeURIComponent(model)}&preset=${encodeURIComponent(preset)}`;
+    const es = new EventSource(url);
+    let bot = document.createElement("div");
+    bot.className="msg bot"; bot.innerHTML="<small>assistant</small><pre></pre>";
+    $("#messages").appendChild(bot);
+    const pre = bot.querySelector("pre");
+    let finalCites = [];
 
     es.onmessage = (e)=>{
       if(!e.data) return;
-      let m = {};
-      try{ m = JSON.parse(e.data); }catch(_){}
-      if(m.type==="tool_event"){
-        log(`→ tool: ${m.tool}`, m.args || {}, m.result || {});
-      }else if(m.type==="delta"){
-        pre.textContent += m.delta || "";
-      }else if(m.type==="usage"){
-        log("usage", m.usage || {});
-      }else if(m.type==="done"){
+      let m={}; try{ m=JSON.parse(e.data);}catch(_){}
+      if(m.type==="tool_event"){ log(`→ tool: ${m.tool}`, m.args || {}, m.result || {}); }
+      else if(m.type==="delta"){ pre.textContent += (m.delta || ""); }
+      else if(m.type==="citations"){ finalCites = m.citations || []; }
+      else if(m.type==="usage"){ log("usage", m.usage || {}); }
+      else if(m.type==="done"){
         es.close(); loadHistory(); loadRate();
+        if(finalCites.length){
+          const src = document.createElement("div");
+          src.className="sources";
+          src.innerHTML = "<strong>Sources</strong>" + finalCites.map((c,i)=>{
+            const fn = (c.meta && (c.meta.filename||c.meta.file||"")) || c.id || `src-${i+1}`;
+            return `<div>${i+1}. ${escapeHTML(fn)}</div>`;
+          }).join("");
+          bot.appendChild(src);
+        }
       }
     };
     es.onerror = ()=>{ es.close(); log("stream error"); };
   } else {
-    const r = await fetch("/api/chat",{method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({message:q, username:u, model})});
+    const r = await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({message:q, username:u, model, preset})});
     const j = await r.json();
-    addMsg("bot", j.reply || j.error || "(no reply)");
-    if(j.traces){ j.traces.forEach(t => log(`→ tool: ${t.tool}`, t.args||{}, t.result||{})); }
+    addMsg("bot", j.reply || j.error || "(no reply)", j.citations || []);
+    if(j.traces){ j.traces.forEach(t=> log(`→ tool: ${t.tool}`, t.args||{}, t.result||{})); }
     loadHistory(); loadRate();
   }
 }
@@ -164,7 +206,7 @@ async function send(){
 $("#send").onclick = send;
 $("#input").addEventListener("keydown", (e)=>{ if(e.key==="Enter" && (e.ctrlKey||e.metaKey)){ send(); } });
 
-loadModels(); loadRate(); loadHistory();
+loadModels(); loadPresets(); loadRate(); loadHistory();
 </script>
 </body>
 </html>
