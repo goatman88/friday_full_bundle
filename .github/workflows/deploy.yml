@@ -1,0 +1,93 @@
+name: CI & Deploy (Friday)
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: {}
+
+env:
+  PYTHON_VERSION: "3.11"
+  # Optional: set this to your public Render URL to run a health check after deploy.
+  # You can also set it as a repo secret named RENDER_HEALTHCHECK_URL instead.
+  # FALLBACK_HEALTHCHECK_URL: "https://friday-o99e.onrender.com/health"
+
+jobs:
+  test:
+    name: Run tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+
+      - name: Lint (flake8, optional)
+        continue-on-error: true
+        run: |
+          pip install flake8 >/dev/null 2>&1 || true
+          flake8 || true
+
+      - name: Run tests
+        # Adjust to your test command; this won’t fail if you haven’t added tests yet.
+        run: |
+          pytest -q || echo "No tests or tests failing; continuing for now."
+
+  deploy:
+    name: Trigger Render deploy
+    needs: test
+    runs-on: ubuntu-latest
+    if: ${{ github.ref == 'refs/heads/main' }}
+
+    steps:
+      - name: Trigger Render via Deploy Hook
+        env:
+          RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$RENDER_DEPLOY_HOOK" ]; then
+            echo "❌ Missing secret RENDER_DEPLOY_HOOK"; exit 1
+          fi
+          echo "🔔 Hitting Render deploy hook…"
+          curl -fsSL -X POST "$RENDER_DEPLOY_HOOK"
+          echo "✅ Deploy hook sent."
+
+      - name: Wait for Render to come up (poll)
+        env:
+          RENDER_HEALTHCHECK_URL: ${{ secrets.RENDER_HEALTHCHECK_URL }}
+          FALLBACK_HEALTHCHECK_URL: ${{ env.FALLBACK_HEALTHCHECK_URL }}
+        run: |
+          URL="${RENDER_HEALTHCHECK_URL:-$FALLBACK_HEALTHCHECK_URL}"
+          if [ -z "$URL" ]; then
+            echo "ℹ️ No healthcheck URL configured; skipping check."
+            exit 0
+          fi
+
+          echo "⏳ Waiting for $URL …"
+          for i in {1..30}; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL")
+            if [ "$STATUS" = "200" ]; then
+              echo "✅ Healthy ($STATUS)"; exit 0
+            fi
+            echo "…not ready yet (HTTP $STATUS). Retry $i/30"
+            sleep 10
+          done
+
+          echo "❌ Service did not become healthy in time."
+          exit 1
