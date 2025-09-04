@@ -5,16 +5,18 @@ openai==1.61.1
 python-dotenv==1.0.1
 waitress==3.0.0
 
-# optional but safe
-pydantic==2.11.1
-pydantic-core==2.33.2
+# libs that are safe on Render
 tiktoken==0.7.0
 apscheduler==3.10.4
 requests==2.32.3
 beautifulsoup4==4.12.3
 
-# ⚠️ Do NOT include chromadb here
-# chromadb==0.5.29   <-- keep this ONLY in requirements-dev.txt locally
+# Pin ONLY pydantic; let it choose a compatible pydantic-core
+pydantic==2.11.1
+
+# ⚠️ Do NOT include chromadb on Render (it breaks builds)
+# chromadb==0.5.29
+
 
 
 
