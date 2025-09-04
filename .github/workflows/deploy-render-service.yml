@@ -2,7 +2,8 @@ name: CI & Deploy (Friday)
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   test-and-deploy:
@@ -17,40 +18,37 @@ jobs:
         with:
           python-version: "3.11"
 
-      # Optional: cache wheels between runs
       - name: Cache pip
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: pip-${{ runner.os }}-${{ hashFiles('backend/requirements.txt') }}
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
           restore-keys: |
-            pip-${{ runner.os }}-
+            ${{ runner.os }}-pip-
 
       - name: Install backend dependencies
-        working-directory: backend
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Quick import smoke
-        working-directory: backend
-        run: python -c "import app; print('app imported OK')"
+        run: python -c "import app; print('OK')"
 
-      # (Optional) Add pytest later; for now skip
-      - name: Run tests (optional)
-        run: echo "No tests yet"
+      # (Optional) run tests if you add them
+      # - name: Run tests
+      #   run: pytest -q
 
-      # Trigger Render deploy via deploy hook (add this secret in GitHub: Settings -> Secrets -> Actions)
       - name: Trigger Render deploy
-        if: success()
+        if: ${{ success() }}
+        env:
+          RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
         run: |
-          curl -fsS -X POST "$RENDER_DEPLOY_HOOK"
+          curl -fsSL -X POST \
+            -H "Accept: application/json" \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            https://api.render.com/v1/services/${RENDER_SERVICE_ID}/deploys
 
-      # Optional: basic wait + health check if you want later
-      - name: (Optional) Wait for health check
-        if: success()
-        run: |
-          echo "You can add a curl to https://your-app.onrender.com/health here."
 
 
 
