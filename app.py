@@ -244,6 +244,176 @@ def guess_mime(suffix: str) -> str:
     if s in [".json"]: return "application/json"
     return "application/octet-stream"
 
+# --- Upload / Ingest ---------------------------------------------------------
+import os, json, io
+from datetime import datetime
+from flask import request, jsonify
+from werkzeug.utils import secure_filename
+
+# Optional helpers for simple text extraction
+try:
+    import pypdf  # for PDFs
+except Exception:
+    pypdf = None
+try:
+    import pandas as pd  # for CSV
+except Exception:
+    pd = None
+
+# 1) Config & folders
+UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "data", "uploads")
+INGEST_INDEX = os.path.join(os.path.dirname(__file__), "data", "ingested.json")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(os.path.dirname(INGEST_INDEX), exist_ok=True)
+
+# Accept up to 200 MB per request (tweak if needed)
+app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024
+
+ALLOWED_EXTS = {".pdf", ".txt", ".csv", ".md", ".json"}
+
+def _ext_ok(filename: str) -> bool:
+    _, ext = os.path.splitext(filename.lower())
+    return ext in ALLOWED_EXTS
+
+def _read_text(path: str) -> str:
+    """
+    Lightweight text extraction:
+      - PDF: concat pages (pypdf)
+      - CSV: head + basic to_markdown (pandas)
+      - TXT/MD/JSON: as plain text
+    """
+    ext = os.path.splitext(path.lower())[1]
+    try:
+        if ext == ".pdf":
+            if not pypdf:
+                return "(pypdf not installed; stored file only)"
+            text = []
+            with open(path, "rb") as f:
+                reader = pypdf.PdfReader(f)
+                for i, page in enumerate(reader.pages[:50]):  # cap to first 50 pages for speed
+                    try:
+                        text.append(page.extract_text() or "")
+                    except Exception:
+                        text.append("")
+            return "\n".join(text)
+
+        elif ext == ".csv":
+            if not pd:
+                return "(pandas not installed; stored file only)"
+            # Read at most first ~5000 rows for preview to avoid huge memory usage
+            df = pd.read_csv(path, nrows=5000)
+            # Return a compact, human-friendly sample
+            sample = df.head(20).to_markdown(index=False)
+            return f"CSV columns: {list(df.columns)}\n\nSample (first 20 rows):\n{sample}"
+
+        elif ext in (".txt", ".md"):
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                return f.read()
+
+        elif ext == ".json":
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                return f.read()
+
+        else:
+            return ""
+    except Exception as e:
+        return f"(error reading content: {e})"
+
+def _append_ingest_index(record: dict) -> None:
+    # Append a record to data/ingested.json (creates file if missing)
+    try:
+        if os.path.exists(INGEST_INDEX):
+            with open(INGEST_INDEX, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, list):
+                data = []
+        else:
+            data = []
+    except Exception:
+        data = []
+    data.append(record)
+    with open(INGEST_INDEX, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+@app.route("/data/upload", methods=["POST"])
+def data_upload():
+    """
+    Upload a single file (multipart) OR point to an existing path (JSON).
+    Response:
+      { ok, path, name, bytes, kind, preview }
+    """
+    try:
+        saved_path = None
+        fname = None
+        kind = None
+        size = None
+
+        # A) multipart/form-data (Postman "Body" -> "form-data", key: file, type: File)
+        if "file" in request.files:
+            file = request.files["file"]
+            if not file or file.filename == "":
+                return jsonify({"ok": False, "error": "no file uploaded"}), 400
+
+            fname = secure_filename(file.filename)
+            if not _ext_ok(fname):
+                return jsonify({"ok": False, "error": f"unsupported extension. Allowed: {sorted(ALLOWED_EXTS)}"}), 400
+
+            saved_path = os.path.join(UPLOAD_DIR, fname)
+            file.save(saved_path)
+            size = os.path.getsize(saved_path)
+            kind = os.path.splitext(fname)[1].lstrip(".")
+
+        # B) JSON: { "path": "C:\\Users\\me\\Downloads\\something.pdf" }
+        elif request.is_json:
+            body = request.get_json(silent=True) or {}
+            given = body.get("path")
+            if not given:
+                return jsonify({"ok": False, "error": "provide multipart 'file' or JSON {'path': ...}"}), 400
+            if not os.path.isfile(given):
+                return jsonify({"ok": False, "error": f"file not found: {given}"}), 400
+
+            fname = secure_filename(os.path.basename(given))
+            if not _ext_ok(fname):
+                return jsonify({"ok": False, "error": f"unsupported extension. Allowed: {sorted(ALLOWED_EXTS)}"}), 400
+
+            saved_path = os.path.join(UPLOAD_DIR, fname)
+            # Copy file contents
+            with open(given, "rb") as src, open(saved_path, "wb") as dst:
+                dst.write(src.read())
+            size = os.path.getsize(saved_path)
+            kind = os.path.splitext(fname)[1].lstrip(".")
+
+        else:
+            return jsonify({"ok": False, "error": "use multipart (file) or JSON {'path': ...}"}), 400
+
+        # Extract a compact preview (does not index full text here — just a sanity check)
+        preview = _read_text(saved_path)
+        if preview and len(preview) > 2000:
+            preview = preview[:2000] + "\n...[truncated]..."
+
+        # Record to ingested index
+        record = {
+            "name": fname,
+            "path": saved_path,
+            "bytes": size,
+            "kind": kind,
+            "ingested_at": datetime.utcnow().isoformat() + "Z",
+        }
+        _append_ingest_index(record)
+
+        return jsonify({
+            "ok": True,
+            "name": fname,
+            "path": saved_path,
+            "bytes": size,
+            "kind": kind,
+            "preview": preview or "(no preview)",
+        })
+
+    except Exception as e:
+        return jsonify({"ok": False, "error": repr(e)}), 500
+
+
 # --------- Local dev entrypoint (optional) ---------
 if __name__ == "__main__":
     # Local: python app.py
