@@ -73,39 +73,20 @@ def call_openai(user_msg: str) -> str:
 
 @app.get("/")
 def root():
-    return jsonify({
-        "ok": True,
-        "app": "friday-backend",
-        "endpoints": ["/health", "/chat", "/data/upload", "/files/<filename>"]
-    })
-
+    return jsonify({"ok": True, "message": "Friday API is up"})
 
 @app.get("/health")
 def health():
-    return jsonify({
-        "ok": True,
-        "status": "running",
-        "debug": {
-            "key_present": has_key(),
-            "model": MODEL
-        }
-    })
-
+    return jsonify({"ok": True, "status": "running"})
 
 @app.post("/chat")
 def chat():
     data = request.get_json(silent=True) or {}
-    user_msg = (data.get("message") or "").strip()
+    msg = (data.get("message") or "").strip()
+    if not msg:
+        return jsonify({"ok": False, "error": "message is required"}), 400
+    return jsonify({"ok": True, "reply": f"You said: {msg}"})
 
-    if not user_msg:
-        return jsonify({"ok": False, "error": "Provide JSON body with a 'message' field."}), 400
-
-    reply_text = call_openai(user_msg)
-    return jsonify({
-        "ok": True,
-        "used_openai": has_key(),
-        "reply": reply_text
-    })
 
 
 @app.post("/data/upload")
@@ -147,6 +128,18 @@ def data_upload():
 def serve_file(filename: str):
     # Download previously uploaded files
     return send_from_directory(UPLOAD_DIR, filename, as_attachment=True)
+
+# --- DEBUG: list routes ---
+@app.get("/__routes")
+def __routes():
+    routes = []
+    for rule in app.url_map.iter_rules():
+        routes.append({
+            "rule": str(rule),
+            "endpoint": rule.endpoint,
+            "methods": sorted(m for m in rule.methods if m not in {"HEAD", "OPTIONS"})
+        })
+    return jsonify({"ok": True, "routes": routes})
 
 
 if __name__ == "__main__":
