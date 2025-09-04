@@ -1,15 +1,21 @@
 Flask==3.0.3
 flask-cors==4.0.1
 gunicorn==21.2.0
-
-openai==1.37.0
+openai==1.61.1
 python-dotenv==1.0.1
+waitress==3.0.0
+
+# optional libs we already verified working on your laptop (keep versions with wheels)
+pydantic==2.11.7
+pydantic-core==2.33.2
+tiktoken==0.7.0
+apscheduler==3.10.4
 requests==2.32.3
 beautifulsoup4==4.12.3
-jiter==0.5.0
 
-pydantic==2.7.1
-pydantic-core==2.18.2
+# ⚠️ intentionally NOT including chromadb on Render (it’s the build breaker)
+# If you want Chroma locally, keep it only in requirements-dev.txt and don’t deploy it.
+
 
 
 
