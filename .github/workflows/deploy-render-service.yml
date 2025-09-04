@@ -1,4 +1,4 @@
-name: Deploy Friday to Render (Service) + Smoke Test + Notifications
+name: Deploy Friday to Render (Service) + Health & Diag + Threaded Notifications
 
 on:
   push:
@@ -8,7 +8,34 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
+    env:
+      HEALTH_URL: ${{ secrets.RENDER_HEALTH_URL }}
+      BASE_URL: ${{ secrets.RENDER_HEALTH_URL != '' && join(steps.trim.outputs.base, '') || '' }}
+
     steps:
+      - name: Capture commit metadata
+        id: meta
+        run: |
+          echo "sha=${GITHUB_SHA}" >> $GITHUB_OUTPUT
+          echo "short_sha=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+          echo "repo=${GITHUB_REPOSITORY}" >> $GITHUB_OUTPUT
+          echo "run_url=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" >> $GITHUB_OUTPUT
+          echo "actor=${GITHUB_ACTOR}" >> $GITHUB_OUTPUT
+          echo "msg<<EOF" >> $GITHUB_OUTPUT
+          echo "$(git log -1 --pretty=%s)" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Derive BASE_URL from HEALTH_URL
+        id: trim
+        run: |
+          if [ -z "${{ secrets.RENDER_HEALTH_URL }}" ]; then
+            echo "base=" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          BASE="$(echo "${{ secrets.RENDER_HEALTH_URL }}" | sed 's#/health$##')"
+          echo "base=$BASE" >> $GITHUB_OUTPUT
+
       - name: Trigger Render service deploy
         id: render_deploy
         run: |
@@ -21,9 +48,9 @@ jobs:
             | tee /tmp/render_deploy.json
           echo "Triggered deploy on service ${{ secrets.RENDER_SERVICE_ID }}"
 
-      # ---- Post-deploy smoke test ----
-      - name: Smoke test /health (with retry/backoff)
-        id: smoke_test
+      # ---- Post-deploy smoke test: /health with retry/backoff ----
+      - name: Smoke test /health
+        id: health
         env:
           HEALTH_URL: ${{ secrets.RENDER_HEALTH_URL }}
         run: |
@@ -33,15 +60,14 @@ jobs:
             exit 1
           fi
 
-          # Retry up to 12 times (≈3 minutes) with 15s backoff
           tries=12
           for i in $(seq 1 $tries); do
             echo "Attempt $i/$tries: GET $HEALTH_URL"
             HTTP_CODE=$(curl -sS -o /tmp/health.json -w "%{http_code}" "$HEALTH_URL" || true)
             echo "Status: $HTTP_CODE"
             if [ "$HTTP_CODE" = "200" ]; then
-              # Optional: check JSON contains ok:true
               if jq -e '.ok == true' /tmp/health.json >/dev/null 2>&1; then
+                echo "ok=true" >> $GITHUB_OUTPUT
                 echo "Health OK"
                 cat /tmp/health.json
                 exit 0
@@ -51,45 +77,124 @@ jobs:
           done
 
           echo "Service did not become healthy in time."
-          echo "Last response:"
-          cat /tmp/health.json || true
+          echo "Last response:"; cat /tmp/health.json || true
           exit 1
 
-      # ---- Slack notification (optional) ----
-      - name: Notify Slack (success)
-        if: ${{ success() && env.SLACK_WEBHOOK_URL != '' }}
+      # ---- Post-deploy diag test: /diag/openai ----
+      - name: Diag OpenAI auth
+        id: diag
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          HEALTH_URL: ${{ secrets.RENDER_HEALTH_URL }}
+          BASE: ${{ steps.trim.outputs.base }}
         run: |
-          payload=$(jq -n --arg text ":white_check_mark: *Friday deploy passed* — $HEALTH_URL is healthy." '{text: $text}')
-          curl -sS -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK_URL"
+          set -e
+          if [ -z "$BASE" ]; then
+            echo "BASE_URL not available; cannot run /diag/openai"
+            exit 1
+          fi
+          echo "GET $BASE/diag/openai"
+          HTTP_CODE=$(curl -sS -o /tmp/diag.json -w "%{http_code}" "$BASE/diag/openai" || true)
+          echo "Status: $HTTP_CODE"
+          cat /tmp/diag.json || true
 
-      - name: Notify Slack (failure)
-        if: ${{ failure() && env.SLACK_WEBHOOK_URL != '' }}
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          payload=$(jq -n --arg text ":x: *Friday deploy FAILED* — check logs: $RUN_URL" '{text: $text}')
-          curl -sS -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK_URL"
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Diag failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
 
-      # ---- Discord notification (optional) ----
-      - name: Notify Discord (success)
-        if: ${{ success() && env.DISCORD_WEBHOOK_URL != '' }}
-        env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          HEALTH_URL: ${{ secrets.RENDER_HEALTH_URL }}
-        run: |
-          payload=$(jq -n --arg content "✅ **Friday deploy passed** — $HEALTH_URL is healthy." '{content: $content}')
-          curl -sS -X POST -H 'Content-Type: application/json' --data "$payload" "$DISCORD_WEBHOOK_URL"
+          AUTH=$(jq -r '.auth // empty' /tmp/diag.json)
+          if [ "$AUTH" != "ok" ]; then
+            echo "Diag auth not ok (auth=$AUTH)"
+            exit 1
+          fi
+          echo "auth=ok" >> $GITHUB_OUTPUT
 
-      - name: Notify Discord (failure)
-        if: ${{ failure() && env.DISCORD_WEBHOOK_URL != '' }}
+      # =========================
+      # Slack notifications
+      # =========================
+
+      # --- Slack (Bot) initial post to start a thread ---
+      - name: Slack Bot — post parent message (start thread)
+        id: slack_parent
+        if: ${{ success() && secrets.SLACK_BOT_TOKEN != '' && secrets.SLACK_CHANNEL != '' }}
         env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          CHANNEL: ${{ secrets.SLACK_CHANNEL }}
         run: |
-          payload=$(jq -n --arg content "❌ **Friday deploy FAILED** — check logs: $RUN_URL" '{content: $content}')
-          curl -sS -X POST -H 'Content-Type: application/json' --data "$payload" "$DISCORD_WEBHOOK_URL"
+          set -e
+          TEXT="✅ *Friday deploy passed*\nRepo: ${{ steps.meta.outputs.repo }}\nCommit: ${{ steps.meta.outputs.short_sha }} — ${{ steps.meta.outputs.msg }}\nActor: ${{ steps.meta.outputs.actor }}\nRun: ${{ steps.meta.outputs.run_url }}\nHealth: ${{ secrets.RENDER_HEALTH_URL }}\nDiag: OK"
+          RESP=$(curl -sS -X POST "https://slack.com/api/chat.postMessage" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-type: application/json; charset=utf-8" \
+            --data "$(jq -n --arg ch "$CHANNEL" --arg tx "$TEXT" '{channel:$ch, text:$tx}')" )
+          echo "$RESP" | tee /tmp/slack_parent.json
+          OK=$(jq -r '.ok' /tmp/slack_parent.json)
+          if [ "$OK" != "true" ]; then
+            echo "Slack parent post failed"; cat /tmp/slack_parent.json; exit 1
+          fi
+          TS=$(jq -r '.ts' /tmp/slack_parent.json)
+          echo "ts=$TS" >> $GITHUB_OUTPUT
+
+      # --- Slack (Bot) reply in thread with details ---
+      - name: Slack Bot — thread reply (details)
+        if: ${{ (success() || failure()) && steps.slack_parent.outputs.ts != '' }}
+        env:
+          TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          CHANNEL: ${{ secrets.SLACK_CHANNEL }}
+          TS: ${{ steps.slack_parent.outputs.ts }}
+        run: |
+          set -e
+          STATUS="${{ job.status }}"
+          TEXT="Status: *${STATUS}*\nHealth URL: ${{ secrets.RENDER_HEALTH_URL }}\nDiag endpoint: ${{ steps.trim.outputs.base }}/diag/openai\nRun: ${{ steps.meta.outputs.run_url }}"
+          curl -sS -X POST "https://slack.com/api/chat.postMessage" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-type: application/json; charset=utf-8" \
+            --data "$(jq -n --arg ch "$CHANNEL" --arg tx "$TEXT" --arg ts "$TS" '{channel:$ch, text:$tx, thread_ts:$ts}')" \
+            | jq -r '.ok'
+
+      # --- Slack (Webhook) fallback: success ---
+      - name: Slack Webhook — success
+        if: ${{ success() && steps.slack_parent.outcome == 'skipped' && secrets.SLACK_WEBHOOK_URL != '' }}
+        env:
+          WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          payload=$(jq -n \
+            --arg t ":white_check_mark: *Friday deploy passed* — ${{ steps.meta.outputs.repo }} @ ${{ steps.meta.outputs.short_sha }}" \
+            --arg h "${{ secrets.RENDER_HEALTH_URL }}" \
+            --arg r "${{ steps.meta.outputs.run_url }}" \
+            '{text: ($t + "\nHealth: " + $h + "\nRun: " + $r)}')
+          curl -sS -X POST -H 'Content-type: application/json' --data "$payload" "$WEBHOOK"
+
+      # --- Slack (Webhook) fallback: failure ---
+      - name: Slack Webhook — failure
+        if: ${{ failure() && steps.slack_parent.outcome == 'skipped' && secrets.SLACK_WEBHOOK_URL != '' }}
+        env:
+          WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          payload=$(jq -n \
+            --arg t ":x: *Friday deploy FAILED* — ${{ steps.meta.outputs.repo }} @ ${{ steps.meta.outputs.short_sha }}" \
+            --arg r "${{ steps.meta.outputs.run_url }}" \
+            '{text: ($t + "\nRun: " + $r)}')
+          curl -sS -X POST -H 'Content-type: application/json' --data "$payload" "$WEBHOOK"
+
+      # =========================
+      # Discord notifications
+      # =========================
+      - name: Discord — success
+        if: ${{ success() && secrets.DISCORD_WEBHOOK_URL != '' }}
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          content="✅ **Friday deploy passed** — ${{ steps.meta.outputs.repo }} @ ${{ steps.meta.outputs.short_sha }}\nHealth: ${{ secrets.RENDER_HEALTH_URL }}\nRun: ${{ steps.meta.outputs.run_url }}"
+          curl -sS -X POST -H 'Content-Type: application/json' \
+            --data "$(jq -n --arg c "$content" '{content:$c}')" "$WEBHOOK"
+
+      - name: Discord — failure
+        if: ${{ failure() && secrets.DISCORD_WEBHOOK_URL != '' }}
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          content="❌ **Friday deploy FAILED** — ${{ steps.meta.outputs.repo }} @ ${{ steps.meta.outputs.short_sha }}\nRun: ${{ steps.meta.outputs.run_url }}"
+          curl -sS -X POST -H 'Content-Type: application/json' \
+            --data "$(jq -n --arg c "$content" '{content:$c}')" "$WEBHOOK"
+
 
