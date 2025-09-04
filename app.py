@@ -1,113 +1,100 @@
 import os
-import json
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from dotenv import load_dotenv
+from werkzeug.utils import secure_filename
 
-# ---------------------------
-# Boot
-# ---------------------------
-load_dotenv()  # loads .env when running locally
+# Optional: OpenAI if key is set
+try:
+    import openai
+except ImportError:
+    openai = None
 
+# Flask app
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})
+CORS(app)
 
-# ---------------------------
-# OpenAI client (optional)
-# ---------------------------
-def make_openai():
-    """
-    Return an OpenAI client if OPENAI_API_KEY is present; else None.
-    """
-    key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not key:
-        return None, False
-    try:
-        from openai import OpenAI
-        client = OpenAI(api_key=key)
-        return client, True
-    except Exception:
-        return None, False
+# Upload folder
+UPLOAD_FOLDER = "uploads"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 
-# ---------------------------
-# Helpers
-# ---------------------------
-SYSTEM_PROMPT = (
-    "You are Friday, a calm, clear, Einstein-level reasoning assistant. "
-    "You solve real-world problems, build stepwise plans, and call out assumptions. "
-    "When asked to plan, produce: (1) Problem summary, (2) Plan in 3–5 concrete steps, "
-    "(3) Prioritize the highest-leverage step first, (4) Retest/measure after each step, and iterate."
-)
+# Root route - no more 404 at base URL
+@app.route("/", methods=["GET"])
+def root():
+    return jsonify({
+        "ok": True,
+        "message": "Welcome to Friday API 🚀. Use /health (GET), /chat (POST), or /data/upload (POST)."
+    })
 
-def local_brain_answer(user_message: str) -> str:
-    """
-    Deterministic local fallback (no OpenAI). Gives a short, structured plan.
-    """
-    msg = user_message.strip()
-    if not msg:
-        msg = "Help me move forward on my goal."
-    plan = [
-        "Plan: break the problem into 3–5 concrete steps",
-        "Prioritize the highest-leverage step first",
-        "Retest/measure after each step and iterate",
-    ]
-    return f"OpenAI unavailable; giving a fast local answer.\n\nProblem summary: {msg}\n" + "\n".join(plan)
-
-# ---------------------------
-# Routes
-# ---------------------------
-@app.get("/health")
+# Health check
+@app.route("/health", methods=["GET"])
 def health():
-    client, ok = make_openai()
-    model = "gpt-4o-mini"
-    return jsonify({"ok": True, "status": "running", "debug": {"key_present": ok, "model": model}})
+    key_present = bool(os.environ.get("OPENAI_API_KEY"))
+    return jsonify({
+        "ok": True,
+        "status": "running",
+        "debug": {
+            "key_present": key_present,
+            "model": os.environ.get("FRIDAY_MODEL", "gpt-4o-mini"),
+        }
+    })
 
-@app.post("/chat")
+# Chat endpoint
+@app.route("/chat", methods=["POST"])
 def chat():
-    try:
-        data = request.get_json(force=True, silent=False) or {}
-        user_message = (data.get("message") or "").strip()
-        if not user_message:
-            return jsonify({"ok": False, "error": "Missing 'message' in JSON body."}), 400
+    data = request.get_json(silent=True) or {}
+    user_message = data.get("message", "").strip()
 
-        # Try OpenAI first
-        client, have_key = make_openai()
-        if have_key and client:
-            try:
-                # Chat Completions (responses API)
-                completion = client.chat.completions.create(
-                    model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-                    messages=[
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": user_message},
-                    ],
-                    temperature=0.3,
-                )
-                reply = completion.choices[0].message.content
-                return jsonify({"ok": True, "reply": reply, "used_openai": True})
-            except Exception as e:
-                # Fall back to local if OpenAI errors (bad key, quota, network, etc.)
-                reply = local_brain_answer(user_message)
-                return jsonify({
-                    "ok": True,
-                    "reply": reply,
-                    "used_openai": False,
-                    "debug": {"fallback_reason": repr(e)}
-                })
+    if not user_message:
+        return jsonify({"ok": False, "error": "Missing 'message'"}), 400
 
-        # No key present → local fallback
-        reply = local_brain_answer(user_message)
-        return jsonify({"ok": True, "reply": reply, "used_openai": False})
+    # Default reply (local fallback)
+    reply = f"You said: {user_message}"
 
-    except Exception as e:
-        return jsonify({"ok": False, "error": "Unhandled error in /chat", "trace": repr(e)}), 500
+    # If OpenAI key is present, try using OpenAI
+    used_openai = False
+    if openai and os.environ.get("OPENAI_API_KEY"):
+        try:
+            openai.api_key = os.environ["OPENAI_API_KEY"]
+            response = openai.chat.completions.create(
+                model=os.environ.get("FRIDAY_MODEL", "gpt-4o-mini"),
+                messages=[{"role": "user", "content": user_message}]
+            )
+            reply = response.choices[0].message.content.strip()
+            used_openai = True
+        except Exception as e:
+            reply = f"(Fallback) OpenAI error: {str(e)}"
 
-# ---------------------------
-# Local dev entrypoint
-# ---------------------------
+    return jsonify({
+        "ok": True,
+        "reply": reply,
+        "used_openai": used_openai
+    })
+
+# File upload endpoint
+@app.route("/data/upload", methods=["POST"])
+def upload_data():
+    if "file" not in request.files:
+        return jsonify({"ok": False, "error": "No file part"}), 400
+
+    file = request.files["file"]
+    if file.filename == "":
+        return jsonify({"ok": False, "error": "Empty filename"}), 400
+
+    filename = secure_filename(file.filename)
+    filepath = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+    file.save(filepath)
+
+    return jsonify({
+        "ok": True,
+        "message": f"File '{filename}' uploaded successfully!",
+        "path": filepath
+    })
+
+# Run locally
 if __name__ == "__main__":
-    # Local dev run: python app.py
-    app.run(host="127.0.0.1", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000)
+
 
 
 
