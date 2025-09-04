@@ -1,36 +1,27 @@
-Flask>=2.3.2
-Flask-Compress>=1.15
-flask-cors>=3.0.10
-gunicorn==23.0.0
-python-dotenv>=1.0
+Flask==3.0.3
+flask-cors==4.0.1
+gunicorn==21.2.0
+waitress==3.0.0
 
-openai>=1.12.0
-redis==5.0.8
+openai==1.6.1
+python-dotenv==1.0.1
 
-psycopg[binary]==3.2.1
-pgvector==0.2.5
-
-qdrant-client==1.9.2
-
+pypdf==4.3.1
 requests==2.32.3
-sentry-sdk==2.13.0
-PyJWT==2.9.0
-pypdf>=4.2
-PyPDF2>=3.0.1
-python-docx>=1.1.2
 beautifulsoup4==4.12.3
 
-pytesseract==0.3.13
-Pillow==10.4.0
+google-auth==2.23.4
+google-auth-oauthlib==1.2.0
+google-auth-httplib2==0.2.0
+google-api-python-client==2.101.0
 
-pdfplumber>=0.11.4
+pandas==2.2.2
+numpy==1.26.4
+apscheduler==3.10.4
 
-google-api-python-client==2.108.0
-google-auth==2.22.0
-google-auth-oauthlib==1.1.0
-google-auth-httplib2==0.1.0
-chromadb==0.4.13
-waitress==2.1.2
+tiktoken==0.5.1
+chromadb==0.5.29
+
 
 
 
