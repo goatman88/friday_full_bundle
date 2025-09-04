@@ -1,4 +1,4 @@
-name: Deploy Friday to Render (Service)
+name: Deploy Friday to Render (Service) + Smoke Test + Notifications
 
 on:
   push:
@@ -10,9 +10,86 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Trigger Render service deploy
+        id: render_deploy
         run: |
+          set -e
           curl -sS -X POST \
-            https://api.render.com/v1/services/${{ secrets.RENDER_SERVICE_ID }}/deploys \
+            "https://api.render.com/v1/services/${{ secrets.RENDER_SERVICE_ID }}/deploys" \
             -H "Authorization: Bearer ${{ secrets.RENDER_API_KEY }}" \
             -H "Content-Type: application/json" \
-            -d '{}'
+            -d '{}' \
+            | tee /tmp/render_deploy.json
+          echo "Triggered deploy on service ${{ secrets.RENDER_SERVICE_ID }}"
+
+      # ---- Post-deploy smoke test ----
+      - name: Smoke test /health (with retry/backoff)
+        id: smoke_test
+        env:
+          HEALTH_URL: ${{ secrets.RENDER_HEALTH_URL }}
+        run: |
+          set -e
+          if [ -z "$HEALTH_URL" ]; then
+            echo "RENDER_HEALTH_URL not set. Please add as GitHub secret."
+            exit 1
+          fi
+
+          # Retry up to 12 times (≈3 minutes) with 15s backoff
+          tries=12
+          for i in $(seq 1 $tries); do
+            echo "Attempt $i/$tries: GET $HEALTH_URL"
+            HTTP_CODE=$(curl -sS -o /tmp/health.json -w "%{http_code}" "$HEALTH_URL" || true)
+            echo "Status: $HTTP_CODE"
+            if [ "$HTTP_CODE" = "200" ]; then
+              # Optional: check JSON contains ok:true
+              if jq -e '.ok == true' /tmp/health.json >/dev/null 2>&1; then
+                echo "Health OK"
+                cat /tmp/health.json
+                exit 0
+              fi
+            fi
+            sleep 15
+          done
+
+          echo "Service did not become healthy in time."
+          echo "Last response:"
+          cat /tmp/health.json || true
+          exit 1
+
+      # ---- Slack notification (optional) ----
+      - name: Notify Slack (success)
+        if: ${{ success() && env.SLACK_WEBHOOK_URL != '' }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          HEALTH_URL: ${{ secrets.RENDER_HEALTH_URL }}
+        run: |
+          payload=$(jq -n --arg text ":white_check_mark: *Friday deploy passed* — $HEALTH_URL is healthy." '{text: $text}')
+          curl -sS -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK_URL"
+
+      - name: Notify Slack (failure)
+        if: ${{ failure() && env.SLACK_WEBHOOK_URL != '' }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          payload=$(jq -n --arg text ":x: *Friday deploy FAILED* — check logs: $RUN_URL" '{text: $text}')
+          curl -sS -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK_URL"
+
+      # ---- Discord notification (optional) ----
+      - name: Notify Discord (success)
+        if: ${{ success() && env.DISCORD_WEBHOOK_URL != '' }}
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          HEALTH_URL: ${{ secrets.RENDER_HEALTH_URL }}
+        run: |
+          payload=$(jq -n --arg content "✅ **Friday deploy passed** — $HEALTH_URL is healthy." '{content: $content}')
+          curl -sS -X POST -H 'Content-Type: application/json' --data "$payload" "$DISCORD_WEBHOOK_URL"
+
+      - name: Notify Discord (failure)
+        if: ${{ failure() && env.DISCORD_WEBHOOK_URL != '' }}
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          payload=$(jq -n --arg content "❌ **Friday deploy FAILED** — check logs: $RUN_URL" '{content: $content}')
+          curl -sS -X POST -H 'Content-Type: application/json' --data "$payload" "$DISCORD_WEBHOOK_URL"
+
