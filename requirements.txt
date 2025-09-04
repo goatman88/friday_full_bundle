@@ -1,26 +1,20 @@
 Flask==3.0.3
 flask-cors==4.0.1
 gunicorn==21.2.0
+openai==1.61.1
+python-dotenv==1.0.1
 waitress==3.0.0
 
-openai==1.6.1
-python-dotenv==1.0.1
-
-pypdf==4.3.1
+# optional but safe
+pydantic==2.11.1
+pydantic-core==2.33.2
+tiktoken==0.7.0
+apscheduler==3.10.4
 requests==2.32.3
 beautifulsoup4==4.12.3
 
-google-auth==2.23.4
-google-auth-oauthlib==1.2.0
-google-auth-httplib2==0.2.0
-google-api-python-client==2.101.0
-
-pandas==2.2.2
-numpy==1.26.4
-apscheduler==3.10.4
-
-tiktoken==0.5.1
-chromadb==0.5.29
+# ⚠️ Do NOT include chromadb here
+# chromadb==0.5.29   <-- keep this ONLY in requirements-dev.txt locally
 
 
 
