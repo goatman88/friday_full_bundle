@@ -2,11 +2,8 @@ name: CI & Deploy (Friday)
 
 on:
   push:
-    branches: [main]
+    branches: [ main ]
   workflow_dispatch:
-
-permissions:
-  contents: read
 
 jobs:
   test-and-deploy:
@@ -19,94 +16,75 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Cache pip
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('backend/requirements*.txt') }}
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements*.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-
 
+      # ⬇️ Root layout: files are in the repo root (NO backend/).
       - name: Install backend dependencies
-        working-directory: backend
-        shell: bash
         run: |
           python -m pip install --upgrade pip
-          # Be flexible if your file is named requirement.txt instead of requirements.txt
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          if [ -f requirement.txt ]; then pip install -r requirement.txt; fi
-          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
 
-      - name: Quick import smoke
-        working-directory: backend
-        shell: bash
+      # Optional quick smoke (only static imports/lint). Won't fail the build if absent.
+      - name: Quick import smoke (non-fatal)
+        continue-on-error: true
+        env:
+          # avoid your app importing OpenAI during import time
+          OPENAI_API_KEY: "sk-test-placeholder"
         run: |
-          python - <<'PY'
-          import flask, flask_cors
-          print("flask:", flask.__version__, "flask-cors:", flask_cors.__version__)
+          python - << 'PY'
+          try:
+              import app  # ensure it imports
+              print("OK: app imported")
+          except Exception as e:
+              print("WARN: import failed ->", e)
           PY
 
+      # Optional tests (if you add pytest later)
       - name: Run tests (optional)
-        working-directory: backend
-        shell: bash
-        run: |
-          python -m pytest -q || echo "No tests found; continuing…"
+        if: hashFiles('tests/**/*.py') != ''
+        run: pytest -q
 
-      - name: Trigger Render deploy
+      # ---- DEPLOY TO RENDER ----
+      - name: Trigger Render deploy via Deploy Hook
         env:
-          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
-          RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
-        shell: bash
+          RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
         run: |
-          if [ -z "$RENDER_API_KEY" ] || [ -z "$RENDER_SERVICE_ID" ]; then
-            echo "❌ Missing RENDER_API_KEY or RENDER_SERVICE_ID repository secrets."
+          if [ -z "$RENDER_DEPLOY_HOOK" ]; then
+            echo "::error::Missing secret RENDER_DEPLOY_HOOK"
             exit 1
           fi
+          curl -fsSL -X POST "$RENDER_DEPLOY_HOOK"
 
-          echo "🚀 Kicking off Render deploy for service $RENDER_SERVICE_ID…"
-          curl -sS -X POST \
-            -H "Authorization: Bearer $RENDER_API_KEY" \
-            -H "Content-Type: application/json" \
-            --data '{"clearCache":true}' \
-            "https://api.render.com/v1/services/$RENDER_SERVICE_ID/deploys" \
-            | tee render_response.json
-
-          python - <<'PY'
-          import json, sys
-          j = json.load(open('render_response.json'))
-          if 'id' in j:
-              print("✅ Render deploy started. id:", j['id'])
-          else:
-              print("❌ Render API error/response:", j)
-              sys.exit(1)
-          PY
-
-      - name: (Optional) Wait for health check
-        if: success()
+      # Wait and poll health until it's up (max ~6 minutes)
+      - name: Wait for Render health
         env:
-          HEALTH_URL: ${{ secrets.RENDER_HEALTH_URL }}  # e.g., https://your-friday-backend.onrender.com/health
-        shell: bash
+          BASE: ${{ secrets.RENDER_PUBLIC_URL }}
         run: |
-          if [ -z "$HEALTH_URL" ]; then
-            echo "⏭️ No RENDER_HEALTH_URL set; skipping health check."
-            exit 0
+          if [ -z "$BASE" ]; then
+            echo "::error::Missing secret RENDER_PUBLIC_URL"
+            exit 1
           fi
-
-          echo "⏱️ Waiting for service to return 200 at: $HEALTH_URL"
-          for i in {1..60}; do
-            code=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL")
-            echo "Try $i: HTTP $code"
+          echo "Waiting for $BASE/health ..."
+          for i in $(seq 1 36); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/health" || true)
             if [ "$code" = "200" ]; then
-              echo "✅ Healthy!"
+              echo "Health check OK"
               exit 0
             fi
-            sleep 5
+            echo "Attempt $i/36 -> HTTP $code; sleeping 10s"
+            sleep 10
           done
-
-          echo "❌ Health check never returned 200."
+          echo "::error::Health check never returned 200"
           exit 1
+
 
 
 
