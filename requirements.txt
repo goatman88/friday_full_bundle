@@ -4,15 +4,12 @@ waitress==3.0.0
 gunicorn==21.2.0
 python-dotenv==1.0.1
 requests==2.32.3
-
-# pydantic pins aligned (2.11.1 requires core 2.33.0)
 pydantic==2.11.1
 pydantic-core==2.33.0
-
-# optional helpers you already used
 tiktoken==0.7.0
 beautifulsoup4==4.12.3
 apscheduler==3.10.4
+
 
 
 
