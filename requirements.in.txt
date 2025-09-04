@@ -1,24 +1,16 @@
 Flask==3.0.3
 flask-cors==4.0.1
 gunicorn==21.2.0
-openai==1.6.1
+
+openai==1.37.0
 python-dotenv==1.0.1
-google-auth==2.23.4
-google-auth-oauthlib==1.2.0
-google-api-python-client==2.101.0
-chromadb==0.3.29
-tiktoken==0.5.1
-waitress==3.0.0
-pydantic==2.1.1
-pydantic-core==2.33.2
-itsdangerous==2.1.2
-pyjwt==2.8.0
-numpy==1.26.4
-pandas==2.2.0
-apscheduler==3.10.4
 requests==2.32.3
 beautifulsoup4==4.12.3
-PyPDF2==3.0.1
+jiter==0.5.0
+
+pydantic==2.7.1
+pydantic-core==2.18.2
+
 
 
 
