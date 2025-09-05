@@ -1,107 +1,108 @@
 import os
-import json
 from datetime import datetime
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, jsonify, request
 from flask_cors import CORS
+from werkzeug.utils import secure_filename
 
-# ── App ────────────────────────────────────────────────────────────────────────
-app = Flask(__name__, static_folder="static")
-CORS(app, resources={r"/*": {"origins": "*"}})
+# --- App setup ---
+app = Flask(__name__, static_folder="static", template_folder="templates")
+CORS(app)
 
-# Where uploads will be stored on Render (ephemeral but fine for testing)
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-UPLOAD_DIR = os.path.join(BASE_DIR, "data", "uploads")
+# storage for uploads (Render's ephemeral disk is fine for small tests)
+UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "data", "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-MODEL_FALLBACK = os.environ.get("OPENAI_FALLBACK_MODEL", "gpt-4o-mini")
+# Model choice & key presence (for your /health quick check)
+OPENAI_MODEL_DEFAULT = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_KEY_PRESENT = bool(os.getenv("OPENAI_API_KEY"))
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-def ok(payload: dict, code: int = 200):
-    return jsonify({"ok": True, **payload}), code
+@app.get("/")
+def root():
+    return jsonify({"ok": True, "msg": "Friday backend online"}), 200
 
-def err(msg: str, code: int = 400):
-    return jsonify({"ok": False, "error": msg}), code
-
-# ── Routes ────────────────────────────────────────────────────────────────────
-@app.route("/", methods=["GET"])
-def home():
-    return ok({"message": "Friday is live. Try GET /health, POST /chat, POST /data/upload"})
-
-@app.route("/health", methods=["GET"])
+@app.get("/health")
 def health():
-    # also tells you if the OPENAI_API_KEY is present (without leaking it)
-    key_present = bool(os.environ.get("OPENAI_API_KEY"))
-    return ok({"status": "running", "debug": {"key_present": key_present, "model": MODEL_FALLBACK}})
+    return jsonify({
+        "ok": True,
+        "status": "running",
+        "debug": {
+            "key_present": OPENAI_KEY_PRESENT,
+            "model": OPENAI_MODEL_DEFAULT
+        }
+    }), 200
 
-@app.route("/chat", methods=["POST"])
+@app.get("/__routes")
+def list_routes():
+    # simple router introspection for debugging
+    rules = []
+    for r in app.url_map.iter_rules():
+        rules.append({"methods": sorted(m for m in r.methods if m not in ("HEAD", "OPTIONS")),
+                      "rule": str(r)})
+    return jsonify({"ok": True, "routes": rules}), 200
+
+@app.post("/chat")
 def chat():
-    # Expect: {"message": "..."}
-    try:
-        body = request.get_json(force=True, silent=False) or {}
-    except Exception:
-        return err("Body must be JSON like {\"message\": \"...\"}", 415)
+    """
+    Minimal chat echo so you can verify POST JSON quickly from Postman.
+    If OpenAI key is present, you can wire your model call here later.
+    """
+    data = request.get_json(silent=True) or {}
+    msg = (data.get("message") or "").strip()
+    if not msg:
+        return jsonify({"ok": False, "error": "Missing 'message' in JSON body"}), 400
 
-    user_msg = (body.get("message") or "").strip()
-    if not user_msg:
-        return err("Missing 'message'.")
-
-    # Simple, local “Einstein-y” scaffolding when OpenAI isn’t used
+    # (local fast reply so tests always succeed)
     reply = (
         "OpenAI unavailable; giving a fast local answer.\n\n"
-        "Problem summary: " + user_msg + "\n"
+        "Problem summary: " + msg + "\n"
         "Plan: break the problem into 3–5 concrete steps.\n"
         "Prioritize the highest-leverage step first.\n"
         "Retest/measure after each step and iterate."
     )
-    return ok({"reply": reply, "used_openai": False})
+    return jsonify({"ok": True, "used_openai": False, "reply": reply}), 200
 
-@app.route("/data/upload", methods=["POST"])
+@app.post("/data/upload")
 def data_upload():
     """
-    Accepts ANY file type via multipart/form-data with key 'file'.
-    Optional form fields:
-      - notes: free text
-    Saves file under data/uploads/<timestamp>_<original_name>
-    Returns file metadata.
+    Accept ANY file type via multipart/form-data.
+    Keys:
+      - file: (required) the actual file
+      - notes: (optional) free text
     """
     if "file" not in request.files:
-        return err("Send multipart/form-data with key 'file'." , 415)
+        return jsonify({"ok": False, "error": "No 'file' part in form-data"}), 400
 
     f = request.files["file"]
     if f.filename == "":
-        return err("Empty filename.")
+        return jsonify({"ok": False, "error": "Empty filename"}), 400
 
-    ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
-    safe_name = f.filename.replace("/", "_").replace("\\", "_")
-    save_as = f"{ts}_{safe_name}"
-    save_path = os.path.join(UPLOAD_DIR, save_as)
-    f.save(save_path)
+    notes = request.form.get("notes", "")
+    # keep extension, sanitize basename
+    filename = secure_filename(f.filename)
+    timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    out_name = f"{timestamp}__{filename}"
+    out_path = os.path.join(UPLOAD_DIR, out_name)
+    f.save(out_path)
 
-    meta = {
-        "saved_as": save_as,
-        "bytes": os.path.getsize(save_path),
-        "mimetype": f.mimetype,
-        "notes": request.form.get("notes") or "",
+    info = {
+        "ok": True,
+        "saved_as": out_name,
+        "bytes": os.path.getsize(out_path),
+        "notes": notes,
+        "server_time_utc": timestamp
     }
-    return ok({"file": meta}, 201)
+    return jsonify(info), 200
 
-@app.route("/__routes", methods=["GET"])
-def list_routes():
-    routes = []
-    for r in app.url_map.iter_rules():
-        routes.append({"rule": str(r), "methods": sorted(m for m in r.methods if m in {"GET","POST","PUT","PATCH","DELETE"})})
-    return ok({"routes": routes})
+# Optional: friendlier 404 so it's obvious what path was hit
+@app.errorhandler(404)
+def not_found(e):
+    return jsonify({"ok": False, "error": "Not Found", "path": request.path}), 404
 
-# (optional) serve static files if needed
-@app.route("/static/<path:filename>", methods=["GET"])
-def serve_static(filename):
-    return send_from_directory(app.static_folder, filename)
-
-# ── Entrypoint ────────────────────────────────────────────────────────────────
+# For local debug: `python app.py`
 if __name__ == "__main__":
-    # local run
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    port = int(os.getenv("PORT", "5000"))
+    app.run(host="127.0.0.1", port=port, debug=True)
+
 
 
 
