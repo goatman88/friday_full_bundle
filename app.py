@@ -1,49 +1,34 @@
-# app.py  (V7)
 from flask import Flask, request, jsonify
-from flask_cors import CORS
-import os
 
 app = Flask(__name__)
-CORS(app)
 
-@app.get("/")
+@app.route("/", methods=["GET"])
 def root():
-    return jsonify({"ok": True, "message": "Friday API is up", "version": "V7"})
+    return jsonify({"ok": True, "message": "Friday is live"})
 
-@app.get("/health")
+@app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"ok": True, "status": "running", "version": "V7"})
+    return jsonify({"ok": True, "status": "running"})
 
-@app.post("/chat")
+@app.route("/chat", methods=["POST"])
 def chat():
     data = request.get_json(silent=True) or {}
-    msg = (data.get("message") or "").strip()
-    if not msg:
-        return jsonify({"ok": False, "error": "message is required"}), 400
-    return jsonify({"ok": True, "reply": f"You said: {msg}", "version": "V7"})
+    message = data.get("message", "")
+    return jsonify({"ok": True, "reply": f"You said: {message}"})
 
-@app.post("/data/upload")
-def data_upload():
+@app.route("/data/upload", methods=["POST"])
+def upload():
     if "file" not in request.files:
-        return jsonify({"ok": False, "error": "no file part"}), 400
-    f = request.files["file"]
-    if not f.filename:
-        return jsonify({"ok": False, "error": "empty filename"}), 400
-    os.makedirs("/tmp/uploads", exist_ok=True)
-    path = os.path.join("/tmp/uploads", f.filename)
-    f.save(path)
-    return jsonify({"ok": True, "saved": path, "size_bytes": os.path.getsize(path), "version": "V7"})
+        return jsonify({"ok": False, "error": "No file provided"}), 400
 
-@app.get("/__routes")
-def list_routes():
-    routes = []
-    for r in app.url_map.iter_rules():
-        routes.append({"rule": str(r), "endpoint": r.endpoint,
-                       "methods": sorted(m for m in r.methods if m not in {"HEAD","OPTIONS"})})
-    return jsonify({"ok": True, "routes": routes, "version": "V7"})
+    file = request.files["file"]
+    filename = file.filename
+    # For now, just return confirmation — extend later to process
+    return jsonify({"ok": True, "filename": filename})
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000)
+
 
 
 
