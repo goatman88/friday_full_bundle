@@ -1,18 +1,18 @@
 Flask==3.0.3
 flask-cors==4.0.1
 gunicorn==21.2.0
-waitress==3.0.0
+openai==1.61.1
 python-dotenv==1.0.1
-requests==2.32.3
-anyio==4.4.0
-tiktoken==0.7.0
+waitress==3.0.0
 
-# pydantic v2 (compatible pins and small)
+# optional (safe wheels)
 pydantic==2.11.1
 pydantic-core==2.33.0
-
-# parsing/utilities that build cleanly on Render
+tiktoken==0.7.0
+apscheduler==3.10.4
+requests==2.32.3
 beautifulsoup4==4.12.3
+
 
 
 
