@@ -29,7 +29,13 @@
       </ul>
       <p>PowerShell quick test:</p>
       <pre><code>$headers = @{ Authorization = "Bearer YOUR_TOKEN"; "Content-Type"="application/json" }
-$body = @{ message = "Hello Friday!" } | ConvertTo-Json
+<!-- Top-right nav -->
+<nav style="position:fixed; top:14px; right:16px; display:flex; gap:14px; font:500 14px/1.2 system-ui,-apple-system,Segoe UI,Roboto,Arial; z-index:999;">
+  <a href="/ui"  style="text-decoration:none; color:#2563eb;">Chat</a>
+  <a href="/docs" style="text-decoration:none; color:#475569;">Docs</a>
+</nav>
+
+    $body = @{ message = "Hello Friday!" } | ConvertTo-Json
 Invoke-RestMethod -Method Post -Uri "$env:FRIDAY_BASE/chat" -Headers $headers -Body $body</code></pre>
       <p>Browser chat lives at <a href="/ui">/ui</a>.</p>
     </div>
