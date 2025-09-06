@@ -1,91 +1,57 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <meta charset="UTF-8">
   <title>Friday – Browser Chat</title>
-  <link rel="icon" href="/static/favicon.ico">
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
-    :root{--bg:#0b0f14;--panel:#101820;--text:#e8eef2;--muted:#8aa1b1;--accent:#41d1ff}
-    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,Segoe UI,Roboto,Inter}
-    .wrap{max-width:900px;margin:32px auto;padding:0 16px}
-    .panel{background:var(--panel);border:1px solid #1c2a36;border-radius:14px;padding:18px}
-    h1{margin:0 0 14px;font-size:26px}
-    label{display:block;margin:10px 0 6px;color:var(--muted)}
-    input,textarea{width:100%;background:#0f151c;border:1px solid #243443;border-radius:10px;color:var(--text);padding:12px;outline:none}
-    textarea{min-height:120px;resize:vertical}
-    .row{display:flex;gap:8px;margin-top:10px}
-    button{border:0;border-radius:10px;padding:10px 14px;font-weight:600;cursor:pointer}
-    .primary{background:var(--accent);color:#062b3a}
-    .ghost{background:#15202b;color:var(--text)}
-    pre{background:#0b1218;border:1px solid #1c2a36;border-radius:10px;padding:14px;overflow:auto}
-    nav{display:flex;justify-content:flex-end;margin-bottom:10px}
-    nav a{color:var(--muted);text-decoration:none;margin-left:12px}
-    nav a:hover{color:var(--text)}
+    body { font-family: system-ui, sans-serif; background: #0f172a; color: #e9eefc; margin: 0; padding: 0; }
+    .wrap { max-width: 640px; margin: 40px auto; padding: 20px; background: #1e293b; border-radius: 12px; }
+    h2 { margin-top: 0; }
+    label { display:block; margin: 8px 0 4px; }
+    input, textarea { width: 100%; padding: 10px; border-radius: 6px; border: none; margin-bottom: 12px; }
+    button { padding: 10px 16px; background:#2563eb; border: none; border-radius:8px; color: white; cursor:pointer; }
+    pre { background: #0b1220; padding: 12px; border-radius: 8px; overflow-x:auto; }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <nav><a href="/">Home</a><a href="/docs">Docs</a></nav>
-    <div class="panel">
-      <h1>Friday – Browser Chat</h1>
-
-      <label>API Token</label>
-      <div class="row">
-        <input id="tok" type="password" placeholder="Paste your API token…">
-        <button class="ghost" id="save">Save</button>
-      </div>
-      <small>Stored in <code>localStorage</code> (dev only)</small>
-
-      <label style="margin-top:16px">Message</label>
-      <textarea id="msg" placeholder="Say hi to Friday…"></textarea>
-      <div class="row">
-        <button class="primary" id="send">Send</button>
-        <button class="ghost" id="clear">Clear</button>
-      </div>
-
-      <label style="margin-top:16px">Reply</label>
-      <pre id="out">{ "ok":false, "reply":"" }</pre>
-    </div>
+    <h2>Friday – Browser Chat</h2>
+    <label>API Token</label>
+    <input id="token" type="password" placeholder="Paste your token here">
+    <button onclick="saveToken()">Save</button>
+    <hr>
+    <label>Message</label>
+    <textarea id="msg" rows="3" placeholder="Type your message..."></textarea>
+    <button onclick="sendMsg()">Send</button>
+    <button onclick="clearMsg()">Clear</button>
+    <h3>Reply</h3>
+    <pre id="reply"></pre>
   </div>
 
-  <script>
-    const tokEl = document.getElementById('tok');
-    const msgEl = document.getElementById('msg');
-    const outEl = document.getElementById('out');
-
-    // restore saved token
-    tokEl.value = localStorage.getItem('FRIDAY_TOKEN') || '';
-
-    document.getElementById('save').onclick = () => {
-      localStorage.setItem('FRIDAY_TOKEN', tokEl.value || '');
-      alert('Token saved for this browser.');
-    };
-
-    document.getElementById('clear').onclick = () => { msgEl.value=''; outEl.textContent=''; };
-
-    document.getElementById('send').onclick = async () => {
-      const token = tokEl.value.trim();
-      const message = msgEl.value.trim() || 'Hello Friday!';
-      if (!token) { alert('Add your API token first.'); return; }
-
-      outEl.textContent = '…sending';
-      try {
-        const res = await fetch('/chat', {
-          method: 'POST',
-          headers: {
-            'Authorization': 'Bearer ' + token,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ message })
-        });
-        const data = await res.json().catch(() => ({}));
-        outEl.textContent = JSON.stringify(data, null, 2);
-      } catch (e) {
-        outEl.textContent = JSON.stringify({ ok:false, error: String(e) }, null, 2);
-      }
-    };
-  </script>
+<script>
+function saveToken() {
+  localStorage.setItem("api_token", document.getElementById("token").value);
+  alert("Token saved (local only)");
+}
+function clearMsg() {
+  document.getElementById("msg").value = "";
+}
+async function sendMsg() {
+  const token = localStorage.getItem("api_token") || "";
+  const msg = document.getElementById("msg").value;
+  const resp = await fetch("/chat", {
+    method: "POST",
+    headers: {
+      "Authorization": "Bearer " + token,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ message: msg })
+  });
+  const data = await resp.json();
+  document.getElementById("reply").textContent = JSON.stringify(data,null,2);
+}
+</script>
 </body>
 </html>
 
