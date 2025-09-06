@@ -136,6 +136,17 @@ def chat():
     reply = f"Friday heard: {msg}"
     return jsonify(ok=True, reply=reply)
 
+# Serve UI
+@app.route("/ui")
+def serve_ui():
+    return send_from_directory("static", "ui.html")
+
+# Serve Docs
+@app.route("/docs")
+def serve_docs():
+    return send_from_directory("static", "docs.html")
+
+
 # ------------------------------------------------------------------------------
 # Error handlers (JSON for API paths)
 # ------------------------------------------------------------------------------
