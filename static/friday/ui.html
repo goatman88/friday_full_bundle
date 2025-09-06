@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Friday – Chat UI</title>
+  <link rel="stylesheet" href="/static/friday/ui.css" />
+</head>
+<body>
+  <main class="wrap">
+    <h1>🛰️ Friday – Browser Chat</h1>
+
+    <section class="card">
+      <label class="row">
+        <span>API Token</span>
+        <input id="token" type="password" placeholder="Bearer token…" />
+        <button id="saveToken" class="secondary">Save</button>
+      </label>
+      <p class="hint">Stored in localStorage (dev only).</p>
+    </section>
+
+    <section class="card">
+      <label for="msg">Message</label>
+      <textarea id="msg" rows="4" placeholder="Type something for Friday…"></textarea>
+      <div class="row">
+        <button id="send">Send</button>
+        <button id="clear" class="secondary">Clear</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="row">
+        <strong>Reply</strong>
+        <button id="copy" class="secondary">Copy</button>
+      </div>
+      <pre id="reply" class="reply">(no reply yet)</pre>
+    </section>
+
+    <footer>
+      <a href="/routes" target="_blank">/routes</a> ·
+      <a href="/health" target="_blank">/health</a> ·
+      <a href="/" target="_blank">home</a>
+    </footer>
+  </main>
+
+  <script src="/static/friday/ui.js"></script>
+</body>
+</html>
