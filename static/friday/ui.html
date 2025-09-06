@@ -3,49 +3,125 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Friday – Chat UI</title>
-  <link rel="stylesheet" href="/static/friday/ui.css" />
+  <title>Friday – Browser Chat</title>
+  <link rel="icon" href="/static/favicon.ico" />
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0; background: #0b1220; color: #e5e7eb;
+      font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Arial;
+    }
+    .wrap { max-width: 760px; margin: 32px auto; padding: 0 16px; }
+    .card {
+      background:#0f172a; border:1px solid #1f2937; border-radius:12px; padding:18px 18px 6px;
+      box-shadow: 0 10px 30px rgba(0,0,0,.25), inset 0 1px 0 rgba(255,255,255,.04);
+    }
+    h1 { font-weight:700; letter-spacing:.2px; margin:0 0 14px; display:flex; align-items:center; gap:10px; }
+    h1 .dot { width:10px; height:10px; border-radius:999px; background:#10b981; box-shadow:0 0 12px #10b981; }
+    label { display:block; font-weight:600; color:#9ca3af; margin:10px 2px 6px; }
+    input[type=text], textarea {
+      width:100%; box-sizing:border-box; background:#0b1020; color:#e5e7eb;
+      border:1px solid #1e293b; border-radius:10px; padding:12px 12px;
+      outline:none; transition:border-color .15s ease;
+    }
+    input[type=text]:focus, textarea:focus { border-color:#2563eb; }
+    textarea { min-height:120px; resize:vertical; }
+    .row { display:flex; gap:10px; margin:12px 0 4px; }
+    button {
+      appearance:none; border:0; border-radius:10px; padding:10px 14px; font-weight:600;
+      background:#2563eb; color:white; cursor:pointer;
+      box-shadow:0 6px 20px rgba(37,99,235,.25);
+    }
+    button.sec { background:#111827; color:#cbd5e1; box-shadow:none; border:1px solid #1f2937; }
+    pre {
+      background:#0b1020; border:1px solid #1e293b; border-radius:10px; padding:12px;
+      white-space:pre-wrap; word-break:break-word; min-height:80px;
+    }
+    .row-right { display:flex; gap:10px; justify-content:flex-end }
+    .mt8{margin-top:8px}
+    .note { color:#9ca3af; font-size:12px; margin-top:4px }
+    .toast {
+      position:fixed; right:16px; bottom:16px; background:#0f172a; border:1px solid #1f2937;
+      padding:10px 12px; border-radius:10px; box-shadow:0 10px 30px rgba(0,0,0,.35); display:none;
+    }
+    a.nav { position:fixed; top:14px; right:16px; text-decoration:none; color:#9ca3af }
+  </style>
 </head>
 <body>
-  <main class="wrap">
-    <h1>🛰️ Friday – Browser Chat</h1>
+  <a class="nav" href="/">← Back</a>
+  <div class="wrap">
+    <div class="card">
+      <h1><span class="dot"></span> Friday – Browser Chat</h1>
 
-    <section class="card">
-      <label class="row">
-        <span>API Token</span>
-        <input id="token" type="password" placeholder="Bearer token…" />
-        <button id="saveToken" class="secondary">Save</button>
-      </label>
-      <p class="hint">Stored in localStorage (dev only).</p>
-    </section>
-
-    <section class="card">
-      <label for="msg">Message</label>
-      <textarea id="msg" rows="4" placeholder="Type something for Friday…"></textarea>
+      <label>API<br/>Token</label>
       <div class="row">
+        <input id="token" type="text" placeholder="Bearer token (saved to localStorage for dev only)" />
+        <button id="save">Save</button>
+      </div>
+      <div class="note">Stored only in this browser (localStorage).</div>
+
+      <label class="mt8">Message</label>
+      <textarea id="msg" placeholder="Type something…"></textarea>
+      <div class="row row-right">
+        <button class="sec" id="clear">Clear</button>
         <button id="send">Send</button>
-        <button id="clear" class="secondary">Clear</button>
       </div>
-    </section>
 
-    <section class="card">
-      <div class="row">
-        <strong>Reply</strong>
-        <button id="copy" class="secondary">Copy</button>
+      <label class="mt8">Reply</label>
+      <pre id="reply">{ }</pre>
+      <div class="row row-right">
+        <button class="sec" id="copy">Copy</button>
       </div>
-      <pre id="reply" class="reply">(no reply yet)</pre>
-    </section>
+    </div>
+  </div>
 
-    <footer>
-      <a href="/routes" target="_blank">/routes</a> ·
-      <a href="/health" target="_blank">/health</a> ·
-      <a href="/" target="_blank">home</a>
-    </footer>
-  </main>
+  <div id="toast" class="toast"></div>
 
- <link rel="stylesheet" href="/static/nav.css">
-<div id="site-nav"></div>
-<script src="/static/nav.js"></script>
+<script>
+const $ = sel => document.querySelector(sel);
+const show = (id, msg) => { const t = $(id); t.textContent = msg; t.style.display='block'; setTimeout(()=>t.style.display='none', 2200); };
 
+const tokenInput = $('#token');
+const msgInput   = $('#msg');
+const replyBox   = $('#reply');
+
+const BASE = location.origin;          // your deployed base
+const CHAT = BASE + '/chat';           // POST
+
+// restore token
+tokenInput.value = localStorage.getItem('FRIDAY_TOKEN') || '';
+
+$('#save').onclick = () => {
+  localStorage.setItem('FRIDAY_TOKEN', tokenInput.value.trim());
+  show('#toast', 'Token saved');
+};
+
+$('#clear').onclick = () => { msgInput.value = ''; replyBox.textContent = '{ }'; };
+
+$('#copy').onclick = async () => {
+  try { await navigator.clipboard.writeText(replyBox.textContent); show('#toast','Copied'); }
+  catch { show('#toast','Copy failed'); }
+};
+
+$('#send').onclick = async () => {
+  const token = tokenInput.value.trim();
+  if (!token) return show('#toast', 'Enter a token first');
+  const message = msgInput.value.trim() || 'Hello Friday!';
+  try {
+    const resp = await fetch(CHAT, {
+      method:'POST',
+      headers:{
+        'Authorization': 'Bearer ' + token,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ message })
+    });
+    const data = await resp.json().catch(()=>({ ok:false, error:'Bad JSON' }));
+    replyBox.textContent = JSON.stringify(data, null, 2);
+  } catch (e) {
+    replyBox.textContent = JSON.stringify({ ok:false, error: String(e) }, null, 2);
+  }
+};
+</script>
 </body>
 </html>
