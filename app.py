@@ -160,10 +160,10 @@ def favicon():
 
 from flask import send_from_directory
 
-@app.get("/ui")
-def friday_ui():
-    # serves /static/friday/ui.html
-    return send_from_directory("static/friday", "ui.html")
+@app.route("/ui")
+def ui():
+    return app.send_static_file("ui.html")
+
 
 # ── Entrypoint for local dev (Render uses Procfile's waitress) ────────────────
 if __name__ == "__main__":
