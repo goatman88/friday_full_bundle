@@ -189,6 +189,19 @@ def chat_api():
 @app.route("/docs")
 def docs():
     return app.send_static_file("docs.html")
+# --- Static pages ---
+@app.route("/")
+def home():
+    return app.send_static_file("index.html")
+
+@app.route("/ui")
+def ui():
+    return app.send_static_file("chat.html")
+
+@app.route("/docs")
+def docs():
+    return app.send_static_file("docs.html")
+
 
 
 # ── Entrypoint for local dev (Render uses Procfile's waitress) ────────────────
