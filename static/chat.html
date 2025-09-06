@@ -1,462 +1,94 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Friday Chat</title>
-<style>
-  :root { --bg:#0f172a; --panel:#0b1226; --text:#e2e8f0; --muted:#94a3b8; --border:rgba(255,255,255,.08); --accent:#60a5fa; }
-  *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,Segoe UI,Inter,Roboto,Arial}
-  header{position:sticky;top:0;z-index:10;background:rgba(15,23,42,.75);backdrop-filter:saturate(1.2) blur(6px);
-         border-bottom:1px solid var(--border);display:flex;gap:12px;align-items:center;padding:10px 14px}
-  header .title{font-weight:800}
-  main{max-width:1250px;margin:16px auto;padding:0 16px;display:grid;grid-template-columns:1.35fr .9fr;gap:16px}
-  @media (max-width:1080px){ main{grid-template-columns:1fr} }
-  .card{background:var(--panel);border:1px solid var(--border);border-radius:14px;overflow:hidden}
-  .section{padding:12px}
-  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-  .col{display:flex;flex-direction:column;gap:8px}
-  input, select, button, textarea{background:var(--panel);color:var(--text);border:1px solid rgba(255,255,255,.15);border-radius:10px;padding:8px 10px}
-  input, select{height:36px}
-  textarea{width:100%;min-height:80px;resize:vertical}
-  button.primary{background:linear-gradient(135deg,#60a5fa,#a78bfa);border:none;font-weight:700}
-  .messages{padding:10px 12px;max-height:58vh;overflow:auto}
-  .msg{padding:10px;border:1px solid var(--border);border-radius:10px;margin:8px 0}
-  .user{background:rgba(59,130,246,.08)}
-  .bot{background:rgba(168,85,247,.08)}
-  small{color:var(--muted)}
-  pre{white-space:pre-wrap}
-  .log{padding:10px 12px;height:200px;overflow:auto;font-family:ui-monospace, Menlo, Consolas, monospace;font-size:12px;background:#071023;border-top:1px solid var(--border)}
-  a{color:#93c5fd;text-decoration:none}
-  .pill{font-size:12px;background:rgba(255,255,255,.07);padding:2px 6px;border-radius:999px;border:1px solid var(--border)}
-  .sources{font-size:13px;color:#c7d2fe;margin-top:6px}
-  .k{font-family:ui-monospace, Menlo, Consolas, monospace; font-size:12px; color:#cbd5e1}
-  table{width:100%;border-collapse:collapse}
-  th,td{border-bottom:1px solid var(--border);padding:6px 8px;vertical-align:top}
-  #drop{border:2px dashed var(--border); border-radius:12px; padding:16px; text-align:center; transition: all .15s ease}
-  #drop.active{border-color:var(--accent); background:rgba(96,165,250,.08)}
-  .files{max-height:20vh; overflow:auto; border:1px solid var(--border); border-radius:10px; padding:8px}
-  .file-row{display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 0; border-bottom:1px dashed var(--border)}
-  .file-row:last-child{border-bottom:none}
-  .danger{background:#ef44441a;border-color:#ef4444}
-</style>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Friday – Browser Chat</title>
+  <link rel="icon" href="/static/favicon.ico">
+  <style>
+    :root{--bg:#0b0f14;--panel:#101820;--text:#e8eef2;--muted:#8aa1b1;--accent:#41d1ff}
+    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,Segoe UI,Roboto,Inter}
+    .wrap{max-width:900px;margin:32px auto;padding:0 16px}
+    .panel{background:var(--panel);border:1px solid #1c2a36;border-radius:14px;padding:18px}
+    h1{margin:0 0 14px;font-size:26px}
+    label{display:block;margin:10px 0 6px;color:var(--muted)}
+    input,textarea{width:100%;background:#0f151c;border:1px solid #243443;border-radius:10px;color:var(--text);padding:12px;outline:none}
+    textarea{min-height:120px;resize:vertical}
+    .row{display:flex;gap:8px;margin-top:10px}
+    button{border:0;border-radius:10px;padding:10px 14px;font-weight:600;cursor:pointer}
+    .primary{background:var(--accent);color:#062b3a}
+    .ghost{background:#15202b;color:var(--text)}
+    pre{background:#0b1218;border:1px solid #1c2a36;border-radius:10px;padding:14px;overflow:auto}
+    nav{display:flex;justify-content:flex-end;margin-bottom:10px}
+    nav a{color:var(--muted);text-decoration:none;margin-left:12px}
+    nav a:hover{color:var(--text)}
+  </style>
 </head>
 <body>
-<header>
-  <div class="title">Friday</div>
-  <div class="pill" id="modelPill">model: …</div>
-  <div class="pill" id="presetPill">preset: …</div>
-  <div class="pill" id="projectPill">project: default</div>
-  <div class="pill" id="rlPill">rate: …</div>
-  <div style="margin-left:auto;display:flex;gap:10px">
-    <a href="/routes" target="_blank">Routes</a>
-  </div>
-</header>
+  <div class="wrap">
+    <nav><a href="/">Home</a><a href="/docs">Docs</a></nav>
+    <div class="panel">
+      <h1>Friday – Browser Chat</h1>
 
-<main>
-  <!-- Chat -->
-  <div class="card">
-    <div class="section col">
+      <label>API Token</label>
       <div class="row">
-        <input id="username" placeholder="username" value="guest" style="width:180px">
-        <input id="project" placeholder="project" value="default" style="width:160px" title="namespace your docs/chats">
-        <select id="model" style="width:200px"></select>
-        <select id="preset" style="width:180px"></select>
-        <label class="row" style="gap:6px"><input type="checkbox" id="useStream" checked> Stream</label>
-        <label class="row" style="gap:6px"><input type="checkbox" id="useMemory" checked> Use memory</label>
-        <button id="btnClear" class="pill" title="clear history">Clear</button>
+        <input id="tok" type="password" placeholder="Paste your API token…">
+        <button class="ghost" id="save">Save</button>
       </div>
-      <textarea id="input" placeholder="Ask anything… include preferences, I’ll remember."></textarea>
+      <small>Stored in <code>localStorage</code> (dev only)</small>
+
+      <label style="margin-top:16px">Message</label>
+      <textarea id="msg" placeholder="Say hi to Friday…"></textarea>
       <div class="row">
-        <button id="send" class="primary">Send</button>
-        <small id="hint">Tip: toggle “Use memory” to compare answers with/without LTM.</small>
+        <button class="primary" id="send">Send</button>
+        <button class="ghost" id="clear">Clear</button>
       </div>
-    </div>
-    <div class="messages" id="messages"></div>
-    <div class="log" id="log"></div>
-  </div>
 
-  <!-- Right column: RAG + Memory -->
-  <div class="col" style="gap:16px">
-    <!-- RAG card (unchanged) -->
-    <div class="card">
-      <div class="section col">
-        <div class="row" style="justify-content:space-between">
-          <strong>Documents (RAG)</strong>
-          <div class="row">
-            <button id="btnList" class="pill">List</button>
-            <button id="btnExport" class="pill">Export CSV</button>
-            <button id="btnClearRag" class="pill danger" title="remove all vectors">Clear All</button>
-          </div>
-        </div>
-
-        <div id="drop">
-          <div class="k">Drag & drop (.txt .md .csv .pdf .docx) or</div>
-          <input id="fileInput" type="file" multiple>
-          <div style="margin-top:6px"><button id="btnUpload">Upload & Index</button></div>
-          <div class="k" id="uploadStatus" style="margin-top:6px"></div>
-        </div>
-
-        <div class="col" style="gap:6px;border:1px dashed var(--border);padding:10px;border-radius:10px;margin-top:10px">
-          <div class="k">Paste text</div>
-          <input id="pasteFilename" placeholder="filename (optional)" style="width:60%">
-          <textarea id="pasteText" placeholder="Paste raw text to index…"></textarea>
-          <button id="btnIndexText">Index Pasted Text</button>
-        </div>
-
-        <div class="row" style="margin-top:6px">
-          <input id="ragQuery" placeholder="RAG search query…" style="flex:1">
-          <input id="ragK" type="number" min="1" max="10" value="4" style="width:80px">
-          <button id="btnRagSearch" class="primary">Search</button>
-        </div>
-
-        <div style="margin-top:10px">
-          <div class="k" style="margin:6px 0">Indexed Files</div>
-          <div class="files" id="files"></div>
-        </div>
-
-        <div class="k" style="margin-top:10px">Results</div>
-        <div id="ragResult" style="max-height:40vh;overflow:auto"></div>
-      </div>
-    </div>
-
-    <!-- Memory card -->
-    <div class="card">
-      <div class="section col">
-        <div class="row" style="justify-content:space-between;align-items:center">
-          <strong>Long-Term Memory</strong>
-          <div class="row">
-            <button id="btnMemLoad" class="pill">Load</button>
-            <button id="btnMemSave" class="pill">Save</button>
-            <button id="btnMemClear" class="pill danger">Clear</button>
-          </div>
-        </div>
-
-        <div class="col">
-          <div class="k">Profile</div>
-          <textarea id="memProfile" placeholder="who you are, preferences, constraints"></textarea>
-        </div>
-
-        <div class="col">
-          <div class="k">Goals (one per line)</div>
-          <textarea id="memGoals" placeholder="goal 1\ngoal 2"></textarea>
-        </div>
-
-        <div class="col">
-          <div class="k">Facts (one per line)</div>
-          <textarea id="memFacts" placeholder="prefers morning workouts\nuses Windows & PowerShell"></textarea>
-        </div>
-
-        <div class="col">
-          <div class="k">Glossary (key: value)</div>
-          <textarea id="memGloss" placeholder="FRIDAY: Your assistant\nAAR: After Action Review"></textarea>
-        </div>
-
-        <div class="row" style="justify-content:space-between;align-items:center">
-          <button id="btnMemExtract" class="pill">Extract from Recent Chat</button>
-          <small class="k">Saved per username + project</small>
-        </div>
-      </div>
+      <label style="margin-top:16px">Reply</label>
+      <pre id="out">{ "ok":false, "reply":"" }</pre>
     </div>
   </div>
-</main>
 
-<script>
-const $ = s => document.querySelector(s);
-const log = (...a) => { const l=$("#log"); l.textContent += a.map(x=>typeof x==="string"?x:JSON.stringify(x)).join(" ")+"\n"; l.scrollTop=l.scrollHeight; };
-const escapeHTML = s => (s||"").replace(/[&<>"']/g, m=>({"&":"&amp;","<":"&lt;","</": "&lt;/",">":"&gt;","\"":"&quot;","'":"&#039;"}[m]||m));
+  <script>
+    const tokEl = document.getElementById('tok');
+    const msgEl = document.getElementById('msg');
+    const outEl = document.getElementById('out');
 
-function addMsg(role, text, citations){
-  const wrap = document.createElement("div");
-  wrap.className = "msg "+(role==="user"?"user":"bot");
-  let html = `<small>${role}</small><pre>${escapeHTML(text)}</pre>`;
-  if (role!=="user" && citations && citations.length){
-    const items = citations.map((c,i)=>{
-      const meta = c.meta || {};
-      const fn = meta.filename || c.id || `src-${i+1}`;
-      const pg = meta.page ? ` (p.${meta.page})` : "";
-      return `<div>${i+1}. ${escapeHTML(fn)}${pg}</div>`;
-    }).join("");
-    html += `<div class="sources"><strong>Sources</strong>${items}</div>`;
-  }
-  wrap.innerHTML = html;
-  $("#messages").appendChild(wrap);
-  $("#messages").scrollTop = $("#messages").scrollHeight;
-}
+    // restore saved token
+    tokEl.value = localStorage.getItem('FRIDAY_TOKEN') || '';
 
-function getUser(){ return ($("#username").value||"guest").trim() || "guest"; }
-function getProj(){ return ($("#project").value||"default").trim() || "default"; }
-function updateProjectPill(){ $("#projectPill").textContent = "project: " + getProj(); }
+    document.getElementById('save').onclick = () => {
+      localStorage.setItem('FRIDAY_TOKEN', tokEl.value || '');
+      alert('Token saved for this browser.');
+    };
 
-async function loadModels(){
-  const u=getUser();
-  const r = await fetch(`/api/models?username=${encodeURIComponent(u)}`); const j = await r.json();
-  $("#modelPill").textContent = "model: "+(j.active||"gpt-4o-mini");
-  const sel = $("#model"); sel.innerHTML = "";
-  (j.available||["gpt-4o-mini"]).forEach(m=>{
-    const o=document.createElement("option"); o.value=m; o.textContent=m; if(m===j.active) o.selected=true; sel.appendChild(o);
-  });
-}
-async function saveModel(){
-  const u=getUser(), m=$("#model").value;
-  await fetch("/api/model",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u, model:m})});
-  $("#modelPill").textContent = "model: "+m;
-}
-async function loadPresets(){
-  const u=getUser();
-  const r = await fetch(`/api/presets?username=${encodeURIComponent(u)}`); const j = await r.json();
-  $("#presetPill").textContent = "preset: "+j.active;
-  const sel=$("#preset"); sel.innerHTML="";
-  (j.presets||["concise"]).forEach(p=>{
-    const o=document.createElement("option"); o.value=p; o.textContent=p; if(p===j.active) o.selected=true; sel.appendChild(o);
-  });
-}
-async function savePreset(){
-  const u=getUser(), p=$("#preset").value;
-  await fetch("/api/presets",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u, preset:p})});
-  $("#presetPill").textContent = "preset: "+p;
-}
-async function loadRate(){
-  const r = await fetch("/api/metrics"); const j = await r.json();
-  const rl = j.rate_limit||{}; $("#rlPill").textContent = `rate: ${rl.remaining ?? "?"} left — ${j.backend||"redis"}`;
-}
+    document.getElementById('clear').onclick = () => { msgEl.value=''; outEl.textContent=''; };
 
-$("#model").addEventListener("change", saveModel);
-$("#preset").addEventListener("change", savePreset);
-$("#project").addEventListener("input", updateProjectPill);
+    document.getElementById('send').onclick = async () => {
+      const token = tokEl.value.trim();
+      const message = msgEl.value.trim() || 'Hello Friday!';
+      if (!token) { alert('Add your API token first.'); return; }
 
-$("#btnClear").onclick = async ()=>{
-  const u=getUser(), p=getProj();
-  const r = await fetch("/api/history/clear",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u, project:p})});
-  const j = await r.json(); addMsg("bot", `cleared: ${j.cleared}`);
-};
-
-async function send(){
-  const q = $("#input").value.trim(); if(!q) return;
-  const u = getUser(); const p = getProj();
-  const model = $("#model").value; const preset = $("#preset").value;
-  const useMemory = $("#useMemory").checked;
-
-  addMsg("user", q);
-  $("#input").value="";
-  $("#log").textContent = "";
-
-  if($("#useStream").checked){
-    const url = `/api/chat/stream_tools?message=${encodeURIComponent(q)}&username=${encodeURIComponent(u)}&project=${encodeURIComponent(p)}&model=${encodeURIComponent(model)}&preset=${encodeURIComponent(preset)}&use_memory=${useMemory}`;
-    const es = new EventSource(url);
-    let bot = document.createElement("div");
-    bot.className="msg bot"; bot.innerHTML="<small>assistant</small><pre></pre>";
-    $("#messages").appendChild(bot);
-    const pre = bot.querySelector("pre");
-    let finalCites = [];
-
-    es.onmessage = (e)=>{
-      if(!e.data) return;
-      let m={}; try{ m=JSON.parse(e.data);}catch(_){}
-      if(m.type==="tool_event"){ log(`→ tool: ${m.tool}`, m.args || {}, m.result || {}); }
-      else if(m.type==="delta"){ pre.textContent += (m.delta || ""); }
-      else if(m.type==="citations"){ finalCites = m.citations || []; }
-      else if(m.type==="usage"){ log("usage", m.usage || {}); }
-      else if(m.type==="done"){
-        es.close(); loadRate();
-        if(finalCites.length){
-          const src = document.createElement("div");
-          src.className="sources";
-          src.innerHTML = "<strong>Sources</strong>" + finalCites.map((c,i)=>{
-            const meta = c.meta || {};
-            const fn = meta.filename || c.id || `src-${i+1}`;
-            const pg = meta.page ? ` (p.${meta.page})` : "";
-            return `<div>${i+1}. ${escapeHTML(fn)}${pg}</div>`;
-          }).join("");
-          bot.appendChild(src);
-        }
+      outEl.textContent = '…sending';
+      try {
+        const res = await fetch('/chat', {
+          method: 'POST',
+          headers: {
+            'Authorization': 'Bearer ' + token,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ message })
+        });
+        const data = await res.json().catch(() => ({}));
+        outEl.textContent = JSON.stringify(data, null, 2);
+      } catch (e) {
+        outEl.textContent = JSON.stringify({ ok:false, error: String(e) }, null, 2);
       }
     };
-    es.onerror = ()=>{ es.close(); log("stream error"); };
-  } else {
-    const r = await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({message:q, username:u, project:p, model, preset, use_memory: useMemory})});
-    const j = await r.json();
-    addMsg("bot", j.reply || j.error || "(no reply)", j.citations || []);
-    if(j.traces){ j.traces.forEach(t=> log(`→ tool: ${t.tool}`, t.args||{}, t.result||{})); }
-    loadRate();
-  }
-}
-
-$("#send").onclick = send;
-$("#input").addEventListener("keydown", (e)=>{ if(e.key==="Enter" && (e.ctrlKey||e.metaKey)){ send(); } });
-
-// ---------- RAG UI ----------
-const drop = $("#drop");
-drop.addEventListener("dragover", (e)=>{ e.preventDefault(); drop.classList.add("active"); });
-drop.addEventListener("dragleave", ()=> drop.classList.remove("active"));
-drop.addEventListener("drop", async (e)=>{
-  e.preventDefault(); drop.classList.remove("active");
-  if(!e.dataTransfer || !e.dataTransfer.files?.length) return;
-  await doUpload(e.dataTransfer.files);
-});
-$("#btnUpload").onclick = async ()=>{ await doUpload($("#fileInput").files); };
-
-async function doUpload(fileList){
-  const u=getUser(), p=getProj();
-  if(!fileList || !fileList.length){ alert("Pick at least one file"); return; }
-  const fd = new FormData(); fd.append("username", u); fd.append("project", p);
-  for(const f of fileList) fd.append("files", f, f.name);
-  $("#uploadStatus").textContent = "Uploading…";
-  const r = await fetch("/api/rag/upload",{method:"POST", body: fd});
-  const j = await r.json();
-  $("#uploadStatus").textContent = j.ok ? `Indexed ${j.added} chunks across ${j.files?.length||0} files (${j.backend}).` : (j.error || "upload failed");
-  await refreshFiles();
-}
-$("#btnIndexText").onclick = async ()=>{
-  const u=getUser(), p=getProj();
-  const fn= $("#pasteFilename").value.trim() || "";
-  const tx= $("#pasteText").value.trim();
-  if(!tx){ alert("Paste some text first"); return; }
-  const r = await fetch("/api/rag/index_text",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u, project:p, filename: fn||undefined, text: tx})});
-  const j = await r.json();
-  $("#ragResult").textContent = j.ok ? `Indexed ${j.added} chunks from ${j.filename}` : (j.error || "index failed");
-  await refreshFiles();
-};
-$("#btnRagSearch").onclick = async ()=>{
-  const u=getUser(), p=getProj();
-  const q=$("#ragQuery").value.trim(); const k= $("#ragK").value || 4;
-  if(!q){ alert("Type a query"); return; }
-  const r = await fetch(`/api/rag/search?username=${encodeURIComponent(u)}&project=${encodeURIComponent(p)}&query=${encodeURIComponent(q)}&k=${encodeURIComponent(k)}`);
-  renderMatches(await r.json());
-};
-$("#btnList").onclick = async ()=>{ await listDocs(); };
-async function listDocs(){
-  const u=getUser(), p=getProj();
-  const r = await fetch(`/api/rag/list?username=${encodeURIComponent(u)}&project=${encodeURIComponent(p)}&limit=50`);
-  renderList(await r.json());
-}
-$("#btnExport").onclick = ()=>{
-  const u=getUser(), p=getProj();
-  window.location = `/api/rag/export_csv?username=${encodeURIComponent(u)}&project=${encodeURIComponent(p)}`;
-};
-$("#btnClearRag").onclick = async ()=>{
-  const u=getUser(), p=getProj();
-  const r = await fetch("/api/rag/clear",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u, project:p})});
-  const j = await r.json();
-  $("#ragResult").textContent = j.cleared ? "Vectors cleared." : "Nothing to clear.";
-  await refreshFiles();
-};
-
-function fmtWhen(ts){ try{ return new Date(ts*1000).toLocaleString(); }catch(_){ return "" } }
-function renderFiles(list){
-  const box=$("#files"); box.innerHTML="";
-  if(!list || !list.files || !list.files.length){ box.textContent="(no files yet)"; return; }
-  list.files.forEach(meta=>{
-    const row=document.createElement("div"); row.className="file-row";
-    const left=document.createElement("div");
-    left.innerHTML = `<div><strong>${escapeHTML(meta.filename||"")}</strong></div><div class="k">${escapeHTML(meta.file_id||"")} • ${meta.chunks||0} chunks • ${fmtWhen(meta.ts||0)}</div>`;
-    const del=document.createElement("button"); del.className="pill danger"; del.textContent="Delete";
-    del.onclick = async ()=>{
-      const u=getUser(), p=getProj();
-      del.disabled=true; del.textContent="Deleting…";
-      const r = await fetch("/api/rag/delete_file",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u, project:p, file_id: meta.file_id})});
-      const j = await r.json();
-      await refreshFiles();
-      $("#ragResult").textContent = j.ok ? `Removed ${j.removed||0} chunks.` : (j.error||"delete failed");
-    };
-    row.appendChild(left); row.appendChild(del);
-    box.appendChild(row);
-  });
-}
-function renderList(list){
-  const div=$("#ragResult"); div.innerHTML="";
-  if(!list || !list.sample){ div.textContent="(no docs)"; return; }
-  const head = document.createElement("div");
-  head.className="k"; head.textContent = `Total chunks: ${list.total} (showing last ${list.sample.length})`;
-  div.appendChild(head);
-  const table = document.createElement("table");
-  table.innerHTML = `<thead><tr><th>#</th><th>File</th><th>Page</th><th>Chunk</th><th>Text</th></tr></thead><tbody></tbody>`;
-  const tb = table.querySelector("tbody");
-  list.sample.forEach((r,i)=>{
-    const fn=(r.metadata && (r.metadata.filename||""))||"";
-    const pg=(r.metadata && (r.metadata.page??""))||"";
-    const ck=(r.metadata && (r.metadata.chunk??""))||"";
-    const tr=document.createElement("tr");
-    tr.innerHTML = `<td>${i+1}</td><td>${escapeHTML(fn)}</td><td>${pg||""}</td><td>${ck}</td><td>${escapeHTML((r.text||"").slice(0,240).replace(/\n/g," "))}</td>`;
-    tb.appendChild(tr);
-  });
-  div.appendChild(table);
-}
-function renderMatches(res){
-  const div=$("#ragResult"); div.innerHTML="";
-  if(!res || !res.matches || !res.matches.length){ div.textContent="(no matches)"; return; }
-  const head = document.createElement("div");
-  head.className="k"; head.textContent = `Top ${res.matches.length} ${res.backend?`via ${res.backend}`:""}`;
-  div.appendChild(head);
-  const table = document.createElement("table");
-  table.innerHTML = `<thead><tr><th>Score</th><th>File</th><th>Page</th><th>Chunk</th><th>Snippet</th></tr></thead><tbody></tbody>`;
-  const tb = table.querySelector("tbody");
-  res.matches.forEach(m=>{
-    const fn=(m.metadata && (m.metadata.filename||""))||"";
-    const ck=(m.metadata && (m.metadata.chunk??""))||"";
-    const pg=(m.metadata && (m.metadata.page??""))||"";
-    const snip=(m.text||"").slice(0,240).replace(/\n/g," ");
-    const tr=document.createElement("tr");
-    tr.innerHTML = `<td>${m.score ?? ""}</td><td>${escapeHTML(fn)}</td><td>${pg||""}</td><td>${ck}</td><td>${escapeHTML(snip)}</td>`;
-    tb.appendChild(tr);
-  });
-  div.appendChild(table);
-}
-async function refreshFiles(){
-  const u=getUser(), p=getProj();
-  const r = await fetch(`/api/rag/files?username=${encodeURIComponent(u)}&project=${encodeURIComponent(p)}`);
-  renderFiles(await r.json());
-}
-
-// ---------- MEMORY UI ----------
-$("#btnMemLoad").onclick = async ()=>{ await memLoad(); };
-$("#btnMemSave").onclick = async ()=>{ await memSave(); };
-$("#btnMemClear").onclick = async ()=>{ await memClear(); };
-$("#btnMemExtract").onclick = async ()=>{ await memExtract(); };
-
-async function memLoad(){
-  const u=getUser(), p=getProj();
-  const r = await fetch(`/api/memory?username=${encodeURIComponent(u)}&project=${encodeURIComponent(p)}`);
-  const j = await r.json();
-  const m = (j.memory)||{};
-  $("#memProfile").value = m.profile || "";
-  $("#memGoals").value   = (m.goals||[]).join("\n");
-  $("#memFacts").value   = (m.facts||[]).join("\n");
-  $("#memGloss").value   = Object.entries(m.glossary||{}).map(([k,v])=>`${k}: ${v}`).join("\n");
-}
-async function memSave(){
-  const u=getUser(), p=getProj();
-  const profile = $("#memProfile").value.trim();
-  const goals   = $("#memGoals").value.split("\n").map(s=>s.trim()).filter(Boolean);
-  const facts   = $("#memFacts").value.split("\n").map(s=>s.trim()).filter(Boolean);
-  const gloss   = {};
-  $("#memGloss").value.split("\n").forEach(line=>{
-    const i=line.indexOf(":"); if(i>0){ const k=line.slice(0,i).trim(); const v=line.slice(i+1).trim(); if(k) gloss[k]=v; }
-  });
-  const r = await fetch("/api/memory/upsert",{method:"POST",headers:{"Content-Type":"application/json"},
-              body: JSON.stringify({username:u, project:p, profile, goals, facts, glossary: gloss})});
-  const j = await r.json(); log("memory saved", j.ok);
-}
-async function memClear(){
-  const u=getUser(), p=getProj();
-  const r = await fetch("/api/memory/clear",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u, project:p})});
-  await r.json(); await memLoad(); log("memory cleared");
-}
-async function memExtract(){
-  const u=getUser(), p=getProj();
-  const r = await fetch("/api/memory/extract",{method:"POST",headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:u, project:p})});
-  const j = await r.json(); if(j.ok){ await memLoad(); } log("extract", j);
-}
-
-// boot
-(function init(){
-  updateProjectPill();
-  Promise.all([loadModels(), loadPresets(), loadRate(), refreshFiles(), memLoad()]);
-})();
-</script>
+  </script>
 </body>
 </html>
+
 
 
 
