@@ -11,5 +11,17 @@
   <p>If you can see this, the backend is deployed successfully.</p>
   <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
+  <!-- somewhere inside your landing card -->
+<div class="row">
+  <a class="btn" href="{{ url_for('friday_ui') }}">Open Chat UI</a>
+  <a class="btn secondary" href="{{ url_for('routes') }}">/routes</a>
+  <a class="btn secondary" href="{{ url_for('health') }}">/health</a>
+</div>
+<style>
+  .row{display:flex;gap:10px;flex-wrap:wrap}
+  .btn{background:#3b82f6;color:#fff;text-decoration:none;padding:10px 14px;border-radius:8px;display:inline-block}
+  .btn.secondary{background:#223046}
+  a.btn:hover{opacity:.95}
+</style>
 </html>
 
