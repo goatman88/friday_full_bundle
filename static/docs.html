@@ -1,23 +1,39 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>Friday Docs</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 2rem; background: #111; color: #eee; }
-        h1 { color: #0ff; }
-        a { color: #0ff; text-decoration: none; }
-        a:hover { text-decoration: underline; }
-    </style>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Friday Docs</title>
+  <link rel="icon" href="/static/favicon.ico">
+  <style>
+    body{margin:0;background:#0b0f14;color:#e8eef2;font:16px/1.6 system-ui,Segoe UI,Roboto,Inter}
+    .wrap{max-width:900px;margin:36px auto;padding:0 16px}
+    a{color:#41d1ff;text-decoration:none} a:hover{text-decoration:underline}
+    .card{background:#101820;border:1px solid #1c2a36;border-radius:12px;padding:18px}
+    nav{display:flex;justify-content:flex-end;margin-bottom:10px}
+    nav a{color:#8aa1b1;margin-left:12px}
+    h1{margin:0 0 12px}
+    code{background:#0b1218;border:1px solid #1c2a36;border-radius:6px;padding:2px 6px}
+  </style>
 </head>
 <body>
-    <h1>📘 Friday Docs</h1>
-    <p>Welcome to Friday’s documentation hub. Quick links:</p>
-    <ul>
-        <li><a href="/">🏠 Home</a></li>
-        <li><a href="/ui">💬 Chat UI</a></li>
-        <li><a href="/docs">📘 Docs</a></li>
-    </ul>
-    <p>Here you’ll eventually find setup notes, API usage, and examples.</p>
+  <div class="wrap">
+    <nav><a href="/">Home</a><a href="/ui">Chat</a></nav>
+    <div class="card">
+      <h1>📘 Friday Docs</h1>
+      <p>Quick references for the running backend.</p>
+      <ul>
+        <li>Health: <code>/health</code></li>
+        <li>Routes: <code>/__routes</code> (GET)</li>
+        <li>Chat: <code>/chat</code> (POST, JSON: <code>{"message":"..."}</code>)</li>
+      </ul>
+      <p>PowerShell quick test:</p>
+      <pre><code>$headers = @{ Authorization = "Bearer YOUR_TOKEN"; "Content-Type"="application/json" }
+$body = @{ message = "Hello Friday!" } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri "$env:FRIDAY_BASE/chat" -Headers $headers -Body $body</code></pre>
+      <p>Browser chat lives at <a href="/ui">/ui</a>.</p>
+    </div>
+  </div>
 </body>
 </html>
+
