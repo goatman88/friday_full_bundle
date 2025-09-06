@@ -1,202 +1,82 @@
 <!doctype html>
-<html lang="en">
+<html>
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Friday • Chat + Upload</title>
+  <title>Friday Chat</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
-    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }
-    body { margin: 0; background:#0f172a; color:#e5e7eb; }
-    header { padding:16px 20px; border-bottom:1px solid #1f2937; display:flex; gap:12px; align-items:center;}
-    header h1 { margin:0; font-size:18px; font-weight:600;}
-    main { max-width:900px; margin:24px auto; padding:0 16px; }
-    .row { display:flex; gap:16px; flex-wrap:wrap; }
-    .card { background:#111827; border:1px solid #1f2937; border-radius:12px; padding:16px; flex:1; min-width:280px; }
-    label { display:block; margin:10px 0 6px; font-size:13px; color:#9ca3af; }
-    input[type="text"], textarea {
-      width:100%; background:#0b1220; color:#e5e7eb; border:1px solid #24324a;
-      border-radius:10px; padding:10px 12px; outline:none;
-    }
-    textarea { height:120px; resize:vertical; }
-    input[type="file"] { width:100%; }
-    button {
-      background:#2563eb; color:white; border:0; border-radius:10px; padding:10px 14px;
-      font-weight:600; cursor:pointer;
-    }
-    button:disabled { opacity:.6; cursor:not-allowed; }
-    .muted { color:#9ca3af; font-size:12px; }
-    .mono { font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; white-space:pre-wrap; }
-    .ok { color:#34d399; }
-    .bad { color:#f87171; }
-    .row > .card.small { max-width:320px; }
+    body{font-family:system-ui,Arial,sans-serif;max-width:840px;margin:40px auto;padding:0 16px}
+    textarea,input,button{font-size:16px}
+    pre{background:#111;color:#0f0;padding:12px;white-space:pre-wrap}
+    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
   </style>
 </head>
 <body>
-  <header>
-    <h1>Friday — Chat + File Upload</h1>
-    <span class="muted">Calls <span class="mono">/data/upload</span> then <span class="mono">/chat</span></span>
-  </header>
+  <h1>Friday Chat</h1>
 
-  <main>
-    <div class="row">
-      <div class="card small">
-        <label>API Token (stored locally)</label>
-        <input id="token" type="text" placeholder="paste Bearer token once…" />
-        <div class="muted" style="margin-top:6px;">
-          Tip: you can rotate this any time on the server; just paste the new one here.
-        </div>
-        <div style="margin-top:10px; display:flex; gap:8px;">
-          <button id="saveTokenBtn">Save token</button>
-          <button id="clearTokenBtn" style="background:#334155;">Clear</button>
-        </div>
+  <div class="row">
+    <label>API token:
+      <input id="token" placeholder="your token" style="width:360px" />
+    </label>
+    <button id="save">Save</button>
+  </div>
 
-        <hr style="border:0;border-top:1px solid #1f2937; margin:16px 0;">
-        <label>Health check</label>
-        <button id="healthBtn" style="background:#059669;">GET /health</button>
-        <button id="routesBtn" style="background:#6b7280;">GET /__routes</button>
-        <div id="healthOut" class="mono muted" style="margin-top:8px;"></div>
-      </div>
+  <h3>Send a chat message</h3>
+  <textarea id="msg" rows="3" style="width:100%;" placeholder="Hello Friday!"></textarea><br/>
+  <button id="send">Send</button>
 
-      <div class="card" style="flex:2">
-        <label>Your message</label>
-        <textarea id="message" placeholder="e.g., Summarize the PDF I just uploaded."></textarea>
+  <h3>Upload a file</h3>
+  <div class="row">
+    <input type="file" id="file" />
+    <input type="text" id="notes" placeholder="notes (optional)" />
+    <button id="upload">Upload</button>
+  </div>
 
-        <div class="row" style="margin-top:10px;">
-          <div style="flex:2; min-width:260px;">
-            <label>Choose file (PDF or TXT)</label>
-            <input id="file" type="file" />
-            <div class="muted">Optional note sent with the upload:</div>
-            <input id="notes" type="text" placeholder="notes for the upload (optional)" />
-          </div>
-          <div style="display:flex; align-items:flex-end;">
-            <button id="sendBtn">Upload & Chat</button>
-          </div>
-        </div>
+  <h3>Output</h3>
+  <pre id="out"></pre>
 
-        <div id="status" class="mono muted" style="margin-top:14px;"></div>
-      </div>
-    </div>
+<script>
+const out = document.getElementById('out');
+const tokenInput = document.getElementById('token');
+tokenInput.value = localStorage.getItem('API_TOKEN') || '';
 
-    <div class="card" style="margin-top:16px;">
-      <div class="muted">Friday’s reply</div>
-      <div id="reply" class="mono" style="margin-top:8px;"></div>
-    </div>
-  </main>
+document.getElementById('save').onclick = () => {
+  localStorage.setItem('API_TOKEN', tokenInput.value.trim());
+  out.textContent = "Saved.";
+};
 
-  <script>
-    // ---------- helpers ----------
-    const $ = (id) => document.getElementById(id);
-    const base = ""; // same-origin calls (page served by your Flask app)
-    const tokenKey = "friday_api_token";
+document.getElementById('send').onclick = async () => {
+  const token = tokenInput.value.trim();
+  const msg = document.getElementById('msg').value || "Hello Friday!";
+  out.textContent = "Sending...";
+  const r = await fetch('/chat', {
+    method: 'POST',
+    headers: {'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+    body: JSON.stringify({ message: msg })
+  });
+  out.textContent = await r.text();
+};
 
-    function getToken() { return localStorage.getItem(tokenKey) || ""; }
-    function setToken(v) { localStorage.setItem(tokenKey, v || ""); }
-    function authHeaders() {
-      const t = getToken();
-      return t ? { "Authorization": "Bearer " + t } : {};
-    }
-    async function getJSON(path) {
-      const res = await fetch(base + path, { headers: { ...authHeaders() }});
-      const body = await res.text();
-      return { status: res.status, text: body };
-    }
-    async function postJSON(path, data) {
-      const res = await fetch(base + path, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders() },
-        body: JSON.stringify(data || {})
-      });
-      const body = await res.text();
-      return { status: res.status, text: body };
-    }
-    async function uploadFile(file, notes) {
-      const fd = new FormData();
-      if (file) fd.append("file", file, file.name);
-      if (notes) fd.append("notes", notes);
-      const res = await fetch(base + "/data/upload", {
-        method: "POST",
-        headers: { ...authHeaders() },
-        body: fd
-      });
-      const body = await res.text();
-      return { status: res.status, text: body };
-    }
-    function showStatus(msg, good=false) {
-      $("status").textContent = msg || "";
-      $("status").className = "mono " + (good ? "ok" : "bad");
-    }
-
-    // ---------- UI wiring ----------
-    // hydrate token field
-    $("token").value = getToken();
-
-    $("saveTokenBtn").onclick = () => {
-      setToken($("token").value.trim());
-      showStatus("Saved token locally.", true);
-    };
-    $("clearTokenBtn").onclick = () => {
-      setToken("");
-      $("token").value = "";
-      showStatus("Cleared token from this browser.");
-    };
-
-    $("healthBtn").onclick = async () => {
-      $("healthOut").textContent = "Checking /health…";
-      const { status, text } = await getJSON("/health");
-      $("healthOut").textContent = `Status ${status}\n${text}`;
-    };
-    $("routesBtn").onclick = async () => {
-      $("healthOut").textContent = "Loading /__routes…";
-      const { status, text } = await getJSON("/__routes");
-      $("healthOut").textContent = `Status ${status}\n${text}`;
-    };
-
-    $("sendBtn").onclick = async () => {
-      $("reply").textContent = "";
-      const token = $("token").value.trim();
-      if (!token) { showStatus("Paste API token first.", false); return; }
-      setToken(token);
-
-      const msg = $("message").value.trim() || "Summarize the PDF I just uploaded.";
-      const file = $("file").files[0] || null;
-      const notes = $("notes").value.trim();
-
-      $("sendBtn").disabled = true;
-      showStatus("Starting…");
-
-      try {
-        // 1) Upload if a file is selected
-        if (file) {
-          showStatus("Uploading file…");
-          const up = await uploadFile(file, notes);
-          if (up.status < 200 || up.status >= 300) {
-            showStatus(`Upload failed. Status ${up.status}\n${up.text}`, false);
-            $("sendBtn").disabled = false;
-            return;
-          }
-          showStatus(`Upload OK (${up.status}).`);
-        } else {
-          showStatus("No file chosen — skipping upload.", true);
-        }
-
-        // 2) Chat
-        showStatus("Talking to Friday…");
-        const chat = await postJSON("/chat", { message: msg });
-        if (chat.status < 200 || chat.status >= 300) {
-          showStatus(`Chat failed. Status ${chat.status}\n${chat.text}`, false);
-        } else {
-          showStatus("Chat OK.", true);
-          $("reply").textContent = chat.text;
-        }
-      } catch (err) {
-        showStatus("Error: " + (err?.message || err), false);
-      } finally {
-        $("sendBtn").disabled = false;
-      }
-    };
-  </script>
+document.getElementById('upload').onclick = async () => {
+  const token = tokenInput.value.trim();
+  const file = document.getElementById('file').files[0];
+  const notes = document.getElementById('notes').value || '';
+  if (!file) { out.textContent = "Pick a file first."; return; }
+  out.textContent = "Uploading...";
+  const fd = new FormData();
+  fd.append('file', file, file.name);
+  fd.append('notes', notes);
+  const r = await fetch('/data/upload', {
+    method: 'POST',
+    headers: {'Authorization':'Bearer '+token},
+    body: fd
+  });
+  out.textContent = await r.text();
+};
+</script>
 </body>
 </html>
+
 
 
 
