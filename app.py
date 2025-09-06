@@ -158,11 +158,34 @@ def favicon():
         return send_from_directory(path, "favicon.ico")
     abort(404)
 
-from flask import send_from_directory
+# app.py
+from flask import Flask, jsonify, request
 
-@app.route("/ui")
-def ui():
+app = Flask(__name__, static_folder="static", static_url_path="/static")
+
+@app.get("/health")
+def health():
+    return jsonify({"ok": True, "status": "running", "key_present": True})
+
+@app.get("/")
+def index_page():
+    # Serve your landing page (static file)
+    return app.send_static_file("index.html")
+
+@app.get("/ui")
+def chat_ui():
+    # Serve the browser chat UI (renamed to ui.html)
     return app.send_static_file("ui.html")
+
+@app.post("/chat")
+def chat_api():
+    data = request.get_json(silent=True) or {}
+    msg = (data.get("message") or "").strip()
+    if not msg:
+        return jsonify({"ok": False, "error": "message required"}), 400
+    # echo-style reply (your real logic can replace this)
+    return jsonify({"ok": True, "reply": f"Friday heard: {msg}"})
+
 
 
 # ── Entrypoint for local dev (Render uses Procfile's waitress) ────────────────
