@@ -1,275 +1,203 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Friday AI • Chat</title>
-<style>
-  :root { --bg:#0f172a; --panel:#0b1226; --muted:#94a3b8; --text:#e2e8f0; --accent:#60a5fa; --accent-2:#a78bfa; }
-  * { box-sizing: border-box; }
-  body {
-    margin:0; font: 16px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif;
-    background: radial-gradient(1200px 1200px at 10% -20%, #1d2b54 0, transparent 55%), var(--bg); color: var(--text);
-  }
-  header {
-    display:flex; align-items:center; justify-content:space-between; gap:12px;
-    padding:16px 20px; position:sticky; top:0; background:linear-gradient(180deg, rgba(15,23,42,.9), rgba(15,23,42,.5) 70%, transparent);
-    backdrop-filter: blur(6px); border-bottom: 1px solid rgba(255,255,255,.06);
-  }
-  .brand { display:flex; align-items:center; gap:10px; font-weight:700; letter-spacing:.2px; }
-  .badge { font-size:12px; color:#94a3b8; border:1px solid rgba(148,163,184,.35); padding:2px 8px; border-radius:999px; }
-  main { max-width:900px; margin: 16px auto 120px; padding: 0 16px; }
-  #chat {
-    background: linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.02));
-    border:1px solid rgba(255,255,255,.07); border-radius:16px; overflow:hidden; box-shadow: 0 8px 40px rgba(0,0,0,.25);
-  }
-  .toolbar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; padding:12px 12px; background:rgba(255,255,255,.02); border-bottom:1px solid rgba(255,255,255,.06);}
-  .toolbar select, .toolbar input, .toolbar button {
-    background:#0b1226; color:var(--text); border:1px solid rgba(255,255,255,.1); padding:8px 10px; border-radius:10px; outline:none;
-  }
-  .toolbar button { background: linear-gradient(135deg, var(--accent), var(--accent-2)); border:none; font-weight:600; }
-  .toolbar .muted { color: var(--muted); border:none; background:transparent; padding:0 2px; }
-  #log { max-height: 55vh; overflow:auto; padding:14px 14px 0 14px; }
-  .msg { margin: 0 0 14px; padding: 12px 14px; border-radius: 12px; border:1px solid rgba(255,255,255,.07);}
-  .u { background: rgba(96,165,250,.09); border-color: rgba(96,165,250,.25); }
-  .a { background: rgba(167,139,250,.08); border-color: rgba(167,139,250,.25); }
-  .meta { font-size:12px; color:var(--muted); margin-bottom:6px; display:flex; gap:8px; align-items:center;}
-  .composer { display:flex; gap:10px; padding:12px; background:rgba(255,255,255,.02); border-top:1px solid rgba(255,255,255,.06); }
-  #input { flex:1; background:#0b1226; border:1px solid rgba(255,255,255,.1); border-radius:12px; color:var(--text); padding:12px 14px; resize:vertical; min-height:46px; max-height:160px;}
-  .send { min-width:98px; border-radius:12px; border:none; background:linear-gradient(135deg, var(--accent), var(--accent-2)); color:white; font-weight:700; }
-  .links a { color:var(--muted); text-decoration:none; margin-left:10px; font-size:13px; }
-  .links a:hover { color:var(--text); }
-  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
-  .row input[type="text"], .row input[type="password"] { width:220px; }
-  code.small { font-size:12px; color:#cbd5e1; }
-  .hint { color:var(--muted); font-size:12px; }
-</style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Friday • Chat + Upload</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }
+    body { margin: 0; background:#0f172a; color:#e5e7eb; }
+    header { padding:16px 20px; border-bottom:1px solid #1f2937; display:flex; gap:12px; align-items:center;}
+    header h1 { margin:0; font-size:18px; font-weight:600;}
+    main { max-width:900px; margin:24px auto; padding:0 16px; }
+    .row { display:flex; gap:16px; flex-wrap:wrap; }
+    .card { background:#111827; border:1px solid #1f2937; border-radius:12px; padding:16px; flex:1; min-width:280px; }
+    label { display:block; margin:10px 0 6px; font-size:13px; color:#9ca3af; }
+    input[type="text"], textarea {
+      width:100%; background:#0b1220; color:#e5e7eb; border:1px solid #24324a;
+      border-radius:10px; padding:10px 12px; outline:none;
+    }
+    textarea { height:120px; resize:vertical; }
+    input[type="file"] { width:100%; }
+    button {
+      background:#2563eb; color:white; border:0; border-radius:10px; padding:10px 14px;
+      font-weight:600; cursor:pointer;
+    }
+    button:disabled { opacity:.6; cursor:not-allowed; }
+    .muted { color:#9ca3af; font-size:12px; }
+    .mono { font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; white-space:pre-wrap; }
+    .ok { color:#34d399; }
+    .bad { color:#f87171; }
+    .row > .card.small { max-width:320px; }
+  </style>
 </head>
 <body>
   <header>
-    <div class="brand">
-      <svg width="28" height="28" viewBox="0 0 48 48" fill="none"><defs><linearGradient id="g" x1="0" y1="48" x2="48" y2="0" gradientUnits="userSpaceOnUse"><stop stop-color="#60a5fa"/><stop offset="1" stop-color="#a78bfa"/></linearGradient></defs><rect rx="12" width="48" height="48" fill="url(#g)"/></svg>
-      <div>Friday AI</div>
-      <div id="envBadge" class="badge">/chat</div>
-    </div>
-    <div class="links">
-      <a href="/routes" target="_blank">routes</a>
-      <a href="/debug/health" target="_blank">health</a>
-      <a href="/api/history" target="_blank">history</a>
-    </div>
+    <h1>Friday — Chat + File Upload</h1>
+    <span class="muted">Calls <span class="mono">/data/upload</span> then <span class="mono">/chat</span></span>
   </header>
 
   <main>
-    <section id="chat">
-      <!-- Top toolbar -->
-      <div class="toolbar">
-        <div class="row">
-          <span class="muted">User</span>
-          <input id="username" type="text" placeholder="username" />
-          <button id="saveUser">Set</button>
+    <div class="row">
+      <div class="card small">
+        <label>API Token (stored locally)</label>
+        <input id="token" type="text" placeholder="paste Bearer token once…" />
+        <div class="muted" style="margin-top:6px;">
+          Tip: you can rotate this any time on the server; just paste the new one here.
+        </div>
+        <div style="margin-top:10px; display:flex; gap:8px;">
+          <button id="saveTokenBtn">Save token</button>
+          <button id="clearTokenBtn" style="background:#334155;">Clear</button>
         </div>
 
-        <div class="row">
-          <span class="muted">Model</span>
-          <select id="model"></select>
-          <button id="setModel">Use</button>
-          <span class="hint" id="modelHint"></span>
-        </div>
-
-        <div class="row">
-          <span class="muted">Admin</span>
-          <input id="adminToken" type="password" placeholder="ADMIN_TOKEN (Bearer)" />
-          <button id="mint">Mint token</button>
-          <input id="redeemCode" type="text" placeholder="redeem code" />
-          <button id="redeem">Redeem</button>
-        </div>
+        <hr style="border:0;border-top:1px solid #1f2937; margin:16px 0;">
+        <label>Health check</label>
+        <button id="healthBtn" style="background:#059669;">GET /health</button>
+        <button id="routesBtn" style="background:#6b7280;">GET /__routes</button>
+        <div id="healthOut" class="mono muted" style="margin-top:8px;"></div>
       </div>
 
-      <!-- Messages -->
-      <div id="log"></div>
+      <div class="card" style="flex:2">
+        <label>Your message</label>
+        <textarea id="message" placeholder="e.g., Summarize the PDF I just uploaded."></textarea>
 
-      <!-- Composer -->
-      <div class="composer">
-        <textarea id="input" placeholder="Type a message…"></textarea>
-        <button class="send" id="send">Send</button>
+        <div class="row" style="margin-top:10px;">
+          <div style="flex:2; min-width:260px;">
+            <label>Choose file (PDF or TXT)</label>
+            <input id="file" type="file" />
+            <div class="muted">Optional note sent with the upload:</div>
+            <input id="notes" type="text" placeholder="notes for the upload (optional)" />
+          </div>
+          <div style="display:flex; align-items:flex-end;">
+            <button id="sendBtn">Upload & Chat</button>
+          </div>
+        </div>
+
+        <div id="status" class="mono muted" style="margin-top:14px;"></div>
       </div>
-    </section>
+    </div>
 
-    <p class="hint" style="margin-top:10px">
-      Tip: your username, model, and admin token are remembered in <code class="small">localStorage</code> in this browser only.
-    </p>
+    <div class="card" style="margin-top:16px;">
+      <div class="muted">Friday’s reply</div>
+      <div id="reply" class="mono" style="margin-top:8px;"></div>
+    </div>
   </main>
 
-<script>
-  const $ = (sel) => document.querySelector(sel);
-  const log = $("#log");
-  const input = $("#input");
-  const sendBtn = $("#send");
-  const userEl = $("#username");
-  const saveUserBtn = $("#saveUser");
-  const modelSel = $("#model");
-  const setModelBtn = $("#setModel");
-  const modelHint = $("#modelHint");
-  const adminTokenEl = $("#adminToken");
-  const mintBtn = $("#mint");
-  const redeemEl = $("#redeemCode");
-  const redeemBtn = $("#redeem");
+  <script>
+    // ---------- helpers ----------
+    const $ = (id) => document.getElementById(id);
+    const base = ""; // same-origin calls (page served by your Flask app)
+    const tokenKey = "friday_api_token";
 
-  // ---- persistence (per browser)
-  const state = {
-    username: localStorage.getItem("friday.username") || "guest",
-    model: localStorage.getItem("friday.model") || null,
-    adminToken: localStorage.getItem("friday.adminToken") || ""
-  };
+    function getToken() { return localStorage.getItem(tokenKey) || ""; }
+    function setToken(v) { localStorage.setItem(tokenKey, v || ""); }
+    function authHeaders() {
+      const t = getToken();
+      return t ? { "Authorization": "Bearer " + t } : {};
+    }
+    async function getJSON(path) {
+      const res = await fetch(base + path, { headers: { ...authHeaders() }});
+      const body = await res.text();
+      return { status: res.status, text: body };
+    }
+    async function postJSON(path, data) {
+      const res = await fetch(base + path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify(data || {})
+      });
+      const body = await res.text();
+      return { status: res.status, text: body };
+    }
+    async function uploadFile(file, notes) {
+      const fd = new FormData();
+      if (file) fd.append("file", file, file.name);
+      if (notes) fd.append("notes", notes);
+      const res = await fetch(base + "/data/upload", {
+        method: "POST",
+        headers: { ...authHeaders() },
+        body: fd
+      });
+      const body = await res.text();
+      return { status: res.status, text: body };
+    }
+    function showStatus(msg, good=false) {
+      $("status").textContent = msg || "";
+      $("status").className = "mono " + (good ? "ok" : "bad");
+    }
 
-  // ---- helpers
-  function addMsg(role, text) {
-    const wrap = document.createElement("div");
-    wrap.className = "msg " + (role === "user" ? "u" : "a");
+    // ---------- UI wiring ----------
+    // hydrate token field
+    $("token").value = getToken();
 
-    const meta = document.createElement("div");
-    meta.className = "meta";
-    const who = role === "user" ? (state.username || "guest") : "Friday";
-    meta.textContent = `${who} • ${new Date().toLocaleTimeString()}`;
-    const body = document.createElement("div");
-    body.textContent = text;
+    $("saveTokenBtn").onclick = () => {
+      setToken($("token").value.trim());
+      showStatus("Saved token locally.", true);
+    };
+    $("clearTokenBtn").onclick = () => {
+      setToken("");
+      $("token").value = "";
+      showStatus("Cleared token from this browser.");
+    };
 
-    wrap.appendChild(meta);
-    wrap.appendChild(body);
-    log.appendChild(wrap);
-    log.scrollTop = log.scrollHeight;
-  }
+    $("healthBtn").onclick = async () => {
+      $("healthOut").textContent = "Checking /health…";
+      const { status, text } = await getJSON("/health");
+      $("healthOut").textContent = `Status ${status}\n${text}`;
+    };
+    $("routesBtn").onclick = async () => {
+      $("healthOut").textContent = "Loading /__routes…";
+      const { status, text } = await getJSON("/__routes");
+      $("healthOut").textContent = `Status ${status}\n${text}`;
+    };
 
-  async function jsonFetch(url, opts = {}) {
-    const res = await fetch(url, {
-      headers: {"Content-Type":"application/json", ...(opts.headers||{})},
-      ...opts
-    });
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-    return res.json();
-  }
+    $("sendBtn").onclick = async () => {
+      $("reply").textContent = "";
+      const token = $("token").value.trim();
+      if (!token) { showStatus("Paste API token first.", false); return; }
+      setToken(token);
 
-  // ---- wire up UI initial values
-  userEl.value = state.username;
-  adminTokenEl.value = state.adminToken;
+      const msg = $("message").value.trim() || "Summarize the PDF I just uploaded.";
+      const file = $("file").files[0] || null;
+      const notes = $("notes").value.trim();
 
-  // Models: load + set active in dropdown
-  async function loadModels() {
-    try {
-      const data = await jsonFetch("/api/models");
-      // data: { active, available: [] }
-      modelSel.innerHTML = "";
-      (data.available || []).forEach(m => {
-        const opt = document.createElement("option");
-        opt.value = m; opt.textContent = m;
-        if ((state.model && state.model === m) || (!state.model && data.active === m)) {
-          opt.selected = true;
+      $("sendBtn").disabled = true;
+      showStatus("Starting…");
+
+      try {
+        // 1) Upload if a file is selected
+        if (file) {
+          showStatus("Uploading file…");
+          const up = await uploadFile(file, notes);
+          if (up.status < 200 || up.status >= 300) {
+            showStatus(`Upload failed. Status ${up.status}\n${up.text}`, false);
+            $("sendBtn").disabled = false;
+            return;
+          }
+          showStatus(`Upload OK (${up.status}).`);
+        } else {
+          showStatus("No file chosen — skipping upload.", true);
         }
-        modelSel.appendChild(opt);
-      });
-      modelHint.textContent = `active: ${data.active}`;
-      if (!state.model) state.model = data.active;
-      localStorage.setItem("friday.model", state.model);
-    } catch (e) {
-      modelHint.textContent = "models unavailable";
-    }
-  }
 
-  // History on load
-  async function loadHistory() {
-    try {
-      const h = await jsonFetch("/api/history");
-      if (Array.isArray(h)) {
-        h.forEach(item => {
-          addMsg("user", item.message);
-          addMsg("assistant", item.reply);
-        });
+        // 2) Chat
+        showStatus("Talking to Friday…");
+        const chat = await postJSON("/chat", { message: msg });
+        if (chat.status < 200 || chat.status >= 300) {
+          showStatus(`Chat failed. Status ${chat.status}\n${chat.text}`, false);
+        } else {
+          showStatus("Chat OK.", true);
+          $("reply").textContent = chat.text;
+        }
+      } catch (err) {
+        showStatus("Error: " + (err?.message || err), false);
+      } finally {
+        $("sendBtn").disabled = false;
       }
-    } catch (e) { /* ignore */ }
-  }
-
-  // ---- event handlers
-  sendBtn.addEventListener("click", async () => {
-    const text = (input.value || "").trim();
-    if (!text) return;
-    addMsg("user", text);
-    input.value = "";
-    try {
-      const res = await jsonFetch("/api/chat", {
-        method:"POST",
-        body: JSON.stringify({ message: text, username: state.username, model: state.model })
-      });
-      addMsg("assistant", res.reply || "(no reply)");
-    } catch (e) {
-      addMsg("assistant", "Error: " + e.message);
-    }
-  });
-
-  input.addEventListener("keydown", (ev) => {
-    if (ev.key === "Enter" && !ev.shiftKey) {
-      ev.preventDefault();
-      sendBtn.click();
-    }
-  });
-
-  saveUserBtn.addEventListener("click", () => {
-    state.username = userEl.value.trim() || "guest";
-    localStorage.setItem("friday.username", state.username);
-    addMsg("assistant", `Okay, I’ll call you “${state.username}”.`);
-  });
-
-  setModelBtn.addEventListener("click", async () => {
-    const picked = modelSel.value;
-    try {
-      const res = await jsonFetch("/api/model", {
-        method:"POST",
-        body: JSON.stringify({ model: picked })
-      });
-      state.model = res.active || picked;
-      localStorage.setItem("friday.model", state.model);
-      modelHint.textContent = `active: ${state.model}`;
-      addMsg("assistant", `Using model: ${state.model}`);
-    } catch (e) {
-      addMsg("assistant", "Couldn’t set model: " + e.message);
-    }
-  });
-
-  mintBtn.addEventListener("click", async () => {
-    const tok = adminTokenEl.value.trim();
-    if (!tok) { addMsg("assistant","Enter ADMIN_TOKEN to mint."); return; }
-    try {
-      const res = await jsonFetch("/api/admin/mint", {
-        method:"POST",
-        headers: { Authorization: "Bearer " + tok },
-        body: JSON.stringify({ count: 1 })
-      });
-      localStorage.setItem("friday.adminToken", tok);
-      addMsg("assistant", "Minted: " + (res.tokens ? res.tokens.join(", ") : "(none)"));
-    } catch (e) {
-      addMsg("assistant", "Mint failed: " + e.message);
-    }
-  });
-
-  redeemBtn.addEventListener("click", async () => {
-    const code = redeemEl.value.trim();
-    if (!code) { addMsg("assistant","Paste a redeem code first."); return; }
-    try {
-      const res = await jsonFetch("/api/auth/redeem", {
-        method:"POST",
-        body: JSON.stringify({ code, username: state.username || "guest" })
-      });
-      addMsg("assistant", res.success ? `Redeemed for ${res.user}` : "Redeem failed.");
-    } catch (e) {
-      addMsg("assistant", "Redeem failed: " + e.message);
-    }
-  });
-
-  // ---- kick off
-  loadModels();
-  loadHistory();
-</script>
+    };
+  </script>
 </body>
 </html>
+
 
 
 
