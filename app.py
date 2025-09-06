@@ -186,6 +186,9 @@ def chat_api():
     # echo-style reply (your real logic can replace this)
     return jsonify({"ok": True, "reply": f"Friday heard: {msg}"})
 
+@app.route("/docs")
+def docs():
+    return app.send_static_file("docs.html")
 
 
 # ── Entrypoint for local dev (Render uses Procfile's waitress) ────────────────
