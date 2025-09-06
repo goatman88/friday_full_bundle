@@ -1,186 +1,138 @@
+# app.py
 import os
-from datetime import datetime
-from flask import (
-    Flask, request, jsonify, send_from_directory,
-    render_template, Response
-)
+from datetime import datetime, timezone
+from flask import Flask, request, jsonify, send_from_directory, abort
 
-# -----------------------------------------------------------------------------
-# App setup
-# -----------------------------------------------------------------------------
-app = Flask(__name__, static_folder="static", template_folder="templates")
-
-API_TOKEN = os.getenv("API_TOKEN", "").strip()
-if not API_TOKEN:
-    # Don’t crash on boot; /health will report key_present=false
-    pass
+# ---- Flask setup ------------------------------------------------------------
+# Serve files from ./static at /static/* and allow send_from_directory to find them
+app = Flask(__name__, static_folder="static", static_url_path="/static")
 
 
-# -----------------------------------------------------------------------------
-# Helpers
-# -----------------------------------------------------------------------------
-def _auth_ok(req: request) -> bool:
-    """Validate Bearer token in Authorization header."""
-    hdr = req.headers.get("Authorization", "")
-    if not hdr.lower().startswith("bearer "):
-        return False
-    token = hdr.split(" ", 1)[1].strip()
-    return token == API_TOKEN and token != ""
+# ---- Helpers ----------------------------------------------------------------
+def _require_auth():
+    """Return (ok: bool, error: str). Checks Authorization: Bearer <token>."""
+    server_token = os.getenv("API_TOKEN", "")
+    if not server_token:
+        return False, "Server missing API_TOKEN"
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return False, "Missing Bearer token"
+    token = auth.split(" ", 1)[1].strip()
+    if token != server_token:
+        return False, "Invalid token"
+    return True, ""
 
 
-def _unauthorized():
-    return jsonify({"ok": False, "error": "Unauthorized"}), 401
+def _json_unauthorized(msg="Unauthorized"):
+    return jsonify({"ok": False, "error": msg}), 401
 
 
-# -----------------------------------------------------------------------------
-# Health / Landing
-# -----------------------------------------------------------------------------
-@app.get("/health", endpoint="health")
+# ---- Basic pages ------------------------------------------------------------
+@app.get("/")
+def landing_page():
+    # Serve your landing page (static/index.html)
+    return send_from_directory(app.static_folder, "index.html")
+
+
+@app.get("/docs")
+def docs_page():
+    # Tiny docs page (static/docs.html)
+    return send_from_directory(app.static_folder, "docs.html")
+
+
+@app.get("/ui")
+def ui_page():
+    # Browser chat UI (static/ui.html)
+    return send_from_directory(app.static_folder, "ui.html")
+
+
+# ---- Service health ---------------------------------------------------------
+@app.get("/health")
 def health():
     return jsonify({
         "ok": True,
         "status": "running",
-        "time": datetime.utcnow().isoformat() + "Z",
-        "key_present": bool(API_TOKEN),
+        "key_present": bool(os.getenv("API_TOKEN", "")),
+        "time": datetime.now(timezone.utc).isoformat()
     })
 
 
-@app.get("/", endpoint="home_page")
-def home_page():
-    """
-    Try to render templates/index.html if present; otherwise return a tiny page
-    with links. Keep this lean so you can style the template separately.
-    """
-    try:
-        return render_template("index.html")
-    except Exception:
-        html = """<!doctype html>
-<html><head><meta charset="utf-8"><title>Friday API</title></head>
-<body style="font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Arial;padding:24px">
-  <h1>🚀 Friday API is running</h1>
-  <p>Quick links:</p>
-  <ul>
-    <li><a href="/ui">Browser Chat</a></li>
-    <li><a href="/docs">Docs</a></li>
-    <li><a href="/health">Health</a></li>
-  </ul>
-</body></html>"""
-        return Response(html, mimetype="text/html")
+# ---- Introspection (protected) ----------------------------------------------
+@app.get("/__routes")
+def list_routes():
+    ok, err = _require_auth()
+    if not ok:
+        return _json_unauthorized(err)
 
-
-# -----------------------------------------------------------------------------
-# Minimal UI & Docs (served from /static)
-# -----------------------------------------------------------------------------
-@app.get("/ui", endpoint="ui_page")
-def ui_page():
-    # serves static/ui.html
-    return send_from_directory("static", "ui.html")
-
-
-@app.get("/docs", endpoint="docs_page")
-def docs_page():
-    # serves static/docs.html
-    return send_from_directory("static", "docs.html")
-
-
-# -----------------------------------------------------------------------------
-# API: routes listing (auth)
-# -----------------------------------------------------------------------------
-@app.get("/__routes", endpoint="routes_list")
-def routes_list():
-    if not _auth_ok(request):
-        return _unauthorized()
-
-    out = []
+    routes = []
     for rule in app.url_map.iter_rules():
-        # Skip Flask internals
-        if rule.endpoint == "static":
-            continue
-        out.append({
+        routes.append({
             "rule": str(rule),
             "methods": sorted(m for m in rule.methods if m not in {"HEAD", "OPTIONS"}),
             "endpoint": rule.endpoint,
         })
-    return jsonify({"ok": True, "routes": out})
+    return jsonify({"ok": True, "routes": routes})
 
 
-# -----------------------------------------------------------------------------
-# API: chat (auth)
-# -----------------------------------------------------------------------------
-@app.post("/chat", endpoint="chat")
+# ---- Chat (protected) -------------------------------------------------------
+@app.post("/chat")
 def chat():
-    if not _auth_ok(request):
-        return _unauthorized()
+    ok, err = _require_auth()
+    if not ok:
+        return _json_unauthorized(err)
 
-    try:
-        payload = request.get_json(force=True, silent=False) or {}
-    except Exception:
-        return jsonify({"ok": False, "error": "Invalid JSON"}), 400
+    data = request.get_json(silent=True) or {}
+    msg = (data.get("message") or "").strip()
+    if not msg:
+        return jsonify({"ok": False, "error": "message is required"}), 400
 
-    message = (payload.get("message") or "").strip()
-    if not message:
-        return jsonify({"ok": False, "error": "Missing 'message'"}), 400
-
-    # For now we just echo back. Wire your LLM/tooling here later.
-    return jsonify({"ok": True, "reply": f"Friday heard: {message}"})
+    # Your real logic would go here
+    reply = f"Friday heard: {msg}"
+    return jsonify({"ok": True, "reply": reply})
 
 
-# -----------------------------------------------------------------------------
-# API: data upload (auth; multipart/form-data)
-# -----------------------------------------------------------------------------
-@app.post("/data/upload", endpoint="upload_data")
-def upload_data():
-    if not _auth_ok(request):
-        return _unauthorized()
+# ---- Upload (protected) -----------------------------------------------------
+@app.post("/data/upload")
+def data_upload():
+    ok, err = _require_auth()
+    if not ok:
+        return _json_unauthorized(err)
 
     file = request.files.get("file")
-    notes = request.form.get("notes", "")
-
-    if not file or file.filename == "":
+    if not file:
         return jsonify({"ok": False, "error": "No file uploaded"}), 400
 
-    # We don’t persist on disk for now—just read size and acknowledge.
-    # If you want to save, use a temp dir:
-    #   tmp_path = os.path.join("/tmp", secure_filename(file.filename))
-    #   file.save(tmp_path)
-    file.stream.seek(0, os.SEEK_END)
-    size = file.stream.tell()
-    file.stream.seek(0)
+    # Consume the stream (don’t persist for now)
+    _ = file.read()  # bytes; discard
+    notes = request.form.get("notes", "")
 
-    return jsonify({
-        "ok": True,
-        "filename": file.filename,
-        "size_bytes": size,
-        "notes": notes,
-        "message": "Upload received",
-    })
+    return jsonify({"ok": True, "filename": file.filename, "notes": notes})
 
 
-# -----------------------------------------------------------------------------
-# Error handlers (nicer JSON for common API errors)
-# -----------------------------------------------------------------------------
-@app.errorhandler(405)
-def method_not_allowed(e):
-    # Keep HTML default for browser hits; JSON for API routes
-    if request.path.startswith(("/chat", "/__routes", "/data/upload")):
-        return jsonify({"ok": False, "error": "Method Not Allowed"}), 405
-    return e
+# ---- Static fallbacks (optional niceties) -----------------------------------
+# If someone hits /favicon.ico or /robots.txt and you included them in static/
+@app.get("/favicon.ico")
+def favicon():
+    try:
+        return send_from_directory(app.static_folder, "favicon.ico")
+    except Exception:
+        abort(404)
 
 
-@app.errorhandler(404)
-def not_found(e):
-    if request.path.startswith(("/chat", "/__routes", "/data/upload", "/health")):
-        return jsonify({"ok": False, "error": "Not Found"}), 404
-    return e
+@app.get("/robots.txt")
+def robots():
+    try:
+        return send_from_directory(app.static_folder, "robots.txt")
+    except Exception:
+        abort(404)
 
 
-# -----------------------------------------------------------------------------
-# Entry point for local dev (Render will use the WSGI app: app:app)
-# -----------------------------------------------------------------------------
+# ---- Entrypoint for Render/Waitress -----------------------------------------
+# Render runs `waitress-serve --listen=0.0.0.0:$PORT app:app`
+# so we don't need app.run() here. It’s harmless locally though.
 if __name__ == "__main__":
-    # Use PORT env if present (Render/Heroku convention)
-    port = int(os.getenv("PORT", "5000"))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=True)
+
 
 
 
