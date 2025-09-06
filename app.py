@@ -1,190 +1,170 @@
+# app.py
 import os
 import io
-import logging
 from datetime import datetime
-from functools import wraps
-
 from flask import (
-    Flask, jsonify, request, render_template, send_from_directory
+    Flask, request, jsonify, render_template, send_from_directory, abort
 )
 from werkzeug.utils import secure_filename
-from jinja2 import TemplateNotFound
 
-# -----------------------------------------------------------------------------
-# App & config
-# -----------------------------------------------------------------------------
-app = Flask(
-    __name__,
-    template_folder="templates",
-    static_folder="static"
-)
-logging.basicConfig(level=logging.INFO)
-
-API_TOKEN = os.environ.get("API_TOKEN", "").strip()
-
-from flask import Flask, render_template
-
+# ── Flask setup ────────────────────────────────────────────────────────────────
+# Looks in ./static and ./templates automatically
 app = Flask(__name__, static_folder="static", template_folder="templates")
 
-@app.route("/")
-def home():
-    return render_template("index.html")
+# Single source of truth for your API token (set in Render env)
+API_TOKEN = os.getenv("API_TOKEN", "").strip()
 
-# -----------------------------------------------------------------------------
-# Helpers
-# -----------------------------------------------------------------------------
-def require_token(f):
-    """Bearer <API_TOKEN> auth for protected routes."""
-    @wraps(f)
-    def _wrap(*args, **kwargs):
-        auth = request.headers.get("Authorization", "")
-        ok = False
-        if auth.lower().startswith("bearer "):
-            supplied = auth.split(" ", 1)[1].strip()
-            ok = API_TOKEN and supplied == API_TOKEN
-        if not ok:
-            return jsonify({"ok": False, "error": "Unauthorized"}), 401
-        return f(*args, **kwargs)
-    return _wrap
+# Where uploads are written (Render’s ephemeral disk, OK for demos)
+UPLOAD_DIR = os.path.join(os.getcwd(), "uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-
-def _routes():
-    """Describe your protected API surface for quick introspection."""
-    return [
-        {"rule": "/__routes", "methods": ["GET"], "protected": True},
-        {"rule": "/chat", "methods": ["POST"], "protected": True},
-        {"rule": "/data/upload", "methods": ["POST"], "protected": True},
-        {"rule": "/health", "methods": ["GET"], "protected": False},
-        {"rule": "/", "methods": ["GET"], "protected": False},
-    ]
-
-# -----------------------------------------------------------------------------
-# Public routes (no auth)
-# -----------------------------------------------------------------------------
-@app.route("/")
-def home():
-    """Serve chat UI; fall back to inline page if template is missing."""
-    try:
-        return render_template("chat.html")
-    except TemplateNotFound:
-        return """
-<!doctype html>
-<html>
-<head><meta charset="utf-8"><title>Friday — quick test</title></head>
-<body style="font-family:system-ui,Arial,sans-serif;max-width:720px;margin:40px auto;">
-  <h1>Friday test</h1>
-  <p>Paste your API token, then send a message to <code>/chat</code>.</p>
-  <label>API token: <input id="t" style="width:420px"></label>
-  <br><br>
-  <textarea id="m" rows="3" style="width:100%;" placeholder="Hello Friday!"></textarea><br><br>
-  <button id="go">Send</button>
-  <pre id="out" style="background:#111;color:#0f0;padding:12px;white-space:pre-wrap"></pre>
-<script>
-const out = document.getElementById('out');
-document.getElementById('go').onclick = async () => {
-  const token = document.getElementById('t').value.trim();
-  const msg   = document.getElementById('m').value || "Hello Friday!";
-  out.textContent = "Sending...";
-  try {
-    const r = await fetch('/chat', {
-      method: 'POST',
-      headers: {'Authorization':'Bearer '+token,'Content-Type':'application/json'},
-      body: JSON.stringify({ message: msg })
-    });
-    out.textContent = await r.text();
-  } catch (e) {
-    out.textContent = 'Error: ' + e;
-  }
-};
-</script>
-</body>
-</html>
-""", 200
+# ── Helpers ───────────────────────────────────────────────────────────────────
+def _auth_ok(req: request) -> bool:
+    """
+    Require: Authorization: Bearer <API_TOKEN>
+    """
+    if not API_TOKEN:
+        # If you forgot to set it in Render, allow nothing but report clearly.
+        return False
+    auth = req.headers.get("Authorization", "")
+    if not auth.lower().startswith("bearer "):
+        return False
+    token = auth.split(" ", 1)[1].strip()
+    return token == API_TOKEN
 
 
-@app.route("/health")
+def _require_auth():
+    if not _auth_ok(request):
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+@app.route("/health", methods=["GET"])
 def health():
-    """Public healthcheck used by you (and optionally by Render)."""
+    """
+    Quick health probe used by you (and can be used by Render).
+    """
     return jsonify({
         "ok": True,
         "status": "running",
-        "key_present": bool(API_TOKEN)
-    }), 200
+        "key_present": bool(API_TOKEN),
+        "time": datetime.utcnow().isoformat() + "Z",
+    })
 
 
-# -----------------------------------------------------------------------------
-# Protected API routes
-# -----------------------------------------------------------------------------
-@app.route("/__routes")
-@require_token
-def routes():
-    return jsonify({"ok": True, "routes": _routes()}), 200
+@app.route("/__routes", methods=["GET"])
+def list_routes():
+    """
+    Lists available routes (auth required).
+    """
+    auth = _require_auth()
+    if auth:
+        return auth  # 401
+
+    routes = []
+    for rule in app.url_map.iter_rules():
+        # Skip static file automatic endpoint to keep it tidy
+        if rule.endpoint == "static":
+            continue
+        routes.append({
+            "rule": str(rule),
+            "methods": sorted(m for m in rule.methods if m not in {"HEAD", "OPTIONS"}),
+            "endpoint": rule.endpoint
+        })
+    return jsonify({"ok": True, "routes": routes})
+
+
+@app.route("/", methods=["GET"])
+def index():
+    """
+    Home page. If templates/index.html exists we render it;
+    otherwise we show a tiny JSON so deploys never 500 on '/'.
+    """
+    # Try to render a template if present
+    tpl_path = os.path.join(app.template_folder or "templates", "index.html")
+    if os.path.exists(tpl_path):
+        return render_template("index.html")
+    # Minimal fallback
+    return jsonify({
+        "ok": True,
+        "message": "Friday backend is up. Add templates/index.html for a homepage."
+    })
 
 
 @app.route("/chat", methods=["POST"])
-@require_token
 def chat():
     """
-    Minimal sample chat handler.
-    Replace the echo with your model/tool logic as needed.
+    Echo-style chat endpoint (auth required).
+    Body: { "message": "Hello Friday!" }
     """
-    data = request.get_json(silent=True) or {}
+    auth = _require_auth()
+    if auth:
+        return auth  # 401
+
+    try:
+        data = request.get_json(force=True, silent=False) or {}
+    except Exception:
+        return jsonify({"ok": False, "error": "Invalid JSON"}), 400
+
     msg = (data.get("message") or "").strip()
     if not msg:
-        return jsonify({"ok": False, "error": "message is required"}), 400
+        return jsonify({"ok": False, "error": "Missing 'message'"}), 400
 
-    # Example reply (replace with LLM or your pipeline)
-    reply = f"Friday heard: {msg}"
-    return jsonify({"ok": True, "reply": reply}), 200
+    # In your real app, call your LLM or business logic here.
+    return jsonify({"ok": True, "reply": f"Friday heard: {msg}"})
 
 
 @app.route("/data/upload", methods=["POST"])
-@require_token
-def data_upload():
+def upload():
     """
-    Accepts multipart/form-data:
-      - file   : uploaded file
-      - notes  : optional text field
-    Saves a copy to /tmp/uploads and returns metadata.
+    Multipart file upload (auth required).
+    Expect: part name 'file' (+ optional 'notes')
     """
+    auth = _require_auth()
+    if auth:
+        return auth  # 401
+
     if "file" not in request.files:
         return jsonify({"ok": False, "error": "No file uploaded"}), 400
 
     f = request.files["file"]
+    if f.filename == "":
+        return jsonify({"ok": False, "error": "Empty filename"}), 400
+
+    filename = secure_filename(f.filename)
+    save_path = os.path.join(UPLOAD_DIR, filename)
+
+    # Save to disk (Render’s ephemeral storage—fine for testing)
+    # If you don’t want to persist, you could read bytes = f.read() and process in-memory.
+    f.save(save_path)
+
     notes = request.form.get("notes", "")
 
-    filename = secure_filename(f.filename or "upload.bin")
-    up_dir = "/tmp/uploads"
-    os.makedirs(up_dir, exist_ok=True)
-    saved_path = os.path.join(up_dir, filename)
-    f.save(saved_path)
-
-    size = os.path.getsize(saved_path)
     return jsonify({
         "ok": True,
+        "filename": filename,
+        "bytes": os.path.getsize(save_path),
         "notes": notes,
-        "bytes": size,
-        "saved_as": saved_path.replace("\\", "/"),
-        "server_time_utc": datetime.utcnow().isoformat() + "Z"
-    }), 200
+        "saved_to": save_path
+    })
 
 
-# -----------------------------------------------------------------------------
-# Global error logging (nicer messages in logs)
-# -----------------------------------------------------------------------------
-@app.errorhandler(Exception)
-def on_any_error(err):
-    app.logger.exception("Unhandled error")
-    # keep body simple to avoid leaking internals
-    return jsonify({"ok": False, "error": "Internal error"}), 500
+# (Optional) serve a favicon if you drop one in static/
+@app.route("/favicon.ico")
+def favicon():
+    path = app.static_folder or "static"
+    file_path = os.path.join(path, "favicon.ico")
+    if os.path.exists(file_path):
+        return send_from_directory(path, "favicon.ico")
+    abort(404)
 
 
-# -----------------------------------------------------------------------------
-# Entrypoint (local dev)
-# -----------------------------------------------------------------------------
+# ── Entrypoint for local dev (Render uses Procfile's waitress) ────────────────
 if __name__ == "__main__":
+    # For local dev/tests only; on Render you run via Procfile:  waitress-serve app:app
     port = int(os.environ.get("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=True)
+
 
 
 
