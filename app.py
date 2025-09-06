@@ -1,214 +1,187 @@
-# app.py
 import os
-import io
 from datetime import datetime
 from flask import (
-    Flask, request, jsonify, render_template, send_from_directory, abort
+    Flask, request, jsonify, send_from_directory,
+    render_template, Response
 )
-from werkzeug.utils import secure_filename
 
-# ── Flask setup ────────────────────────────────────────────────────────────────
-# Looks in ./static and ./templates automatically
+# -----------------------------------------------------------------------------
+# App setup
+# -----------------------------------------------------------------------------
 app = Flask(__name__, static_folder="static", template_folder="templates")
 
-# Single source of truth for your API token (set in Render env)
 API_TOKEN = os.getenv("API_TOKEN", "").strip()
+if not API_TOKEN:
+    # Don’t crash on boot; /health will report key_present=false
+    pass
 
-# Where uploads are written (Render’s ephemeral disk, OK for demos)
-UPLOAD_DIR = os.path.join(os.getcwd(), "uploads")
-os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
+# Helpers
+# -----------------------------------------------------------------------------
 def _auth_ok(req: request) -> bool:
-    """
-    Require: Authorization: Bearer <API_TOKEN>
-    """
-    if not API_TOKEN:
-        # If you forgot to set it in Render, allow nothing but report clearly.
+    """Validate Bearer token in Authorization header."""
+    hdr = req.headers.get("Authorization", "")
+    if not hdr.lower().startswith("bearer "):
         return False
-    auth = req.headers.get("Authorization", "")
-    if not auth.lower().startswith("bearer "):
-        return False
-    token = auth.split(" ", 1)[1].strip()
-    return token == API_TOKEN
+    token = hdr.split(" ", 1)[1].strip()
+    return token == API_TOKEN and token != ""
 
 
-def _require_auth():
-    if not _auth_ok(request):
-        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+def _unauthorized():
+    return jsonify({"ok": False, "error": "Unauthorized"}), 401
 
 
-# ── Routes ────────────────────────────────────────────────────────────────────
-@app.route("/health", methods=["GET"])
+# -----------------------------------------------------------------------------
+# Health / Landing
+# -----------------------------------------------------------------------------
+@app.get("/health", endpoint="health")
 def health():
-    """
-    Quick health probe used by you (and can be used by Render).
-    """
     return jsonify({
         "ok": True,
         "status": "running",
-        "key_present": bool(API_TOKEN),
         "time": datetime.utcnow().isoformat() + "Z",
+        "key_present": bool(API_TOKEN),
     })
 
 
-@app.route("/__routes", methods=["GET"])
-def list_routes():
+@app.get("/", endpoint="home_page")
+def home_page():
     """
-    Lists available routes (auth required).
+    Try to render templates/index.html if present; otherwise return a tiny page
+    with links. Keep this lean so you can style the template separately.
     """
-    auth = _require_auth()
-    if auth:
-        return auth  # 401
+    try:
+        return render_template("index.html")
+    except Exception:
+        html = """<!doctype html>
+<html><head><meta charset="utf-8"><title>Friday API</title></head>
+<body style="font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Arial;padding:24px">
+  <h1>🚀 Friday API is running</h1>
+  <p>Quick links:</p>
+  <ul>
+    <li><a href="/ui">Browser Chat</a></li>
+    <li><a href="/docs">Docs</a></li>
+    <li><a href="/health">Health</a></li>
+  </ul>
+</body></html>"""
+        return Response(html, mimetype="text/html")
 
-    routes = []
+
+# -----------------------------------------------------------------------------
+# Minimal UI & Docs (served from /static)
+# -----------------------------------------------------------------------------
+@app.get("/ui", endpoint="ui_page")
+def ui_page():
+    # serves static/ui.html
+    return send_from_directory("static", "ui.html")
+
+
+@app.get("/docs", endpoint="docs_page")
+def docs_page():
+    # serves static/docs.html
+    return send_from_directory("static", "docs.html")
+
+
+# -----------------------------------------------------------------------------
+# API: routes listing (auth)
+# -----------------------------------------------------------------------------
+@app.get("/__routes", endpoint="routes_list")
+def routes_list():
+    if not _auth_ok(request):
+        return _unauthorized()
+
+    out = []
     for rule in app.url_map.iter_rules():
-        # Skip static file automatic endpoint to keep it tidy
+        # Skip Flask internals
         if rule.endpoint == "static":
             continue
-        routes.append({
+        out.append({
             "rule": str(rule),
             "methods": sorted(m for m in rule.methods if m not in {"HEAD", "OPTIONS"}),
-            "endpoint": rule.endpoint
+            "endpoint": rule.endpoint,
         })
-    return jsonify({"ok": True, "routes": routes})
+    return jsonify({"ok": True, "routes": out})
 
 
-@app.route("/", methods=["GET"])
-def index():
-    """
-    Home page. If templates/index.html exists we render it;
-    otherwise we show a tiny JSON so deploys never 500 on '/'.
-    """
-    # Try to render a template if present
-    tpl_path = os.path.join(app.template_folder or "templates", "index.html")
-    if os.path.exists(tpl_path):
-        return render_template("index.html")
-    # Minimal fallback
-    return jsonify({
-        "ok": True,
-        "message": "Friday backend is up. Add templates/index.html for a homepage."
-    })
-
-
-@app.route("/chat", methods=["POST"])
+# -----------------------------------------------------------------------------
+# API: chat (auth)
+# -----------------------------------------------------------------------------
+@app.post("/chat", endpoint="chat")
 def chat():
-    """
-    Echo-style chat endpoint (auth required).
-    Body: { "message": "Hello Friday!" }
-    """
-    auth = _require_auth()
-    if auth:
-        return auth  # 401
+    if not _auth_ok(request):
+        return _unauthorized()
 
     try:
-        data = request.get_json(force=True, silent=False) or {}
+        payload = request.get_json(force=True, silent=False) or {}
     except Exception:
         return jsonify({"ok": False, "error": "Invalid JSON"}), 400
 
-    msg = (data.get("message") or "").strip()
-    if not msg:
+    message = (payload.get("message") or "").strip()
+    if not message:
         return jsonify({"ok": False, "error": "Missing 'message'"}), 400
 
-    # In your real app, call your LLM or business logic here.
-    return jsonify({"ok": True, "reply": f"Friday heard: {msg}"})
+    # For now we just echo back. Wire your LLM/tooling here later.
+    return jsonify({"ok": True, "reply": f"Friday heard: {message}"})
 
 
-@app.route("/data/upload", methods=["POST"])
-def upload():
-    """
-    Multipart file upload (auth required).
-    Expect: part name 'file' (+ optional 'notes')
-    """
-    auth = _require_auth()
-    if auth:
-        return auth  # 401
+# -----------------------------------------------------------------------------
+# API: data upload (auth; multipart/form-data)
+# -----------------------------------------------------------------------------
+@app.post("/data/upload", endpoint="upload_data")
+def upload_data():
+    if not _auth_ok(request):
+        return _unauthorized()
 
-    if "file" not in request.files:
+    file = request.files.get("file")
+    notes = request.form.get("notes", "")
+
+    if not file or file.filename == "":
         return jsonify({"ok": False, "error": "No file uploaded"}), 400
 
-    f = request.files["file"]
-    if f.filename == "":
-        return jsonify({"ok": False, "error": "Empty filename"}), 400
-
-    filename = secure_filename(f.filename)
-    save_path = os.path.join(UPLOAD_DIR, filename)
-
-    # Save to disk (Render’s ephemeral storage—fine for testing)
-    # If you don’t want to persist, you could read bytes = f.read() and process in-memory.
-    f.save(save_path)
-
-    notes = request.form.get("notes", "")
+    # We don’t persist on disk for now—just read size and acknowledge.
+    # If you want to save, use a temp dir:
+    #   tmp_path = os.path.join("/tmp", secure_filename(file.filename))
+    #   file.save(tmp_path)
+    file.stream.seek(0, os.SEEK_END)
+    size = file.stream.tell()
+    file.stream.seek(0)
 
     return jsonify({
         "ok": True,
-        "filename": filename,
-        "bytes": os.path.getsize(save_path),
+        "filename": file.filename,
+        "size_bytes": size,
         "notes": notes,
-        "saved_to": save_path
+        "message": "Upload received",
     })
 
 
-# (Optional) serve a favicon if you drop one in static/
-@app.route("/favicon.ico")
-def favicon():
-    path = app.static_folder or "static"
-    file_path = os.path.join(path, "favicon.ico")
-    if os.path.exists(file_path):
-        return send_from_directory(path, "favicon.ico")
-    abort(404)
-
-# app.py
-from flask import Flask, jsonify, request
-
-app = Flask(__name__, static_folder="static", static_url_path="/static")
-
-@app.get("/health")
-def health():
-    return jsonify({"ok": True, "status": "running", "key_present": True})
-
-@app.get("/")
-def index_page():
-    # Serve your landing page (static file)
-    return app.send_static_file("index.html")
-
-@app.route("/ui")
-def ui():
-    return app.send_static_file("chat.html")
+# -----------------------------------------------------------------------------
+# Error handlers (nicer JSON for common API errors)
+# -----------------------------------------------------------------------------
+@app.errorhandler(405)
+def method_not_allowed(e):
+    # Keep HTML default for browser hits; JSON for API routes
+    if request.path.startswith(("/chat", "/__routes", "/data/upload")):
+        return jsonify({"ok": False, "error": "Method Not Allowed"}), 405
+    return e
 
 
-@app.post("/chat")
-def chat_api():
-    data = request.get_json(silent=True) or {}
-    msg = (data.get("message") or "").strip()
-    if not msg:
-        return jsonify({"ok": False, "error": "message required"}), 400
-    # echo-style reply (your real logic can replace this)
-    return jsonify({"ok": True, "reply": f"Friday heard: {msg}"})
-
-@app.route("/docs")
-def docs():
-    return app.send_static_file("docs.html")
-# --- Static pages ---
-@app.route("/")
-def home():
-    return app.send_static_file("index.html")
-
-@app.route("/ui")
-def ui():
-    return app.send_static_file("chat.html")
-
-@app.route("/docs")
-def docs():
-    return app.send_static_file("docs.html")
+@app.errorhandler(404)
+def not_found(e):
+    if request.path.startswith(("/chat", "/__routes", "/data/upload", "/health")):
+        return jsonify({"ok": False, "error": "Not Found"}), 404
+    return e
 
 
-
-# ── Entrypoint for local dev (Render uses Procfile's waitress) ────────────────
+# -----------------------------------------------------------------------------
+# Entry point for local dev (Render will use the WSGI app: app:app)
+# -----------------------------------------------------------------------------
 if __name__ == "__main__":
-    # For local dev/tests only; on Render you run via Procfile:  waitress-serve app:app
-    port = int(os.environ.get("PORT", "5000"))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    # Use PORT env if present (Render/Heroku convention)
+    port = int(os.getenv("PORT", "5000"))
+    app.run(host="0.0.0.0", port=port)
+
 
 
 
