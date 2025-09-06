@@ -172,10 +172,10 @@ def index_page():
     # Serve your landing page (static file)
     return app.send_static_file("index.html")
 
-@app.get("/ui")
-def chat_ui():
-    # Serve the browser chat UI (renamed to ui.html)
-    return app.send_static_file("ui.html")
+@app.route("/ui")
+def ui():
+    return app.send_static_file("chat.html")
+
 
 @app.post("/chat")
 def chat_api():
