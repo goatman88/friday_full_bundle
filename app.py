@@ -46,6 +46,10 @@ def require_token(fn):
 # --- Routes ---
 
 @app.route("/")
+def home():
+    return render_template("chat.html")
+
+@app.route("/")
 @require_token
 def root():
     return jsonify({"ok": True, "msg": "Friday backend online"})
