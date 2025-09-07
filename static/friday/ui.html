@@ -1,46 +1,73 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="en">
 <head>
+  <meta charset="utf-8"/>
   <title>Friday – Browser Chat</title>
   <link rel="stylesheet" href="/static/site.css">
 </head>
-<body>
-  <div class="container">
-    <h1>Friday – Browser Chat</h1>
-    <label>API Token</label>
-    <input id="token" type="password" placeholder="Paste API token">
-    <button onclick="saveToken()">Save</button>
-    
-    <label>Message</label>
-    <textarea id="msg" placeholder="Type your message"></textarea>
-    <button onclick="sendMsg()">Send</button>
-    <button onclick="clearMsg()">Clear</button>
-    
-    <h3>Reply</h3>
-    <pre id="reply"></pre>
-  </div>
+<body class="page">
+  <nav class="nav">
+    <a class="brand" href="/">🚀 Friday</a>
+    <div class="spacer"></div>
+    <a href="/docs">Docs</a>
+    <a class="active" href="/ui">UI</a>
+  </nav>
+
+  <main class="card">
+    <h2>Friday – Browser Chat</h2>
+
+    <div class="grid">
+      <label>API Token</label>
+      <div class="row">
+        <input id="tok" type="password" placeholder="paste token…" />
+        <button id="save">Save</button>
+      </div>
+
+      <label>Message</label>
+      <textarea id="msg" rows="5" placeholder="Say hello…"></textarea>
+
+      <div class="row">
+        <button id="send">Send</button>
+        <button id="clear" class="ghost">Clear</button>
+      </div>
+
+      <label>Reply</label>
+      <pre id="out" class="mono">{ }</pre>
+    </div>
+  </main>
 
   <script>
-    function saveToken() {
-      localStorage.setItem("API_TOKEN", document.getElementById("token").value);
-    }
-    async function sendMsg() {
-      const token = localStorage.getItem("API_TOKEN");
-      const msg = document.getElementById("msg").value;
-      const resp = await fetch("/chat", {
-        method: "POST",
-        headers: {
-          "Authorization": "Bearer " + token,
-          "Content-Type": "application/json"
+    const tok  = document.getElementById('tok');
+    const save = document.getElementById('save');
+    const msg  = document.getElementById('msg');
+    const send = document.getElementById('send');
+    const out  = document.getElementById('out');
+    const clr  = document.getElementById('clear');
+
+    tok.value = localStorage.getItem('FRIDAY_TOKEN') || '';
+
+    save.onclick = () => {
+      localStorage.setItem('FRIDAY_TOKEN', tok.value.trim());
+      alert('Saved to localStorage (dev only).');
+    };
+
+    send.onclick = async () => {
+      const t = (localStorage.getItem('FRIDAY_TOKEN') || '').trim();
+      if (!t) { alert('Save API token first'); return; }
+
+      const r = await fetch('/chat', {
+        method:'POST',
+        headers:{
+          'Authorization': 'Bearer ' + t,
+          'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ message: msg })
+        body: JSON.stringify({ message: msg.value })
       });
-      document.getElementById("reply").textContent = await resp.text();
-    }
-    function clearMsg() {
-      document.getElementById("msg").value = "";
-      document.getElementById("reply").textContent = "";
-    }
+      out.textContent = await r.text();
+    };
+
+    clr.onclick = () => { msg.value=''; out.textContent='{ }'; };
   </script>
 </body>
 </html>
+
