@@ -1,40 +1,89 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Friday API – Quick Docs</title>
+  <meta charset="utf-8"/>
+  <title>Friday – Docs</title>
   <link rel="stylesheet" href="/static/site.css">
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <style>
-    body { font-family: system-ui, sans-serif; background:#0f172a; color:#e9eefc; margin:0; padding:20px; }
-    h1 { margin-top:0; }
-    pre { background:#1e293b; padding:12px; border-radius:8px; overflow-x:auto; }
-    a { color:#8ab4ff; }
-  </style>
 </head>
-<body>
-  <h1>Friday API – Quick Docs</h1>
-  <h2>Health</h2>
-  <pre>GET /health</pre>
+<body class="page">
+  <nav class="nav">
+    <a class="brand" href="/">🚀 Friday</a>
+    <div class="spacer"></div>
+    <a class="active" href="/docs">Docs</a>
+    <a href="/ui">UI</a>
+  </nav>
 
-  <h2>List routes</h2>
-  <pre>GET /__routes
+  <main class="card">
+    <h2>Friday API – Quick Docs</h2>
+
+    <section>
+      <h3>Health</h3>
+      <pre>GET /health</pre>
+    </section>
+
+    <section>
+      <h3>List routes</h3>
+      <pre>GET /__routes
 Headers:
   Authorization: Bearer &lt;API_TOKEN&gt;
   Accept: application/json</pre>
+    </section>
 
-  <h2>Chat</h2>
-  <pre>POST /chat
+    <section>
+      <h3>Chat</h3>
+      <pre>POST /chat
 Headers:
   Authorization: Bearer &lt;API_TOKEN&gt;
   Content-Type: application/json
 
 Body:
   { "message": "Hello Friday!" }</pre>
+    </section>
 
-  <p><a href="/">← Back</a></p>
+    <section>
+      <h3>Upload</h3>
+      <pre>POST /data/upload
+Headers:
+  Authorization: Bearer &lt;API_TOKEN&gt;
+
+Form-Data:
+  file: &lt;your file&gt;
+  notes: optional text</pre>
+    </section>
+
+    <section>
+      <h3>RAG – Index</h3>
+      <pre>POST /api/rag/index
+Headers:
+  Authorization: Bearer &lt;API_TOKEN&gt;
+  Content-Type: application/json
+
+Body:
+  {
+    "title": "Acme Notes",
+    "text": "Your knowledge text here",
+    "source": "manual"
+  }</pre>
+    </section>
+
+    <section>
+      <h3>RAG – Query</h3>
+      <pre>POST /api/rag/query
+Headers:
+  Authorization: Bearer &lt;API_TOKEN&gt;
+  Content-Type: application/json
+
+Body:
+  { "question": "What does Acme do?", "k": 3 }</pre>
+    </section>
+
+    <div class="mt">
+      <a class="btn" href="/">← Back</a>
+    </div>
+  </main>
 </body>
 </html>
+
 
 
 
