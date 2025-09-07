@@ -1,31 +1,61 @@
-param()
+# tools/rag_test.ps1
+# Purpose: index one short note and run one query against your RAG endpoints.
+# This script PRINTS every response as JSON so you can see it.
+
+param(
+  [string]$Title   = "Acme Note",
+  [string]$Text    = "Acme builds rockets and coffee machines.",
+  [string]$Source  = "manual",
+  [string]$Question = "What does Acme build?"
+)
+
+$ErrorActionPreference = "Stop"
 
 if (-not $env:FRIDAY_BASE) { throw "Set `FRIDAY_BASE` to your Render URL (no trailing slash)" }
 if (-not $env:API_TOKEN)   { throw "Set `API_TOKEN` to your API token" }
 
+# common headers
 $headers = @{
   Authorization = "Bearer $($env:API_TOKEN)"
   "Content-Type" = "application/json"
 }
 
-Write-Host "👉 Indexing a note..."
-$body = @{
-  title  = "Acme Note"
-  text   = "Acme builds rockets and coffee machines."
-  source = "manual"
-} | ConvertTo-Json
+Write-Host "✅ Using:"
+Write-Host "  FRIDAY_BASE = $($env:FRIDAY_BASE)"
+Write-Host "  API_TOKEN   = (hidden)"
+Write-Host ""
 
-$resp = Invoke-RestMethod -Method Post `
-  -Uri "$env:FRIDAY_BASE/api/rag/index" `
-  -Headers $headers -Body $body
-$resp | ConvertTo-Json -Depth 6 | Out-String | Write-Host
+# ---- 1) index a note ----
+Write-Host "📝 Indexing a note..."
+$indexBodyObj = @{
+  title  = $Title
+  text   = $Text
+  source = $Source
+}
+$indexBody = $indexBodyObj | ConvertTo-Json
 
-Write-Host "`n👉 Querying..."
-$qbody = @{ question = "What does Acme build?" } | ConvertTo-Json
+$indexUri = "$($env:FRIDAY_BASE)/api/rag/index"
+$indexResp = Invoke-RestMethod -Method Post -Uri $indexUri -Headers $headers -Body $indexBody
 
-$qresp = Invoke-RestMethod -Method Post `
-  -Uri "$env:FRIDAY_BASE/api/rag/query" `
-  -Headers $headers -Body $qbody
-$qresp | ConvertTo-Json -Depth 6 | Out-String | Write-Host
+Write-Host "`n--- index response ---"
+$indexJson = $indexResp | ConvertTo-Json -Depth 8
+Write-Host $indexJson
+Write-Host "-----------------------`n"
+
+# ---- 2) query it ----
+Write-Host "🔎 Querying..."
+$queryBodyObj = @{ question = $Question }
+$queryBody = $queryBodyObj | ConvertTo-Json
+
+$queryUri = "$($env:FRIDAY_BASE)/api/rag/query"
+$queryResp = Invoke-RestMethod -Method Post -Uri $queryUri -Headers $headers -Body $queryBody
+
+Write-Host "`n--- query response ---"
+$queryJson = $queryResp | ConvertTo-Json -Depth 8
+Write-Host $queryJson
+Write-Host "-----------------------`n"
+
+Write-Host "✅ Done."
+
 
 
