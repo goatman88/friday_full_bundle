@@ -189,6 +189,9 @@ def rag_query():
 
     return jsonify({"ok": True, "answer": answer, "contexts": contexts})
 
+@app.route("/health", methods=["GET"])
+def health():
+    return {"status": "ok"}, 200
 
 # ------------------------------------------------------------------------------
 # Main
