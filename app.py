@@ -1,216 +1,203 @@
-import os, json, math, time, re
-from pathlib import Path
-from collections import Counter, defaultdict
-from flask import Flask, request, jsonify, send_from_directory, abort
+import os
+import time
+import uuid
+from datetime import datetime, timezone
+from typing import List, Dict, Any
 
-APP_ROOT = Path(__file__).parent.resolve()
-STATIC_DIR = APP_ROOT / "static"
-DATA_DIR   = APP_ROOT / "data"
-UPLOAD_DIR = DATA_DIR / "uploads"
-INDEX_FILE = DATA_DIR / "index.jsonl"
+from flask import Flask, jsonify, request, abort
 
-for p in (STATIC_DIR, DATA_DIR, UPLOAD_DIR):
-    p.mkdir(parents=True, exist_ok=True)
+# ------------------------------------------------------------------------------
+# App bootstrap
+# ------------------------------------------------------------------------------
+app = Flask(__name__)
 
-API_TOKEN = os.getenv("API_TOKEN", "").strip()
+# In-memory "RAG" store (simple demo so we don't need any extra deps)
+DOCUMENTS: List[Dict[str, Any]] = []
 
-app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="/static")
+API_TOKEN = os.getenv("API_TOKEN", "").strip()  # set on Render
+# Key presence is just a health signal; use whatever env var you actually have
+AI_KEYS = [
+    os.getenv("OPENAI_API_KEY", "").strip(),
+    os.getenv("AI_API_KEY", "").strip(),
+    os.getenv("OPENAI_KEY", "").strip(),
+]
+KEY_PRESENT = any(AI_KEYS)
 
-# ---------- helpers ----------
 
-def ok(**kw):
-    return jsonify({"ok": True, **kw})
+# ------------------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------------------
+def now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-def err(msg, code=400):
-    return jsonify({"ok": False, "error": msg}), code
 
 def require_auth():
-    auth = request.headers.get("Authorization", "")
+    """Abort with 401 unless Authorization: Bearer <API_TOKEN> matches."""
     if not API_TOKEN:
-        return err("Server missing API token", 500)
-    if not auth.startswith("Bearer "):
-        return err("Unauthorized", 401)
-    token = auth.split(" ", 1)[1].strip()
+        # If you forgot to set API_TOKEN in Render, make that obvious.
+        abort(jsonify({"ok": False, "error": "Server missing API_TOKEN"}), 500)
+
+    auth = request.headers.get("Authorization", "")
+    prefix = "Bearer "
+    if not auth.startswith(prefix):
+        abort(jsonify({"ok": False, "error": "Unauthorized"}), 401)
+
+    token = auth[len(prefix):].strip()
     if token != API_TOKEN:
-        return err("Unauthorized", 401)
-    return None
+        abort(jsonify({"ok": False, "error": "Unauthorized"}), 401)
 
-def list_routes():
-    routes = []
-    for rt in app.url_map.iter_rules():
-        if rt.endpoint == "static":
-            continue
-        routes.append({
-            "rule": str(rt),
-            "methods": sorted(m for m in rt.methods if m in {"GET","POST","PUT","DELETE","PATCH"}),
-            "endpoint": rt.endpoint
-        })
-    return routes
 
-# --- super-simple RAG store (bag-of-words cosine) ---
-
-WORD = re.compile(r"[A-Za-z0-9_]{2,}")
-
-def tokenize(text: str):
-    return [t.lower() for t in WORD.findall(text or "")]
-
-def bow(text: str) -> Counter:
-    return Counter(tokenize(text))
-
-def cosine(a: Counter, b: Counter) -> float:
-    if not a or not b: return 0.0
-    common = set(a.keys()) & set(b.keys())
-    num = sum(a[t]*b[t] for t in common)
-    da = math.sqrt(sum(v*v for v in a.values()))
-    db = math.sqrt(sum(v*v for v in b.values()))
-    return float(num/(da*db)) if da and db else 0.0
-
-def index_write(doc: dict):
-    with INDEX_FILE.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(doc, ensure_ascii=False) + "\n")
-
-def index_read():
-    if not INDEX_FILE.exists(): return []
+def list_routes() -> List[Dict[str, Any]]:
+    """Return a compact listing of public routes for debugging."""
     out = []
-    with INDEX_FILE.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line: continue
-            try: out.append(json.loads(line))
-            except Exception: pass
+    for rule in app.url_map.iter_rules():
+        # hide Flask internals
+        if rule.endpoint == "static":
+            continue
+        out.append(
+            {
+                "endpoint": rule.endpoint,
+                "rule": str(rule),
+                "methods": sorted(m for m in rule.methods if m in {"GET", "POST"}),
+            }
+        )
+    # stable sort for nicer diffs
+    out.sort(key=lambda r: (r["endpoint"], r["rule"]))
     return out
 
-# ---------- pages ----------
+
+# ------------------------------------------------------------------------------
+# Routes
+# ------------------------------------------------------------------------------
 
 @app.get("/")
 def home():
-    # simple landing with link to UI/Docs
-    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
-    return html
+    return jsonify(
+        {
+            "ok": True,
+            "message": "Friday backend is running",
+            "docs": {
+                "health": "/health",
+                "routes": "/__routes (requires Authorization header)",
+                "index": "/api/rag/index  (POST, requires Authorization)",
+                "query": "/api/rag/query  (POST, requires Authorization)",
+            },
+        }
+    )
+
 
 @app.get("/health")
 def health():
-    return ok(status="running", key_present=bool(API_TOKEN), time=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    return jsonify(
+        {
+            "ok": True,
+            "status": "running",
+            "time": now_iso(),
+            "key_present": bool(KEY_PRESENT),
+            "docs_indexed": len(DOCUMENTS),
+        }
+    )
+
 
 @app.get("/__routes")
-def list_routes_ep():
-    # auth required
-    need = require_auth()
-    if need: return need
-    return ok(routes=list_routes())
+def routes():
+    require_auth()
+    return jsonify({"ok": True, "routes": list_routes()})
 
-# ---------- chat ----------
-
-@app.post("/chat")
-def chat():
-    need = require_auth()
-    if need: return need
-
-    data = request.get_json(silent=True) or {}
-    msg = (data.get("message") or "").strip()
-    if not msg:
-        return err("message is required")
-
-    # echo-style stub (plug your LLM here)
-    return ok(reply=f"Friday heard: {msg}")
-
-# ---------- uploads (re-used by RAG if you want) ----------
-
-@app.post("/data/upload")
-def upload_data():
-    need = require_auth()
-    if need: return need
-
-    if "file" not in request.files:
-        return err("No file uploaded")
-    f = request.files["file"]
-    if not f.filename:
-        return err("Empty filename")
-
-    dest = UPLOAD_DIR / f.filename
-    f.save(dest)
-    notes = request.form.get("notes", "")
-    return ok(filename=f.filename, bytes=dest.stat().st_size, notes=notes)
-
-# ---------- tiny RAG API ----------
 
 @app.post("/api/rag/index")
 def rag_index():
-    need = require_auth()
-    if need: return need
-
-    # Accept JSON: { "title": "...", "text": "..." }
-    # Optional: "source": "manual|upload|url", "meta": {...}
+    """
+    Body JSON:
+      { "title": "Widget FAQ", "text": "Widgets are blue...", "source": "faq" }
+    """
+    require_auth()
     data = request.get_json(silent=True) or {}
-    text  = (data.get("text") or "").strip()
-    title = (data.get("title") or f"note-{int(time.time())}")
-    source = (data.get("source") or "manual")
-    meta = data.get("meta") or {}
 
-    if not text:
-        return err("text is required")
+    title = (data.get("title") or "").strip()
+    text = (data.get("text") or "").strip()
+    source = (data.get("source") or "").strip()
 
-    doc = {
-        "id": f"doc_{int(time.time()*1000)}",
-        "title": title,
-        "text": text,
-        "source": source,
-        "meta": meta,
-        "ts": int(time.time())
-    }
-    index_write(doc)
-    return ok(indexed=doc["id"], title=title, chars=len(text))
+    if not title or not text:
+        return jsonify({"ok": False, "error": "title and text are required"}), 400
+
+    doc_id = f"doc_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}"
+    preview = text[:160]
+    DOCUMENTS.append(
+        {
+            "id": doc_id,
+            "title": title,
+            "text": text,
+            "preview": preview,
+            "source": source or "unspecified",
+        }
+    )
+    return jsonify({"ok": True, "indexed": doc_id, "title": title, "chars": len(text)})
+
 
 @app.post("/api/rag/query")
 def rag_query():
-    need = require_auth()
-    if need: return need
-
+    """
+    Body JSON:
+      { "query": "What color are widgets?", "top_k": 3 }
+    This is a tiny demo scorer (keyword/substring). Replace with your real RAG later.
+    """
+    require_auth()
     data = request.get_json(silent=True) or {}
-    q = (data.get("question") or "").strip()
-    k = int(data.get("k") or 3)
-    if not q:
-        return err("question is required")
 
-    docs = index_read()
-    if not docs:
-        return ok(answer="(no notes indexed yet)", contexts=[])
+    query = (data.get("query") or "").strip().lower()
+    top_k = int(data.get("top_k") or 3)
+    top_k = max(1, min(10, top_k))
 
-    qvec = bow(q)
-    scored = []
-    for d in docs:
-        s = cosine(qvec, bow(d.get("text","")))
-        if s > 0: scored.append((s, d))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    top = [{"score": round(s,4), "id": d["id"], "title": d.get("title"), "preview": (d.get("text","")[:240] + ("…" if len(d.get("text",""))>240 else ""))} for s,d in scored[:k]]
+    if not query:
+        return jsonify({"ok": False, "error": "query is required"}), 400
 
-    # toy “answer”: stitch top previews (plug your LLM later)
-    stitched = " | ".join(t["preview"] for t in top) or "(no match)"
-    answer = f"Top {len(top)} matches → {stitched}"
-    return ok(answer=answer, contexts=top)
+    scored: List[Dict[str, Any]] = []
+    for d in DOCUMENTS:
+        txt = f"{d['title']} {d['text']}".lower()
+        score = 0.0
+        # very basic scoring: count query token appearances
+        for token in query.split():
+            if token and token in txt:
+                score += 1.0
+        # slight boost if substring match
+        if query in txt:
+            score += 1.5
+        scored.append({"doc": d, "score": score})
 
-# ---------- UI & Docs ----------
+    # sort by score desc, keep top_k
+    scored.sort(key=lambda s: s["score"], reverse=True)
+    top = [s for s in scored[:top_k] if s["score"] > 0.0]
 
-@app.get("/ui")
-def serve_ui():
-    # tiny chat tester (token stored in localStorage)
-    return send_from_directory(STATIC_DIR, "ui.html")
+    contexts = [
+        {
+            "id": s["doc"]["id"],
+            "title": s["doc"]["title"],
+            "preview": s["doc"]["preview"],
+            "score": round(float(s["score"]), 4),
+        }
+        for s in top
+    ]
 
-@app.get("/docs")
-def serve_docs():
-    return send_from_directory(STATIC_DIR, "docs.html")
+    if contexts:
+        # toy "answer"
+        answer = "Top {} matches → ".format(len(contexts)) + " | ".join(
+            c["preview"] for c in contexts
+        )
+    else:
+        answer = "No matches found."
 
-# ---------- static fallback ----------
+    return jsonify({"ok": True, "answer": answer, "contexts": contexts})
 
-@app.get("/static/<path:filename>")
-def serve_static(filename):
-    return send_from_directory(STATIC_DIR, filename)
 
-# ---------- main ----------
-
+# ------------------------------------------------------------------------------
+# Main
+# ------------------------------------------------------------------------------
 if __name__ == "__main__":
+    # Render supplies PORT; locally we default to 5000
     port = int(os.getenv("PORT", "5000"))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port, debug=bool(os.getenv("FLASK_DEBUG")))
+
 
 
 
