@@ -52,100 +52,61 @@ def list_routes() -> List[Dict[str, Any]]:
 # ------------------------------------------------------------------------------
 # Routes
 # ------------------------------------------------------------------------------
-@app.route("/", methods=["GET"])
-def home():
-    return jsonify({"ok": True, "message": "Friday backend is running."}), 200
+# --- app.py (or your entry file) ---
 
-@app.route("/health", methods=["GET"])
+from flask import Flask, jsonify, request
+
+app = Flask(__name__)
+
+# --- Health: define ONCE only ---
+@app.get("/health")
 def health():
-    """Public health probe (no auth)."""
-    return (
-        jsonify(
-            {
-                "ok": True,
-                "status": "running",
-                "time": _now_iso(),
-                "key_present": bool(API_TOKEN),
-            }
-        ),
-        200,
-    )
+    return jsonify({
+        "ok": True,
+        "status": "running"
+    }), 200
 
-@app.route("/__routes", methods=["GET"])
-def routes():
-    ok, err = require_auth()
-    if not ok:
-        return err
-    return jsonify({"ok": True, "routes": list_routes()}), 200
+# --- Admin route to list routes (protected by token) ---
+import os
+API_TOKEN = os.getenv("API_TOKEN", "")
 
-@app.route("/api/rag/index", methods=["POST"])
+def _authed(req) -> bool:
+    auth = req.headers.get("Authorization", "")
+    return API_TOKEN and auth == f"Bearer {API_TOKEN}"
+
+@app.get("/__routes")
+def list_routes():
+    if not _authed(request):
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+    out = []
+    for rule in app.url_map.iter_rules():
+        out.append({
+            "rule": str(rule),
+            "endpoint": rule.endpoint,
+            "methods": sorted(list(rule.methods - {"HEAD", "OPTIONS"}))
+        })
+    return jsonify({"ok": True, "routes": out}), 200
+
+# --- RAG endpoints (stubs – keep if you already have working versions) ---
+@app.post("/api/rag/index")
 def rag_index():
-    ok, err = require_auth()
-    if not ok:
-        return err
-
     data = request.get_json(silent=True) or {}
-    title = (data.get("title") or "").strip()
-    text = (data.get("text") or "").strip()
-    source = (data.get("source") or "note").strip()
+    return jsonify({"ok": True, "indexed": True, "echo": data}), 200
 
-    if not text:
-        return jsonify({"ok": False, "error": "Field 'text' is required."}), 400
-
-    doc_id = data.get("id") or f"doc_{int(time.time()*1000)}"
-    DOCS[doc_id] = {
-        "id": doc_id,
-        "title": title or "Untitled",
-        "text": text,
-        "source": source,
-        "created": _now_iso(),
-    }
-    return jsonify({"ok": True, "indexed": doc_id, "title": DOCS[doc_id]["title"], "chars": len(text)}), 200
-
-@app.route("/api/rag/query", methods=["POST"])
+@app.post("/api/rag/query")
 def rag_query():
-    ok, err = require_auth()
-    if not ok:
-        return err
-
     data = request.get_json(silent=True) or {}
-    query = (data.get("query") or "").strip()
-    topk = int(data.get("topk") or 2)
-    topk = max(1, min(topk, 10))
+    q = data.get("query") or ""
+    return jsonify({
+        "ok": True,
+        "answer": f"Echo: {q}",
+        "contexts": [{"title":"demo","preview":"example","score":1.0}]
+    }), 200
 
-    if not query:
-        return jsonify({"ok": False, "error": "Field 'query' is required."}), 400
-
-    # Super-simple “contains” scoring
-    scored = []
-    q_lower = query.lower()
-    for d in DOCS.values():
-        t = f"{d.get('title','')} | {d.get('text','')}".lower()
-        score = (q_lower in t) * 1.0  # 1.0 if contains, else 0.0
-        if score > 0:
-            scored.append({"id": d["id"], "title": d["title"], "preview": d["text"][:120], "score": score})
-
-    scored.sort(key=lambda x: x["score"], reverse=True)
-    contexts = scored[:topk]
-
-    # A tiny answer heuristic
-    if contexts:
-        answer = f"Top {len(contexts)} matches → " + " | ".join(c["preview"] for c in contexts)
-    else:
-        answer = "No matching notes found."
-
-    return jsonify({"ok": True, "answer": answer, "contexts": contexts}), 200
-
-# ------------------------------------------------------------------------------
-# Entrypoint (Render runs with a WSGI server; local dev can use this)
-# ------------------------------------------------------------------------------
+# --- Render/Gunicorn entry point ---
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", "5000"))
-    app.run(host="0.0.0.0", port=port, debug=bool(os.getenv("DEBUG", "")))
-
-
-
-
+    # Local dev only
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=False)
 
 
 
