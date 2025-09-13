@@ -1,114 +1,148 @@
 import os
-from datetime import datetime, timezone
-from flask import Flask, request, jsonify, abort
+import time
+import uuid
+from typing import Dict, Any, List
 
-# -----------------------------------------------------------------------------
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+
+# ------------------------------------------------------------------------------
 # App setup
-# -----------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
 app = Flask(__name__)
-
-# In-memory toy store for "indexed" notes (survives while process is running)
-INDEX = []
+CORS(app)
 
 API_TOKEN = os.getenv("API_TOKEN", "").strip()
 
+# Simple in-memory "database" for notes indexed via /api/rag/index
+DOCS: Dict[str, Dict[str, Any]] = {}
+
+# ------------------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------------------
+def _now_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
 def require_auth():
-    """Simple bearer token check used by protected routes."""
+    """Return (ok, error_json_response) if auth fails; otherwise (True, None)."""
+    # Expect:  Authorization: Bearer <token>
     auth = request.headers.get("Authorization", "")
     if not API_TOKEN:
-        abort(500, description="Server missing API_TOKEN")
-    if not auth.startswith("Bearer "):
-        abort(401, description="Missing bearer token")
+        # If the server has no token configured, treat as locked down
+        return False, (jsonify({"ok": False, "error": "Server missing API_TOKEN"}), 500)
+
+    if not auth.lower().startswith("bearer "):
+        return False, (jsonify({"ok": False, "error": "Unauthorized"}), 401)
+
     token = auth.split(" ", 1)[1].strip()
     if token != API_TOKEN:
-        abort(401, description="Invalid token")
+        return False, (jsonify({"ok": False, "error": "Unauthorized"}), 401)
 
-# -----------------------------------------------------------------------------
+    return True, None
+
+def list_routes() -> List[Dict[str, Any]]:
+    return [
+        {"endpoint": "home", "rule": "/", "methods": ["GET"]},
+        {"endpoint": "health", "rule": "/health", "methods": ["GET"]},
+        {"endpoint": "routes", "rule": "/__routes", "methods": ["GET"]},
+        {"endpoint": "rag_index", "rule": "/api/rag/index", "methods": ["POST"]},
+        {"endpoint": "rag_query", "rule": "/api/rag/query", "methods": ["POST"]},
+    ]
+
+# ------------------------------------------------------------------------------
 # Routes
-# -----------------------------------------------------------------------------
-@app.get("/health")
-def health():  # endpoint name is 'health' (once!)
-    """Public health endpoint."""
-    return jsonify({
-        "ok": True,
-        "status": "running",
-        "key_present": bool(API_TOKEN),
-        "time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    }), 200
+# ------------------------------------------------------------------------------
+@app.route("/", methods=["GET"])
+def home():
+    return jsonify({"ok": True, "message": "Friday backend is running."}), 200
 
-@app.get("/__routes")
-def list_routes():
-    """Protected route list (requires Authorization: Bearer <API_TOKEN>)."""
-    require_auth()
-    out = []
-    for rule in app.url_map.iter_rules():
-        # Skip static to keep output tidy
-        if rule.endpoint == "static":
-            continue
-        out.append({
-            "endpoint": rule.endpoint,
-            "methods": sorted(m for m in rule.methods if m in {"GET","POST","PUT","DELETE","PATCH"}),
-            "rule": str(rule),
-        })
-    return jsonify({"ok": True, "routes": out}), 200
+@app.route("/health", methods=["GET"])
+def health():
+    """Public health probe (no auth)."""
+    return (
+        jsonify(
+            {
+                "ok": True,
+                "status": "running",
+                "time": _now_iso(),
+                "key_present": bool(API_TOKEN),
+            }
+        ),
+        200,
+    )
 
-@app.post("/api/rag/index")
+@app.route("/__routes", methods=["GET"])
+def routes():
+    ok, err = require_auth()
+    if not ok:
+        return err
+    return jsonify({"ok": True, "routes": list_routes()}), 200
+
+@app.route("/api/rag/index", methods=["POST"])
 def rag_index():
-    """Index a 'note' – very simple stub for testing."""
-    require_auth()
-    try:
-        payload = request.get_json(force=True) or {}
-    except Exception:
-        return jsonify({"ok": False, "error": "Invalid JSON"}), 400
+    ok, err = require_auth()
+    if not ok:
+        return err
 
-    title = (payload.get("title") or "").strip()
-    text  = (payload.get("text")  or "").strip()
-    if not title or not text:
-        return jsonify({"ok": False, "error": "Both 'title' and 'text' are required"}), 400
+    data = request.get_json(silent=True) or {}
+    title = (data.get("title") or "").strip()
+    text = (data.get("text") or "").strip()
+    source = (data.get("source") or "note").strip()
 
-    doc_id = f"doc_{int(datetime.now().timestamp()*1000)}"
-    INDEX.append({"id": doc_id, "title": title, "text": text})
-    return jsonify({"ok": True, "indexed": doc_id, "title": title, "chars": len(text)}), 200
+    if not text:
+        return jsonify({"ok": False, "error": "Field 'text' is required."}), 400
 
-@app.post("/api/rag/query")
+    doc_id = data.get("id") or f"doc_{int(time.time()*1000)}"
+    DOCS[doc_id] = {
+        "id": doc_id,
+        "title": title or "Untitled",
+        "text": text,
+        "source": source,
+        "created": _now_iso(),
+    }
+    return jsonify({"ok": True, "indexed": doc_id, "title": DOCS[doc_id]["title"], "chars": len(text)}), 200
+
+@app.route("/api/rag/query", methods=["POST"])
 def rag_query():
-    """Query 'indexed' notes – simple substring scorer for testing."""
-    require_auth()
-    try:
-        payload = request.get_json(force=True) or {}
-    except Exception:
-        return jsonify({"ok": False, "error": "Invalid JSON"}), 400
+    ok, err = require_auth()
+    if not ok:
+        return err
 
-    q = (payload.get("query") or "").strip()
-    topk = int(payload.get("topk") or 2)
-    if not q:
-        return jsonify({"ok": False, "error": "Field 'query' is required"}), 400
+    data = request.get_json(silent=True) or {}
+    query = (data.get("query") or "").strip()
+    topk = int(data.get("topk") or 2)
+    topk = max(1, min(topk, 10))
 
+    if not query:
+        return jsonify({"ok": False, "error": "Field 'query' is required."}), 400
+
+    # Super-simple “contains” scoring
     scored = []
-    for d in INDEX:
-        score = 1.0 if q.lower() in d["text"].lower() else 0.0
-        if score > 0.0:
-            scored.append({
-                "id": d["id"],
-                "title": d["title"],
-                "preview": d["text"][:120],
-                "score": round(score, 4),
-            })
+    q_lower = query.lower()
+    for d in DOCS.values():
+        t = f"{d.get('title','')} | {d.get('text','')}".lower()
+        score = (q_lower in t) * 1.0  # 1.0 if contains, else 0.0
+        if score > 0:
+            scored.append({"id": d["id"], "title": d["title"], "preview": d["text"][:120], "score": score})
+
     scored.sort(key=lambda x: x["score"], reverse=True)
     contexts = scored[:topk]
 
-    # Friendly answer string like you saw earlier
-    answer = " | ".join([c["preview"] for c in contexts]) or "(no matches)"
+    # A tiny answer heuristic
+    if contexts:
+        answer = f"Top {len(contexts)} matches → " + " | ".join(c["preview"] for c in contexts)
+    else:
+        answer = "No matching notes found."
+
     return jsonify({"ok": True, "answer": answer, "contexts": contexts}), 200
 
-# -----------------------------------------------------------------------------
-# Entrypoint (Render uses WSGI; this is still fine for local dev)
-# -----------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# Entrypoint (Render runs with a WSGI server; local dev can use this)
+# ------------------------------------------------------------------------------
 if __name__ == "__main__":
-    # Default PORT for local dev. Render injects PORT env var automatically.
     port = int(os.getenv("PORT", "5000"))
-    # 0.0.0.0 so it binds in containers; debug from env if you want
-    app.run(host="0.0.0.0", port=port, debug=bool(os.getenv("FLASK_DEBUG")))
+    app.run(host="0.0.0.0", port=port, debug=bool(os.getenv("DEBUG", "")))
+
 
 
 
