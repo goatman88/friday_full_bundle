@@ -1,148 +1,115 @@
 import os
-import math
 from datetime import datetime, timezone
-from typing import List, Dict, Any
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, abort
 
+# -----------------------------------------------------------------------------
+# App setup
+# -----------------------------------------------------------------------------
 app = Flask(__name__)
 
-# -------------------------------------------------------------------
-# Config / Auth
-# -------------------------------------------------------------------
-API_TOKEN = os.getenv("API_TOKEN", "changeme")
+# In-memory toy store for "indexed" notes (survives while process is running)
+INDEX = []
 
-def require_auth() -> bool:
-    """Return True if Authorization: Bearer <token> matches API_TOKEN."""
+API_TOKEN = os.getenv("API_TOKEN", "").strip()
+
+def require_auth():
+    """Simple bearer token check used by protected routes."""
     auth = request.headers.get("Authorization", "")
+    if not API_TOKEN:
+        abort(500, description="Server missing API_TOKEN")
     if not auth.startswith("Bearer "):
-        return False
-    token = auth[7:].strip()
-    return token == API_TOKEN
+        abort(401, description="Missing bearer token")
+    token = auth.split(" ", 1)[1].strip()
+    if token != API_TOKEN:
+        abort(401, description="Invalid token")
 
-def auth_or_401():
-    if not require_auth():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 401
-
-# -------------------------------------------------------------------
-# Simple in-memory “index” for demo RAG (good enough for tests)
-# NOTE: this resets on each deploy; that’s fine for quick checks.
-# -------------------------------------------------------------------
-_DOCS: List[Dict[str, Any]] = []
-
-def _cosine_sim(a: Dict[str, int], b: Dict[str, int]) -> float:
-    # super tiny bag-of-words similarity for demo purposes
-    if not a or not b:
-        return 0.0
-    dot = sum(a.get(k, 0) * b.get(k, 0) for k in set(a) | set(b))
-    na = math.sqrt(sum(v * v for v in a.values()))
-    nb = math.sqrt(sum(v * v for v in b.values()))
-    if na == 0 or nb == 0:
-        return 0.0
-    return dot / (na * nb)
-
-def _bow(text: str) -> Dict[str, int]:
-    bag: Dict[str, int] = {}
-    for w in (text or "").lower().split():
-        bag[w] = bag.get(w, 0) + 1
-    return bag
-
-# -------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Routes
-# -------------------------------------------------------------------
-
-@app.get("/")  # quick landing
-def home():
-    return "Friday backend is running."
-
+# -----------------------------------------------------------------------------
 @app.get("/health")
-def health():  # make sure this function name appears only ONCE
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    key_present = bool(os.getenv("OPENAI_API_KEY"))
+def health():  # endpoint name is 'health' (once!)
+    """Public health endpoint."""
     return jsonify({
         "ok": True,
         "status": "running",
-        "time": now,
-        "key_present": key_present
+        "key_present": bool(API_TOKEN),
+        "time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }), 200
 
 @app.get("/__routes")
 def list_routes():
-    # Protected: requires Bearer token
-    auth_fail = auth_or_401()
-    if auth_fail:
-        return auth_fail
+    """Protected route list (requires Authorization: Bearer <API_TOKEN>)."""
+    require_auth()
     out = []
     for rule in app.url_map.iter_rules():
-        if rule.endpoint == 'static':
+        # Skip static to keep output tidy
+        if rule.endpoint == "static":
             continue
         out.append({
             "endpoint": rule.endpoint,
             "methods": sorted(m for m in rule.methods if m in {"GET","POST","PUT","DELETE","PATCH"}),
-            "rule": str(rule)
+            "rule": str(rule),
         })
-    return jsonify({"ok": True, "routes": out})
+    return jsonify({"ok": True, "routes": out}), 200
 
 @app.post("/api/rag/index")
 def rag_index():
-    # Protected
-    auth_fail = auth_or_401()
-    if auth_fail:
-        return auth_fail
+    """Index a 'note' – very simple stub for testing."""
+    require_auth()
+    try:
+        payload = request.get_json(force=True) or {}
+    except Exception:
+        return jsonify({"ok": False, "error": "Invalid JSON"}), 400
 
-    data = request.get_json(silent=True) or {}
-    title = (data.get("title") or "").strip()
-    text = (data.get("text") or "").strip()
-    source = (data.get("source") or "").strip() or "note"
-
+    title = (payload.get("title") or "").strip()
+    text  = (payload.get("text")  or "").strip()
     if not title or not text:
-        return jsonify({"ok": False, "error": "title and text are required"}), 400
+        return jsonify({"ok": False, "error": "Both 'title' and 'text' are required"}), 400
 
-    doc_id = f"doc_{int(datetime.now(timezone.utc).timestamp()*1000):d}"
-    _DOCS.append({
-        "id": doc_id,
-        "title": title,
-        "preview": text[:120],
-        "source": source,
-        "bow": _bow(text),
-        "text": text,
-    })
-    return jsonify({"ok": True, "indexed": doc_id, "title": title, "chars": len(text)})
+    doc_id = f"doc_{int(datetime.now().timestamp()*1000)}"
+    INDEX.append({"id": doc_id, "title": title, "text": text})
+    return jsonify({"ok": True, "indexed": doc_id, "title": title, "chars": len(text)}), 200
 
 @app.post("/api/rag/query")
 def rag_query():
-    # Protected
-    auth_fail = auth_or_401()
-    if auth_fail:
-        return auth_fail
+    """Query 'indexed' notes – simple substring scorer for testing."""
+    require_auth()
+    try:
+        payload = request.get_json(force=True) or {}
+    except Exception:
+        return jsonify({"ok": False, "error": "Invalid JSON"}), 400
 
-    data = request.get_json(silent=True) or {}
-    query = (data.get("query") or "").strip()
-    topk = int(data.get("topk") or 3)
+    q = (payload.get("query") or "").strip()
+    topk = int(payload.get("topk") or 2)
+    if not q:
+        return jsonify({"ok": False, "error": "Field 'query' is required"}), 400
 
-    if not query:
-        return jsonify({"ok": False, "error": "query is required"}), 400
-
-    qbow = _bow(query)
     scored = []
-    for d in _DOCS:
-        scored.append({
-            "id": d["id"],
-            "title": d["title"],
-            "preview": d["preview"],
-            "score": round(_cosine_sim(qbow, d["bow"]), 4),
-        })
+    for d in INDEX:
+        score = 1.0 if q.lower() in d["text"].lower() else 0.0
+        if score > 0.0:
+            scored.append({
+                "id": d["id"],
+                "title": d["title"],
+                "preview": d["text"][:120],
+                "score": round(score, 4),
+            })
     scored.sort(key=lambda x: x["score"], reverse=True)
-    contexts = scored[:max(1, topk)]
-    answer = " | ".join(c["title"] + " " + c["preview"] for c in contexts) or "No matches."
-    return jsonify({"ok": True, "answer": f"Top {len(contexts)} matches -> {answer}", "contexts": contexts})
+    contexts = scored[:topk]
 
-# -------------------------------------------------------------------
-# Main (Render supplies PORT)
-# -------------------------------------------------------------------
+    # Friendly answer string like you saw earlier
+    answer = " | ".join([c["preview"] for c in contexts]) or "(no matches)"
+    return jsonify({"ok": True, "answer": answer, "contexts": contexts}), 200
+
+# -----------------------------------------------------------------------------
+# Entrypoint (Render uses WSGI; this is still fine for local dev)
+# -----------------------------------------------------------------------------
 if __name__ == "__main__":
-    # Local dev: python app.py
+    # Default PORT for local dev. Render injects PORT env var automatically.
     port = int(os.getenv("PORT", "5000"))
-    app.run(host="0.0.0.0", port=port, debug=bool(os.getenv("DEBUG")))
+    # 0.0.0.0 so it binds in containers; debug from env if you want
+    app.run(host="0.0.0.0", port=port, debug=bool(os.getenv("FLASK_DEBUG")))
+
 
 
 
