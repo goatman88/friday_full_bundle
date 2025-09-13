@@ -1,205 +1,148 @@
 import os
-import time
-import uuid
+import math
 from datetime import datetime, timezone
 from typing import List, Dict, Any
+from flask import Flask, request, jsonify
 
-from flask import Flask, jsonify, request, abort
-
-# ------------------------------------------------------------------------------
-# App bootstrap
-# ------------------------------------------------------------------------------
 app = Flask(__name__)
 
-# In-memory "RAG" store (simple demo so we don't need any extra deps)
-DOCUMENTS: List[Dict[str, Any]] = []
+# -------------------------------------------------------------------
+# Config / Auth
+# -------------------------------------------------------------------
+API_TOKEN = os.getenv("API_TOKEN", "changeme")
 
-API_TOKEN = os.getenv("API_TOKEN", "").strip()  # set on Render
-# Key presence is just a health signal; use whatever env var you actually have
-AI_KEYS = [
-    os.getenv("OPENAI_API_KEY", "").strip(),
-    os.getenv("AI_API_KEY", "").strip(),
-    os.getenv("OPENAI_KEY", "").strip(),
-]
-KEY_PRESENT = any(AI_KEYS)
-
-
-# ------------------------------------------------------------------------------
-# Helpers
-# ------------------------------------------------------------------------------
-def now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def require_auth():
-    """Abort with 401 unless Authorization: Bearer <API_TOKEN> matches."""
-    if not API_TOKEN:
-        # If you forgot to set API_TOKEN in Render, make that obvious.
-        abort(jsonify({"ok": False, "error": "Server missing API_TOKEN"}), 500)
-
+def require_auth() -> bool:
+    """Return True if Authorization: Bearer <token> matches API_TOKEN."""
     auth = request.headers.get("Authorization", "")
-    prefix = "Bearer "
-    if not auth.startswith(prefix):
-        abort(jsonify({"ok": False, "error": "Unauthorized"}), 401)
+    if not auth.startswith("Bearer "):
+        return False
+    token = auth[7:].strip()
+    return token == API_TOKEN
 
-    token = auth[len(prefix):].strip()
-    if token != API_TOKEN:
-        abort(jsonify({"ok": False, "error": "Unauthorized"}), 401)
+def auth_or_401():
+    if not require_auth():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
 
+# -------------------------------------------------------------------
+# Simple in-memory “index” for demo RAG (good enough for tests)
+# NOTE: this resets on each deploy; that’s fine for quick checks.
+# -------------------------------------------------------------------
+_DOCS: List[Dict[str, Any]] = []
 
-def list_routes() -> List[Dict[str, Any]]:
-    """Return a compact listing of public routes for debugging."""
-    out = []
-    for rule in app.url_map.iter_rules():
-        # hide Flask internals
-        if rule.endpoint == "static":
-            continue
-        out.append(
-            {
-                "endpoint": rule.endpoint,
-                "rule": str(rule),
-                "methods": sorted(m for m in rule.methods if m in {"GET", "POST"}),
-            }
-        )
-    # stable sort for nicer diffs
-    out.sort(key=lambda r: (r["endpoint"], r["rule"]))
-    return out
+def _cosine_sim(a: Dict[str, int], b: Dict[str, int]) -> float:
+    # super tiny bag-of-words similarity for demo purposes
+    if not a or not b:
+        return 0.0
+    dot = sum(a.get(k, 0) * b.get(k, 0) for k in set(a) | set(b))
+    na = math.sqrt(sum(v * v for v in a.values()))
+    nb = math.sqrt(sum(v * v for v in b.values()))
+    if na == 0 or nb == 0:
+        return 0.0
+    return dot / (na * nb)
 
+def _bow(text: str) -> Dict[str, int]:
+    bag: Dict[str, int] = {}
+    for w in (text or "").lower().split():
+        bag[w] = bag.get(w, 0) + 1
+    return bag
 
-# ------------------------------------------------------------------------------
+# -------------------------------------------------------------------
 # Routes
-# ------------------------------------------------------------------------------
+# -------------------------------------------------------------------
 
-@app.get("/")
+@app.get("/")  # quick landing
 def home():
-    return jsonify(
-        {
-            "ok": True,
-            "message": "Friday backend is running",
-            "docs": {
-                "health": "/health",
-                "routes": "/__routes (requires Authorization header)",
-                "index": "/api/rag/index  (POST, requires Authorization)",
-                "query": "/api/rag/query  (POST, requires Authorization)",
-            },
-        }
-    )
-
+    return "Friday backend is running."
 
 @app.get("/health")
-def health():
-    return jsonify(
-        {
-            "ok": True,
-            "status": "running",
-            "time": now_iso(),
-            "key_present": bool(KEY_PRESENT),
-            "docs_indexed": len(DOCUMENTS),
-        }
-    )
-
+def health():  # make sure this function name appears only ONCE
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    key_present = bool(os.getenv("OPENAI_API_KEY"))
+    return jsonify({
+        "ok": True,
+        "status": "running",
+        "time": now,
+        "key_present": key_present
+    }), 200
 
 @app.get("/__routes")
-def routes():
-    require_auth()
-    return jsonify({"ok": True, "routes": list_routes()})
-
+def list_routes():
+    # Protected: requires Bearer token
+    auth_fail = auth_or_401()
+    if auth_fail:
+        return auth_fail
+    out = []
+    for rule in app.url_map.iter_rules():
+        if rule.endpoint == 'static':
+            continue
+        out.append({
+            "endpoint": rule.endpoint,
+            "methods": sorted(m for m in rule.methods if m in {"GET","POST","PUT","DELETE","PATCH"}),
+            "rule": str(rule)
+        })
+    return jsonify({"ok": True, "routes": out})
 
 @app.post("/api/rag/index")
 def rag_index():
-    """
-    Body JSON:
-      { "title": "Widget FAQ", "text": "Widgets are blue...", "source": "faq" }
-    """
-    require_auth()
-    data = request.get_json(silent=True) or {}
+    # Protected
+    auth_fail = auth_or_401()
+    if auth_fail:
+        return auth_fail
 
+    data = request.get_json(silent=True) or {}
     title = (data.get("title") or "").strip()
     text = (data.get("text") or "").strip()
-    source = (data.get("source") or "").strip()
+    source = (data.get("source") or "").strip() or "note"
 
     if not title or not text:
         return jsonify({"ok": False, "error": "title and text are required"}), 400
 
-    doc_id = f"doc_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}"
-    preview = text[:160]
-    DOCUMENTS.append(
-        {
-            "id": doc_id,
-            "title": title,
-            "text": text,
-            "preview": preview,
-            "source": source or "unspecified",
-        }
-    )
+    doc_id = f"doc_{int(datetime.now(timezone.utc).timestamp()*1000):d}"
+    _DOCS.append({
+        "id": doc_id,
+        "title": title,
+        "preview": text[:120],
+        "source": source,
+        "bow": _bow(text),
+        "text": text,
+    })
     return jsonify({"ok": True, "indexed": doc_id, "title": title, "chars": len(text)})
-
 
 @app.post("/api/rag/query")
 def rag_query():
-    """
-    Body JSON:
-      { "query": "What color are widgets?", "top_k": 3 }
-    This is a tiny demo scorer (keyword/substring). Replace with your real RAG later.
-    """
-    require_auth()
-    data = request.get_json(silent=True) or {}
+    # Protected
+    auth_fail = auth_or_401()
+    if auth_fail:
+        return auth_fail
 
-    query = (data.get("query") or "").strip().lower()
-    top_k = int(data.get("top_k") or 3)
-    top_k = max(1, min(10, top_k))
+    data = request.get_json(silent=True) or {}
+    query = (data.get("query") or "").strip()
+    topk = int(data.get("topk") or 3)
 
     if not query:
         return jsonify({"ok": False, "error": "query is required"}), 400
 
-    scored: List[Dict[str, Any]] = []
-    for d in DOCUMENTS:
-        txt = f"{d['title']} {d['text']}".lower()
-        score = 0.0
-        # very basic scoring: count query token appearances
-        for token in query.split():
-            if token and token in txt:
-                score += 1.0
-        # slight boost if substring match
-        if query in txt:
-            score += 1.5
-        scored.append({"doc": d, "score": score})
+    qbow = _bow(query)
+    scored = []
+    for d in _DOCS:
+        scored.append({
+            "id": d["id"],
+            "title": d["title"],
+            "preview": d["preview"],
+            "score": round(_cosine_sim(qbow, d["bow"]), 4),
+        })
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    contexts = scored[:max(1, topk)]
+    answer = " | ".join(c["title"] + " " + c["preview"] for c in contexts) or "No matches."
+    return jsonify({"ok": True, "answer": f"Top {len(contexts)} matches -> {answer}", "contexts": contexts})
 
-    # sort by score desc, keep top_k
-    scored.sort(key=lambda s: s["score"], reverse=True)
-    top = [s for s in scored[:top_k] if s["score"] > 0.0]
-
-    contexts = [
-        {
-            "id": s["doc"]["id"],
-            "title": s["doc"]["title"],
-            "preview": s["doc"]["preview"],
-            "score": round(float(s["score"]), 4),
-        }
-        for s in top
-    ]
-
-    if contexts:
-        # toy "answer"
-        answer = "Top {} matches → ".format(len(contexts)) + " | ".join(
-            c["preview"] for c in contexts
-        )
-    else:
-        answer = "No matches found."
-
-    return jsonify({"ok": True, "answer": answer, "contexts": contexts})
-
-@app.route("/health", methods=["GET"])
-def health():
-    return {"status": "ok"}, 200
-
-# ------------------------------------------------------------------------------
-# Main
-# ------------------------------------------------------------------------------
+# -------------------------------------------------------------------
+# Main (Render supplies PORT)
+# -------------------------------------------------------------------
 if __name__ == "__main__":
-    # Render supplies PORT; locally we default to 5000
+    # Local dev: python app.py
     port = int(os.getenv("PORT", "5000"))
-    app.run(host="0.0.0.0", port=port, debug=bool(os.getenv("FLASK_DEBUG")))
+    app.run(host="0.0.0.0", port=port, debug=bool(os.getenv("DEBUG")))
 
 
 
