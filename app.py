@@ -1,79 +1,76 @@
 # app.py
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 
 app = Flask(__name__)
+CORS(app)
 
-# ---- basic/home ----
-@app.get("/", endpoint="home")
-def home():
+@app.get("/")
+def index():
+    # helpful landing page so the browser doesn't just show "Not Found"
     return jsonify({
         "ok": True,
-        "message": "Friday service is running.",
-        "try": ["/health", "/__routes", "/api/rag/index (POST)", "/api/rag/query (POST)"]
+        "service": "friday",
+        "message": "Try GET /health or POST /api/rag/*"
     }), 200
 
-# ---- health ----
-@app.get("/health", endpoint="health")
+@app.get("/health")
 def health():
     return jsonify({"ok": True, "status": "running"}), 200
 
-# ---- debug: list routes (no auth) ----
-@app.get("/__routes", endpoint="routes")
-def list_routes():
-    routes = []
-    for rule in app.url_map.iter_rules():
-        if rule.endpoint != "static":
-            routes.append({
-                "endpoint": rule.endpoint,
-                "rule": str(rule),
-                "methods": sorted(m for m in rule.methods if m not in {"HEAD", "OPTIONS"}),
-            })
-    return jsonify({"ok": True, "routes": routes}), 200
+@app.get("/__routes")
+def routes():
+    """Debug helper to confirm what's registered in production."""
+    out = []
+    for r in sorted(app.url_map.iter_rules(), key=lambda x: str(x)):
+        methods = sorted([m for m in r.methods if m not in ("HEAD", "OPTIONS")])
+        out.append({"rule": str(r), "methods": methods, "endpoint": r.endpoint})
+    return jsonify({"ok": True, "routes": out}), 200
 
-# ---- helpers ----
-def _authorized(req) -> bool:
-    auth = req.headers.get("Authorization", "")
-    # accept any non-empty Bearer for now (keeps your tests simple)
-    return auth.startswith("Bearer ") and len(auth.split(" ", 1)[1].strip()) > 0
+def _check_auth():
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer ") or len(auth.split(" ", 1)[1].strip()) == 0:
+        return False
+    return True
 
-# ---- RAG stubs ----
-@app.post("/api/rag/index", endpoint="rag_index")
+@app.post("/api/rag/index")
 def rag_index():
-    if not _authorized(request):
+    if not _check_auth():
         return jsonify({"error": "Unauthorized", "ok": False}), 401
-
     body = request.get_json(silent=True) or {}
-    title = body.get("title", "Untitled")
-    # pretend to index one doc
+    title = body.get("title", "")
+    text = body.get("text", "")
+    source = body.get("source", "unknown")
+    # stubbed indexer
     return jsonify({
         "ok": True,
-        "indexed": [{"id": "doc_1", "title": title}]
+        "indexed": [{"id": "doc_1", "title": title, "source": source, "chars": len(text)}]
     }), 200
 
-@app.post("/api/rag/query", endpoint="rag_query")
+@app.post("/api/rag/query")
 def rag_query():
-    if not _authorized(request):
+    if not _check_auth():
         return jsonify({"error": "Unauthorized", "ok": False}), 401
-
     body = request.get_json(silent=True) or {}
     query = body.get("query", "")
     topk = int(body.get("topk", 2))
-
+    # stubbed answer
     return jsonify({
         "ok": True,
-        "answer": "Widgets are blue and waterproof.",
         "query": query,
+        "answer": "Widgets are blue and waterproof.",
         "contexts": [
-            {
-                "id": "doc_1",
-                "title": "Widget FAQ",
-                "score": 0.42,
-                "preview": "Widgets are blue and waterproof."
-            }
+            {"id": "doc_1", "title": "Widget FAQ", "score": 0.42,
+             "preview": "Widgets are blue and waterproof."}
         ][:topk]
     }), 200
 
-# (No __main__ block needed on Render; waitress will import app:app)
+if __name__ == "__main__":
+    # local dev only
+    import os
+    port = int(os.getenv("PORT", "5000"))
+    app.run(host="0.0.0.0", port=port, debug=True)
+)
 
 
 
