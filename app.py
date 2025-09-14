@@ -13,7 +13,6 @@ CORS(app)
 
 API_TOKEN = os.getenv("API_TOKEN", "")
 
-# SINGLE place that creates the client
 oai = make_openai_client()
 
 def routes_list() -> List[str]:
@@ -42,36 +41,12 @@ def __whoami():
         "app_id": int(datetime.utcnow().timestamp() * 1000),
         "cwd": os.getcwd(),
         "module_file": __file__,
-        "python": os.popen("python -V").read().strip() or "unknown"
+        "python": os.popen("python -V").read().strip() or "unknown",
     })
 
 @app.get("/health")
 def health():
     return jsonify({"ok": True, "status": "running"})
-
-@app.get("/ping")
-def ping():
-    return jsonify({"pong": True, "ts": datetime.utcnow().isoformat()})
-
-# --- minimal RAG toy (kept to satisfy your tests) -------------------
-DOCUMENTS: List[Dict[str, Any]] = []
-
-def llm_embed(text: str) -> List[float]:
-    resp = oai.embeddings.create(
-        model=os.getenv("EMBED_MODEL", "text-embedding-3-small"),
-        input=text
-    )
-    return resp.data[0].embedding
-
-def llm_answer(prompt: str) -> str:
-    model = os.getenv("CHAT_MODEL", "gpt-4o-mini")
-    r = oai.responses.create(
-        model=model,
-        input=[{"role": "user", "content": prompt}],
-        temperature=0.2,
-        max_output_tokens=256,
-    )
-    return r.output_text.strip()
 
 @app.post("/api/rag/index")
 def rag_index():
@@ -80,9 +55,14 @@ def rag_index():
     text = str(d.get("text") or "")
     if not text:
         return jsonify({"ok": False, "error": "text required"}), 400
-    emb = llm_embed(text)
+
+    emb = oai.embeddings.create(
+        model=os.getenv("EMBED_MODEL", "text-embedding-3-small"),
+        input=text
+    ).data[0].embedding
+
     doc = {
-        "id": f"doc_{len(DOCUMENTS)+1}",
+        "id": f"doc_{int(datetime.utcnow().timestamp())}",
         "title": str(d.get("title") or ""),
         "preview": (text[:160] + "…") if len(text) > 160 else text,
         "text": text,
@@ -91,7 +71,7 @@ def rag_index():
         "user_id": str(d.get("user_id") or "public"),
         "embedding": emb,
     }
-    DOCUMENTS.append(doc)
+    _DB.append(doc)
     return jsonify({"ok": True, "indexed": True, "doc": {"id": doc["id"], "title": doc["title"]}})
 
 @app.post("/api/rag/query")
@@ -102,23 +82,37 @@ def rag_query():
     k = int(d.get("topk") or 3)
     if not q:
         return jsonify({"ok": False, "error": "query required"}), 400
-    qv = llm_embed(q)
+
+    qv = oai.embeddings.create(
+        model=os.getenv("EMBED_MODEL", "text-embedding-3-small"),
+        input=q
+    ).data[0].embedding
+
     def score(doc): return sum(a*b for a, b in zip(doc["embedding"], qv))
-    ranked = sorted(DOCUMENTS, key=score, reverse=True)[:k]
-    ctx = "\n\n".join(f"- {x['title']}: {x['preview']}" for x in ranked)
-    ans = llm_answer(f"Use the context to answer.\n\nContext:\n{ctx}\n\nQ: {q}\nA:")
+    ranked = sorted(_DB, key=score, reverse=True)[:k]
+
+    prompt = ("Use the context to answer.\n\n" +
+              "\n".join(f"- {x['title']}: {x['preview']}" for x in ranked) +
+              f"\n\nQ: {q}\nA:")
+
+    ans = oai.responses.create(
+        model=os.getenv("CHAT_MODEL", "gpt-4o-mini"),
+        input=[{"role": "user", "content": prompt}],
+        temperature=0.2,
+        max_output_tokens=256,
+    ).output_text.strip()
+
     return jsonify({
         "ok": True,
         "answer": ans,
         "contexts": [{"id": x["id"], "preview": x["preview"], "title": x["title"]} for x in ranked]
     })
 
-@app.post("/api/rag/query-advanced")
-def rag_query_advanced():
-    return rag_query()
+_DB: List[Dict[str, Any]] = []
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
+
 
 
 
