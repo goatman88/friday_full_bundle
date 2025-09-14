@@ -1,237 +1,105 @@
 # app.py
+from __future__ import annotations
 import os
 import json
 import datetime as dt
-from urllib.parse import urlparse
+from typing import List, Dict, Any
 
 from flask import Flask, request, jsonify, send_from_directory
-from flask_cors import CORS
+from werkzeug.middleware.proxy_fix import ProxyFix
 
-# -----------------------
-# Config & App
-# -----------------------
-APP_NAME = "Friday backend"
-API_TOKEN = os.getenv("API_TOKEN", "").strip()
-DATABASE_URL = os.getenv("DATABASE_URL", "").strip()  # e.g. postgres://... or empty for SQLite
+from sqlalchemy import (
+    create_engine, text, Column, String, Text, DateTime, Integer
+)
+from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.exc import OperationalError, ProgrammingError
 
-app = Flask(__name__, static_folder="static")
-CORS(app)
+APP_TOKEN = os.getenv("APP_TOKEN") or os.getenv("API_TOKEN") or "dev_token"
 
-def need_auth() -> bool:
-    return len(API_TOKEN) > 0
+DATABASE_URL = os.getenv("DATABASE_URL")  # e.g. from Render Postgres
+if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
+    # SQLAlchemy prefers postgresql://
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-def check_auth() -> bool:
-    if not need_auth():
-        return True
-    auth = request.headers.get("Authorization", "")
-    return auth.startswith("Bearer ") and auth.split(" ", 1)[1] == API_TOKEN
+# Fallback to local SQLite if no DATABASE_URL provided
+if not DATABASE_URL:
+    DATABASE_URL = "sqlite:///friday.db"
 
-def routes_list():
-    rules = []
-    for r in app.url_map.iter_rules():
-        # Skip static converter noise
-        rules.append(str(r))
-    # stable order
-    return sorted(rules)
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    future=True
+)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+Base = declarative_base()
 
-# -----------------------
-# Storage (Postgres or SQLite/FTS5)
-# -----------------------
-USE_POSTGRES = DATABASE_URL.startswith("postgres://") or DATABASE_URL.startswith("postgresql://")
+class Document(Base):
+    __tablename__ = "documents"
+    id = Column(String(64), primary_key=True)          # simple string id
+    title = Column(String(500), nullable=False)
+    text = Column(Text, nullable=False)
+    source = Column(String(120), nullable=True)
+    created_at = Column(DateTime, default=dt.datetime.utcnow, nullable=False)
 
-if USE_POSTGRES:
-    # Lazy import to avoid extra deps locally
-    import psycopg2
-    from psycopg2.extras import RealDictCursor
+def _is_postgres() -> bool:
+    return DATABASE_URL.startswith("postgresql")
 
-    def pg_conn():
-        return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+def init_db() -> None:
+    """Create tables & FTS index (Postgres), no-op if exists."""
+    Base.metadata.create_all(engine)
+    if _is_postgres():
+        with engine.begin() as conn:
+            # Optional helpful extensions for FTS quality/ranking:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS unaccent;"))
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm;"))
+            # Materialized TSVECTOR column via generated column (PG >=12),
+            # or create an index on the expression directly:
+            conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_documents_fts
+                ON documents
+                USING GIN (to_tsvector('english', coalesce(title,'') || ' ' || coalesce(text,'')));
+            """))
 
-    def init_db():
-        with pg_conn() as conn, conn.cursor() as cur:
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS documents (
-                    id SERIAL PRIMARY KEY,
-                    title TEXT NOT NULL,
-                    source TEXT,
-                    text  TEXT NOT NULL,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                );
-                """
-            )
-            conn.commit()
-
-    def index_doc(title: str, text: str, source: str = None):
-        with pg_conn() as conn, conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO documents(title, source, text) VALUES (%s, %s, %s) RETURNING id;",
-                (title, source, text),
-            )
-            new_id = cur.fetchone()["id"]
-            conn.commit()
-            return {"id": f"doc_{new_id}", "title": title}
-
-    def search_docs(query: str, topk: int = 3):
-        # Simple ILIKE match ordered by length of match/created_at
-        q = f"%{query}%"
-        with pg_conn() as conn, conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT id, title, source, text, created_at
-                FROM documents
-                WHERE title ILIKE %s OR text ILIKE %s
-                ORDER BY created_at DESC
-                LIMIT %s;
-                """,
-                (q, q, topk),
-            )
-            rows = cur.fetchall()
-            contexts = []
-            for r in rows:
-                preview = r["text"][:180].replace("\n", " ")
-                contexts.append({
-                    "id": f"doc_{r['id']}",
-                    "title": r["title"],
-                    "source": r.get("source"),
-                    "score": 0.5,   # placeholder score
-                    "preview": preview
-                })
-            return contexts
-
-else:
-    # SQLite with FTS5
-    import sqlite3
-    SQLITE_PATH = os.getenv("SQLITE_PATH", "friday.db")
-
-    def sq_conn():
-        # Enable row factory for dict-ish access
-        conn = sqlite3.connect(SQLITE_PATH, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        return conn
-
-    def init_db():
-        with sq_conn() as conn:
-            cur = conn.cursor()
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS documents (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    title TEXT NOT NULL,
-                    source TEXT,
-                    text  TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                );
-            """)
-            # FTS virtual table mirrors docs for search
-            cur.execute("""
-                CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts
-                USING fts5(title, text, content='documents', content_rowid='id');
-            """)
-            # Triggers to keep FTS in sync
-            cur.executescript("""
-                CREATE TRIGGER IF NOT EXISTS documents_ai AFTER INSERT ON documents BEGIN
-                    INSERT INTO documents_fts(rowid, title, text)
-                    VALUES (new.id, new.title, new.text);
-                END;
-                CREATE TRIGGER IF NOT EXISTS documents_ad AFTER DELETE ON documents BEGIN
-                    INSERT INTO documents_fts(documents_fts, rowid, title, text)
-                    VALUES('delete', old.id, old.title, old.text);
-                END;
-                CREATE TRIGGER IF NOT EXISTS documents_au AFTER UPDATE ON documents BEGIN
-                    INSERT INTO documents_fts(documents_fts, rowid, title, text)
-                    VALUES('delete', old.id, old.title, old.text);
-                    INSERT INTO documents_fts(rowid, title, text)
-                    VALUES (new.id, new.title, new.text);
-                END;
-            """)
-            conn.commit()
-
-    def index_doc(title: str, text: str, source: str = None):
-        now = dt.datetime.utcnow().isoformat()
-        with sq_conn() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                "INSERT INTO documents(title, source, text, created_at) VALUES (?, ?, ?, ?)",
-                (title, source, text, now),
-            )
-            new_id = cur.lastrowid
-            conn.commit()
-            return {"id": f"doc_{new_id}", "title": title}
-
-    def search_docs(query: str, topk: int = 3):
-        with sq_conn() as conn:
-            cur = conn.cursor()
-            # FTS5 match – we OR the terms; if it fails, fall back to LIKE
-            try:
-                cur.execute(
-                    """
-                    SELECT d.id, d.title, d.source, d.text
-                    FROM documents_fts f
-                    JOIN documents d ON d.id = f.rowid
-                    WHERE documents_fts MATCH ?
-                    LIMIT ?;
-                    """,
-                    (query, topk),
-                )
-            except sqlite3.OperationalError:
-                like_q = f"%{query}%"
-                cur.execute(
-                    """
-                    SELECT id, title, source, text
-                    FROM documents
-                    WHERE title LIKE ? OR text LIKE ?
-                    ORDER BY created_at DESC
-                    LIMIT ?;
-                    """,
-                    (like_q, like_q, topk),
-                )
-            rows = cur.fetchall()
-            contexts = []
-            for r in rows:
-                preview = r["text"][:180].replace("\n", " ")
-                contexts.append({
-                    "id": f"doc_{r['id']}",
-                    "title": r["title"],
-                    "source": r["source"],
-                    "score": 0.5,
-                    "preview": preview
-                })
-            return contexts
-
-# Prepare storage at import time (Render imports module once)
 init_db()
 
-# -----------------------
-# Helper: auth guard
-# -----------------------
-def require_auth():
-    if not check_auth():
-        return jsonify({"ok": False, "error": "Unauthorized"}), 401
-    return None
+def routes_list() -> List[str]:
+    rts = []
+    for rule in app.url_map.iter_rules():
+        rts.append(str(rule))
+    return sorted(rts)
 
-# -----------------------
-# Routes
-# -----------------------
+def auth_ok(req) -> bool:
+    auth = req.headers.get("Authorization", "")
+    return auth.startswith("Bearer ") and auth.split(" ", 1)[1].strip() != ""
+
+def bearer_token(req) -> str:
+    auth = req.headers.get("Authorization", "")
+    return auth.split(" ", 1)[1].strip() if auth.startswith("Bearer ") else ""
+
+app = Flask(__name__, static_folder="static", static_url_path="/static")
+# Make Flask happy behind Render's proxy
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_port=1, x_proto=1, x_host=1)
+
 @app.get("/")
-def root_info():
+def root():
     return jsonify({
-        "message": f"{APP_NAME} is running",
+        "message": "Friday backend is running",
         "ok": True,
         "routes": routes_list()
-    }), 200
+    })
 
 @app.get("/__routes")
-def __routes():
-    return jsonify(routes_list()), 200
+def list_routes():
+    return jsonify(routes_list())
 
 @app.get("/__whoami")
-def __whoami():
+def whoami():
     return jsonify({
-        "app_id": id(app),
+        "app_id": int(dt.datetime.utcnow().timestamp() * 1000000),
         "cwd": os.getcwd(),
         "module_file": __file__,
-        "python": os.popen("python -V").read().strip() or "unknown"
-    }), 200
+        "python": os.sys.version.split(" ")[0],
+    })
 
 @app.get("/health")
 def health():
@@ -241,54 +109,103 @@ def health():
 def ping():
     return "pong", 200
 
+# ----------- RAG: index & query (DB-backed) ----------------
+
 @app.post("/api/rag/index")
 def rag_index():
-    if need_auth():
-        guard = require_auth()
-        if guard: return guard
+    if not auth_ok(request):
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
 
     body = request.get_json(silent=True) or {}
-    title = (body.get("title") or "").strip() or "Untitled"
-    text  = (body.get("text") or "").strip()
-    source = (body.get("source") or "").strip() or None
-    if not text:
-        return jsonify({"ok": False, "error": "text is required"}), 400
+    title = (body.get("title") or "").strip()
+    text_ = (body.get("text") or "").strip()
+    source = (body.get("source") or "faq").strip()
 
-    doc = index_doc(title=title, text=text, source=source)
-    return jsonify({"ok": True, "indexed": [doc]}), 200
+    if not title or not text_:
+        return jsonify({"ok": False, "error": "title and text are required"}), 400
+
+    # Simple deterministic id (could be uuid)
+    doc_id = f"doc_{abs(hash(title + text_)) % (10**10)}"
+
+    with SessionLocal() as s:
+        # upsert-ish: delete then insert (safe & simple)
+        s.execute(text("DELETE FROM documents WHERE id=:id"), {"id": doc_id})
+        s.add(Document(id=doc_id, title=title, text=text_, source=source))
+        s.commit()
+
+    return jsonify({"ok": True, "indexed": [{"id": doc_id, "title": title}]}), 200
+
 
 @app.post("/api/rag/query")
 def rag_query():
-    if need_auth():
-        guard = require_auth()
-        if guard: return guard
+    if not auth_ok(request):
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
 
     body = request.get_json(silent=True) or {}
     query = (body.get("query") or "").strip()
-    topk = int(body.get("topk") or body.get("k") or 3)
-    topk = max(1, min(topk, 10))
+    topk = int(body.get("topk") or 3)
+    topk = min(max(topk, 1), 10)
 
     if not query:
         return jsonify({"ok": False, "error": "query is required"}), 400
 
-    contexts = search_docs(query=query, topk=topk)
+    contexts: List[Dict[str, Any]] = []
 
-    # super simple answer heuristic
-    answer = contexts[0]["preview"] if contexts else "No matches."
+    with SessionLocal() as s:
+        if _is_postgres():
+            # Use Postgres full-text search with ranking
+            sql = text("""
+                SELECT id, title, text, source,
+                       ts_rank_cd(
+                         to_tsvector('english', coalesce(title,'') || ' ' || coalesce(text,'')),
+                         plainto_tsquery('english', :q)
+                       ) AS score
+                FROM documents
+                WHERE to_tsvector('english', coalesce(title,'') || ' ' || coalesce(text,'')) @@ plainto_tsquery('english', :q)
+                ORDER BY score DESC, created_at DESC
+                LIMIT :k
+            """)
+            rows = s.execute(sql, {"q": query, "k": topk}).mappings().all()
+        else:
+            # SQLite fallback (basic, but works)
+            sql = text("""
+                SELECT id, title, text, source, 0.0 AS score
+                FROM documents
+                WHERE title LIKE :pat OR text LIKE :pat
+                ORDER BY created_at DESC
+                LIMIT :k
+            """)
+            rows = s.execute(sql, {"pat": f"%{query}%", "k": topk}).mappings().all()
+
+        for r in rows:
+            preview = r["text"]
+            if len(preview) > 240:
+                preview = preview[:240] + "…"
+            contexts.append({
+                "id": r["id"],
+                "title": r["title"],
+                "preview": preview,
+                "score": float(r.get("score", 0.0)),
+                "source": r.get("source")
+            })
+
+    # Dumb demo “answer”: pick best snippet if any
+    answer = "I couldn’t find anything relevant."
+    if contexts:
+        answer = contexts[0]["preview"]
+
     return jsonify({"ok": True, "answer": answer, "contexts": contexts}), 200
 
-@app.get("/static/<path:filename>")
-def serve_static(filename):
-    return send_from_directory(app.static_folder, filename)
+# Serve the demo client
+@app.get("/demo")
+def demo_redirect():
+    return send_from_directory("static", "chat.html")
 
-# -----------------------
-# WSGI entrypoint
-# -----------------------
-# Render's Start Command typically points to "app:app"
-# When running locally: `python app.py`
+# Render/Waitress entrypoint:
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=False)
+
 
 
 
