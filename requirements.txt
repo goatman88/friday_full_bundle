@@ -19,19 +19,17 @@ APScheduler==3.10.4
 
 # === Database + vectors
 SQLAlchemy==2.0.31
-psycopg[binary]==3.2.1           # << add v3 (satisfies "import psycopg")
-psycopg2-binary==2.9.9           # keep v2 for libs that still expect it
-pgvector==0.2.5                  # psycopg3 adapter
-sqlalchemy-pgvector==0.2.5       # SQLAlchemy integration
+psycopg[binary]==3.2.1            # satisfies "import psycopg"
+psycopg2-binary==2.9.9            # keep if any code still uses psycopg2
+pgvector==0.2.5                   # includes sqlalchemy integration
 
-# === Parsing helpers
-regex==2025.9.1
-
-# (transitive pins your log showed)
+# Transitives your logs pinned
 anyio==4.10.0
 httpx==0.28.1
 httpcore==1.0.9
 typing-extensions==4.15.0
+regex==2025.9.1
+
 
 
 
