@@ -19,5 +19,13 @@ USING ivfflat (embedding_vec vector_cosine_ops) WITH (lists = 100);
 CREATE INDEX IF NOT EXISTS idx_documents_user_id
 ON documents (COALESCE(user_id,'public'));
 
+UPDATE documents
+SET embedding_vec = vector((
+  SELECT array_agg((j->>i)::float)
+  FROM jsonb_array_elements(embedding) WITH ORDINALITY AS e(j,i)
+))
+WHERE embedding IS NOT NULL
+  AND embedding_vec IS NULL;
 ANALYZE documents;
+
 
