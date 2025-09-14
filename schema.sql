@@ -1,16 +1,22 @@
+-- Enable extension
 CREATE EXTENSION IF NOT EXISTS vector;
 
-CREATE TABLE IF NOT EXISTS documents (
-  id            BIGSERIAL PRIMARY KEY,
-  title         TEXT,
-  text          TEXT,
-  mime          TEXT,
-  source        TEXT,
-  user_id       TEXT,
-  embedding     JSONB,           -- legacy/fallback
-  embedding_vec VECTOR(1536),    -- pgvector (text-embedding-3-small)
-  created_at    TIMESTAMPTZ DEFAULT NOW()
+-- Documents table
+CREATE TABLE IF NOT EXISTS docs (
+  id SERIAL PRIMARY KEY,
+  user_id TEXT DEFAULT 'public',
+  title TEXT NOT NULL,
+  source TEXT,
+  mime TEXT,
+  text TEXT NOT NULL,
+  embedding vector(1536) NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT now()
 );
+
+-- Cosine-distance index for fast ANN
+CREATE INDEX IF NOT EXISTS docs_embedding_ivfflat
+  ON docs USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+
 
 CREATE INDEX IF NOT EXISTS idx_documents_embedding_vec_cosine
 ON documents
