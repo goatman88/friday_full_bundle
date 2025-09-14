@@ -16,6 +16,8 @@ requests==2.31.0
 beautifulsoup4==4.12.3
 SQLAlchemy==2.0.31
 psycopg2-binary==2.9.9
+pgvector==0.2.5  # SQLAlchemy adapter
+numpy==2.0.2
 
 
 
