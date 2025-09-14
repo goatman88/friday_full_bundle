@@ -1,97 +1,87 @@
-# app.py
+from __future__ import annotations
+
 import os
-from datetime import datetime
+from typing import Dict, Any, List
 from flask import Flask, request, jsonify
 
-# -----------------------------------------------------------------------------
-# Config
-# -----------------------------------------------------------------------------
-API_TOKEN_ENV = "API_TOKEN"          # set in Render (or accept any token if unset)
-SERVICE_NAME  = os.getenv("RENDER_SERVICE_NAME", "friday")
-REQUIRE_TOKEN = bool(os.getenv(API_TOKEN_ENV))  # only enforce if you set API_TOKEN
-
-# -----------------------------------------------------------------------------
-# App
-# -----------------------------------------------------------------------------
 app = Flask(__name__)
 
-def _json_error(status: int, message: str):
-    return jsonify({"ok": False, "error": message, "status_code": status}), status
+# ---- helpers ---------------------------------------------------------------
 
-def _auth_ok(req: request) -> bool:
-    if not REQUIRE_TOKEN:
-        return True
-    auth = req.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
-        return False
-    token = auth.split(" ", 1)[1].strip()
-    return token == os.getenv(API_TOKEN_ENV)
+def _ok(payload: Dict[str, Any] = None, status: int = 200):
+    data = {"ok": True}
+    if payload:
+        data.update(payload)
+    return jsonify(data), status
 
-# -----------------------------------------------------------------------------
-# Health / basic
-# -----------------------------------------------------------------------------
+def _err(message: str, status: int = 400):
+    return jsonify({"ok": False, "error": message}), status
+
+def _bearer() -> str:
+    """Return the raw Bearer token (or empty string)."""
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        return auth[len("Bearer "):].strip()
+    return ""
+
+# ---- routes ----------------------------------------------------------------
+
 @app.get("/")
 def root():
-    return jsonify({
-        "ok": True,
-        "service": SERVICE_NAME,
-        "message": "Service is up. Try /health, /__routes, /api/rag/index, /api/rag/query."
-    }), 200
+    """Small landing to prove the app that’s deployed is *this* file."""
+    return _ok({
+        "service": "friday demo",
+        "message": "It works. See /health and /_routes.",
+        "routes": [r["rule"] for r in _route_table()]
+    })
 
 @app.get("/health")
 def health():
-    return jsonify({
-        "ok": True,
-        "status": "running",
-        "time": datetime.utcnow().isoformat(timespec="seconds") + "Z",
-        "token_required": REQUIRE_TOKEN
-    }), 200
+    return _ok({"status": "running"})
 
-@app.get("/ping")
-def ping():
-    return jsonify({"ok": True, "pong": True}), 200
+@app.get("/_routes")
+def routes():
+    """List the live routes so you can compare with local."""
+    return _ok({"routes": _route_table()})
 
-# Helpful introspection route for troubleshooting 404s you were seeing
-@app.get("/__routes")
-def list_routes():
-    routes = []
-    for rule in app.url_map.iter_rules():
-        routes.append({
-            "endpoint": rule.endpoint,
-            "methods": sorted(m for m in rule.methods if m not in {"HEAD", "OPTIONS"}),
-            "rule": str(rule)
-        })
-    return jsonify({"ok": True, "routes": routes}), 200
+def _route_table() -> List[Dict[str, Any]]:
+    out = []
+    for rule in sorted(app.url_map.iter_rules(), key=lambda r: str(r)):
+        methods = sorted(m for m in rule.methods if m not in {"HEAD", "OPTIONS"})
+        out.append({"rule": str(rule), "endpoint": rule.endpoint, "methods": methods})
+    return out
 
-# -----------------------------------------------------------------------------
-# RAG stubs (token-protected if API_TOKEN is set)
-# -----------------------------------------------------------------------------
 @app.post("/api/rag/index")
 def rag_index():
-    if not _auth_ok(request):
-        return _json_error(401, "Unauthorized")
+    token = _bearer()
+    if not token:
+        return _err("Unauthorized", 401)
+
     body = request.get_json(silent=True) or {}
     title = str(body.get("title", "")).strip()
-    text  = str(body.get("text", "")).strip()
-    source = str(body.get("source", "")).strip()
+    text = str(body.get("text", "")).strip()
+    source = str(body.get("source", "")).strip() or "note"
 
-    # Minimal no-op indexer (stub)
-    doc_id = "doc_1"
-    return jsonify({
-        "ok": True,
-        "indexed": [{"id": doc_id, "title": title, "source": source, "size": len(text)}]
-    }), 200
+    if not title or not text:
+        return _err("Both 'title' and 'text' are required.", 422)
+
+    # Minimal stub: pretend we indexed a single document.
+    doc = {"id": "doc_1", "title": title, "source": source, "len": len(text)}
+    return _ok({"indexed": [doc]})
 
 @app.post("/api/rag/query")
 def rag_query():
-    if not _auth_ok(request):
-        return _json_error(401, "Unauthorized")
+    token = _bearer()
+    if not token:
+        return _err("Unauthorized", 401)
+
     body = request.get_json(silent=True) or {}
     query = str(body.get("query", "")).strip()
-    topk  = int(body.get("topk", 2) or 2)
+    topk = int(body.get("topk", 2) or 2)
 
-    # Minimal deterministic answer + fake contexts (stub)
-    answer = "Widgets are blue and waterproof."
+    if not query:
+        return _err("'query' is required.", 422)
+
     contexts = [{
         "id": "doc_1",
         "title": "Widget FAQ",
@@ -99,34 +89,25 @@ def rag_query():
         "preview": "Widgets are blue and waterproof."
     }][:max(1, topk)]
 
-    return jsonify({"ok": True, "answer": answer, "query": query, "contexts": contexts}), 200
+    return _ok({
+        "answer": "Widgets are blue and waterproof.",
+        "contexts": contexts
+    })
 
-# Optional echo to help debug payloads from PowerShell/cURL
-@app.post("/api/rag/echo")
-def rag_echo():
-    if not _auth_ok(request):
-        return _json_error(401, "Unauthorized")
-    return jsonify({"ok": True, "headers": dict(request.headers), "json": request.get_json(silent=True)}), 200
+# ---- error handlers (nicer 404 on Render) ----------------------------------
 
-# -----------------------------------------------------------------------------
-# Error handlers (JSON all the things)
-# -----------------------------------------------------------------------------
 @app.errorhandler(404)
-def not_found(_e):
-    return _json_error(404, "Not Found")
+def not_found(e):
+    return _err("Not Found", 404)
 
 @app.errorhandler(405)
-def method_not_allowed(_e):
-    return _json_error(405, "Method Not Allowed")
+def not_allowed(e):
+    return _err("Method Not Allowed", 405)
 
-@app.errorhandler(500)
-def internal_error(_e):
-    return _json_error(500, "Internal Server Error")
+# ---- local dev entrypoint (Render will *not* run this) ---------------------
 
-# -----------------------------------------------------------------------------
-# Local dev entrypoint (Render uses waitress-serve with app:app)
-# -----------------------------------------------------------------------------
 if __name__ == "__main__":
+    # Local only: python app.py
     port = int(os.getenv("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=True)
 
