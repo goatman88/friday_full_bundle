@@ -7,6 +7,13 @@ from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
+# db_compat.py (inline shim)
+try:
+    import psycopg  # v3
+    HAVE_PSYCOPG3 = True
+except ImportError:             # fallback to v2
+    import psycopg2 as psycopg  # alias so rest of code can use `psycopg`
+    HAVE_PSYCOPG3 = False
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("friday")
