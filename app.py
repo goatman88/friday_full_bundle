@@ -9,6 +9,11 @@ from typing import List, Optional
 
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
+# at top of src/app.py
+from openai_client import make_openai_client
+
+# somewhere in your startup/init code:
+oai = make_openai_client()
 
 # --- DB driver shims (supports psycopg3 or psycopg2) -------------------------
 try:
