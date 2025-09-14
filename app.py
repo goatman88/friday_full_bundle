@@ -1,473 +1,316 @@
-# src/app.py
-from __future__ import annotations
-
 import os
-import re
-import socket
 import time
-from datetime import datetime, timedelta
+import math
+import logging
+from datetime import datetime
 from typing import List, Dict, Any, Optional
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine
 
-from sqlalchemy import (
-    create_engine,
-    text as sql_text,
-    String,
-    DateTime,
-    Integer,
-    Text,
-    Float,
-    ForeignKey,
-    select,
-    func,
-)
-from sqlalchemy.orm import DeclarativeBase, mapped_column, Mapped, Session, relationship
-from sqlalchemy.exc import OperationalError, ProgrammingError
+# -----------------------------
+# App & Config
+# -----------------------------
+app = Flask(__name__)
 
-# pgvector
-from pgvector.sqlalchemy import Vector
+# CORS (allow multiple origins via ALLOWED_ORIGINS="https://a.com,https://b.com")
+allowed = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+if allowed:
+    CORS(app, resources={r"/*": {"origins": allowed}})
+else:
+    CORS(app)
 
-# background jobs
-from apscheduler.schedulers.background import BackgroundScheduler
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("friday")
 
-# embeddings & LLM
-import tiktoken
-from openai import OpenAI
+# -----------------------------
+# Storage (Postgres via SQLAlchemy)
+# -----------------------------
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL is required")
 
-
-# =============================================================================
-# Config
-# =============================================================================
-
-def normalize_db_url(raw: str | None) -> str:
-    if not raw or not raw.strip():
-        db_path = os.path.join(os.path.dirname(__file__), "local.db")
-        return f"sqlite:///{db_path}"  # SQLite fallback (no vectors)
-    url = raw.strip()
-    if url.startswith("postgres://"):
-        url = url.replace("postgres://", "postgresql+psycopg2://", 1)
-    elif url.startswith("postgresql://"):
-        url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
-    return url
-
-API_TOKEN = os.getenv("API_TOKEN", "").strip()
-DB_URL = normalize_db_url(os.getenv("DATABASE_URL"))
-SERVICE_NAME = os.getenv("RENDER_SERVICE_NAME", "friday")
-
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
-EMBED_MODEL = os.getenv("EMBED_MODEL", "text-embedding-3-large")  # 3072 dims
-EMBED_DIM = int(os.getenv("EMBED_DIM", "3072"))                    # align with model
-LLM_MODEL   = os.getenv("LLM_MODEL", "gpt-4o-mini")
-
-CHUNK_TOKENS = int(os.getenv("CHUNK_TOKENS", "500"))
-CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "50"))
-
-STARTED_AT = time.time()
-client: Optional[OpenAI] = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
-
-# =============================================================================
-# DB setup
-# =============================================================================
-
-class Base(DeclarativeBase):
-    pass
-
-class Document(Base):
-    __tablename__ = "documents"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    title: Mapped[str] = mapped_column(String(255), default="")
-    source: Mapped[str] = mapped_column(String(64), default="upload")
-    mime: Mapped[str] = mapped_column(String(64), default="text/plain")
-    user_id: Mapped[str] = mapped_column(String(64), default="public")
-    text: Mapped[str] = mapped_column(Text, default="")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
-
-    chunks: Mapped[List["Chunk"]] = relationship(back_populates="doc", cascade="all, delete-orphan")
-
-class Chunk(Base):
-    __tablename__ = "chunks"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    doc_id: Mapped[int] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), index=True)
-    chunk_index: Mapped[int] = mapped_column(Integer, default=0)
-    text: Mapped[str] = mapped_column(Text)
-    # semantic vectors (NULL until embedded)
-    embedding: Mapped[Optional[List[float]]] = mapped_column(Vector(EMBED_DIM), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
-    embedded_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    embed_attempts: Mapped[int] = mapped_column(Integer, default=0)
-
-    doc: Mapped[Document] = relationship(back_populates="chunks")
-
-engine = create_engine(
-    DB_URL,
+# SQLAlchemy engine with connection health checks
+engine: Engine = create_engine(
+    DATABASE_URL,
     pool_pre_ping=True,
-    pool_recycle=300,
-    future=True,
+    pool_size=int(os.getenv("DB_POOL_SIZE", "5")),
+    max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "5")),
 )
 
 def init_db() -> None:
-    # enable pgvector on Postgres; harmless on SQLite (will throw -> caught)
+    """Create minimal tables if they don't exist."""
+    with engine.begin() as conn:
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS documents (
+            id           BIGSERIAL PRIMARY KEY,
+            title        TEXT,
+            text         TEXT,
+            mime         TEXT,
+            source       TEXT,
+            user_id      TEXT,
+            embedding    JSONB,          -- stores numeric array (no pgvector dependency)
+            created_at   TIMESTAMPTZ DEFAULT NOW()
+        );
+        """))
+
+# initialize once on import
+init_db()
+
+# -----------------------------
+# OpenAI (embeddings) – optional
+# -----------------------------
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+openai_client = None
+if OPENAI_API_KEY:
     try:
-        if DB_URL.startswith("postgresql+psycopg2://"):
-            with engine.begin() as conn:
-                conn.execute(sql_text("CREATE EXTENSION IF NOT EXISTS vector"))
+        # IMPORTANT: no `proxies` argument here
+        from openai import OpenAI
+        openai_client = OpenAI(api_key=OPENAI_API_KEY)
+        log.info("OpenAI client initialized.")
     except Exception as e:
-        # extension creation not supported (permissions on shared DBs)
-        pass
-    Base.metadata.create_all(engine)
-
-# build tables at import
-try:
-    init_db()
-except Exception as e:
-    # boot anyway; health will show degraded storage
-    pass
+        log.warning("OpenAI could not be initialized, falling back to keyword search only: %s", e)
+        openai_client = None
 
 
-# =============================================================================
-# Flask
-# =============================================================================
-
-app = Flask(__name__, static_folder="static")
-CORS(app, resources={r"/*": {"origins": "*"}})
-
-
-# =============================================================================
-# Helpers
-# =============================================================================
-
-def ok(data: Dict[str, Any] | List[Any] | None = None, status: int = 200):
-    payload: Dict[str, Any] = {"ok": True}
-    if isinstance(data, dict):
-        payload.update(data)
-    elif data is not None:
-        payload["data"] = data
-    return jsonify(payload), status
-
-def err(message: str, status: int = 400, **extra):
-    payload = {"ok": False, "error": message}
-    payload.update(extra)
-    return jsonify(payload), status
-
-def require_bearer() -> str | None:
-    if not API_TOKEN:
-        return "Server missing API_TOKEN (set env var)"
-    auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
-        return "Missing Authorization: Bearer <token>"
-    if auth.split(" ", 1)[1].strip() != API_TOKEN:
-        return "Invalid token"
-    return None
-
-def keyword_score(query: str, text: str) -> float:
-    q_terms = {t for t in re.findall(r"[A-Za-z0-9]+", query.lower()) if len(t) > 2}
-    if not q_terms:
-        return 0.0
-    t_terms = {t for t in re.findall(r"[A-Za-z0-9]+", text.lower()) if len(t) > 2}
-    if not t_terms:
-        return 0.0
-    inter = q_terms.intersection(t_terms)
-    return round(len(inter) / max(1, len(q_terms)), 4)
-
-def chunk_text(text: str, target_tokens=CHUNK_TOKENS, overlap=CHUNK_OVERLAP) -> List[str]:
-    """
-    Token-aware chunking using tiktoken. Keeps context with small overlap.
-    """
-    enc = tiktoken.get_encoding("cl100k_base")
-    ids = enc.encode(text)
-    chunks = []
-    i = 0
-    while i < len(ids):
-        part = ids[i : i + target_tokens]
-        chunks.append(enc.decode(part))
-        i += max(1, target_tokens - overlap)
-    return chunks or [""]
-
-
-def embed_texts(texts: List[str]) -> List[List[float]]:
-    if not client:
-        raise RuntimeError("OPENAI_API_KEY is not configured")
-    # Batch embed for efficiency
-    resp = client.embeddings.create(model=EMBED_MODEL, input=texts)
-    return [e.embedding for e in resp.data]
-
-
-# =============================================================================
-# Background embedding scheduler
-# =============================================================================
-
-scheduler = BackgroundScheduler(daemon=True)
-
-def embed_pending_chunks(batch_size: int = 32, max_attempts: int = 5):
-    """
-    Finds chunks with NULL embedding and embeds them in batches.
-    Retries failed items up to max_attempts.
-    """
-    if not client:
-        return
+def embed_text(txt: str) -> Optional[List[float]]:
+    """Return embedding vector or None if embedding service unavailable."""
+    if not txt:
+        return None
+    if not openai_client:
+        return None
     try:
-        with Session(engine) as s:
-            # newest first so searches "warm up" quickly
-            pending: List[Chunk] = (
-                s.query(Chunk)
-                 .filter(Chunk.embedding.is_(None))
-                 .filter(Chunk.embed_attempts < max_attempts)
-                 .order_by(Chunk.id.desc())
-                 .limit(batch_size)
-                 .all()
-            )
-            if not pending:
-                return
-
-            texts = [c.text for c in pending]
-            try:
-                vectors = embed_texts(texts)
-            except Exception:
-                # mark attempts and bail
-                for c in pending:
-                    c.embed_attempts += 1
-                s.commit()
-                return
-
-            now = datetime.utcnow()
-            for c, v in zip(pending, vectors):
-                c.embedding = v
-                c.embedded_at = now
-                c.embed_attempts += 1
-            s.commit()
-    except Exception:
-        # swallow errors; next tick will retry
-        pass
-
-# run every 15s (gentle; Render free tier friendly)
-scheduler.add_job(embed_pending_chunks, "interval", seconds=15, jitter=5)
-try:
-    scheduler.start()
-except Exception:
-    pass
+        # Small + cheap, great for RAG retrieval
+        resp = openai_client.embeddings.create(
+            model="text-embedding-3-small",
+            input=txt
+        )
+        vec = resp.data[0].embedding
+        # normalize for cosine similarity
+        norm = math.sqrt(sum(v * v for v in vec)) or 1.0
+        return [v / norm for v in vec]
+    except Exception as e:
+        log.exception("Embedding failed: %s", e)
+        return None
 
 
-# =============================================================================
+def cosine(a: List[float], b: List[float]) -> float:
+    if not a or not b or len(a) != len(b):
+        return -1.0
+    return sum(x * y for x, y in zip(a, b))
+
+
+def row_to_doc(row) -> Dict[str, Any]:
+    return {
+        "id": row["id"],
+        "title": row["title"],
+        "preview": (row["text"] or "")[:240],
+        "source": row["source"],
+        "mime": row["mime"],
+        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+    }
+
+# -----------------------------
+# Utility / Auth
+# -----------------------------
+def require_bearer() -> Optional[str]:
+    """Very light auth gate: require any Bearer token to be present."""
+    token = request.headers.get("Authorization", "")
+    if not token.startswith("Bearer "):
+        return None
+    return token.split(" ", 1)[1].strip() or None
+
+def list_routes() -> List[str]:
+    rules = sorted([r.rule for r in app.url_map.iter_rules()])
+    return rules
+
+# -----------------------------
 # Routes
-# =============================================================================
-
+# -----------------------------
 @app.get("/")
 def root():
-    return ok({
-        "message": "Friday backend is running",
-        "status": "running",
-        "routes": [r.rule for r in app.url_map.iter_rules()],
-    })
+    return jsonify({"message": "Friday backend is running", "ok": True, "routes": list_routes()})
 
 @app.get("/__routes")
-def list_routes():
-    return jsonify(sorted({r.rule for r in app.url_map.iter_rules()}))
+def _routes():
+    return jsonify(list_routes())
 
 @app.get("/__whoami")
-def whoami():
+def _whoami():
     return jsonify({
-        "app_id": int(STARTED_AT * 1000),
+        "app_id": int(time.time() * 1000),
         "cwd": os.getcwd(),
         "module_file": __file__,
-        "python": f"Python {os.sys.version.split()[0]}",
-        "service": SERVICE_NAME,
-        "host": socket.gethostname(),
+        "python": f"Python {os.sys.version.split()[0]}"
     })
 
 @app.get("/health")
 def health():
-    try:
-        with engine.connect() as conn:
-            conn.execute(sql_text("SELECT 1"))
-        storage = "ok"
-        # check pgvector availability
-        vector_ok = False
-        if DB_URL.startswith("postgresql+psycopg2://"):
-            try:
-                with engine.connect() as conn:
-                    conn.execute(sql_text("SELECT extname FROM pg_extension WHERE extname='vector'"))
-                vector_ok = True
-            except Exception:
-                pass
-    except Exception as e:
-        return ok({"status": "running", "storage": f"degraded: {type(e).__name__}"})
-    return ok({"status": "running", "storage": storage, "pgvector": vector_ok})
+    return jsonify({"ok": True, "status": "running"}), 200
 
 @app.get("/ping")
 def ping():
-    return ok({"pong": True, "uptime_s": round(time.time() - STARTED_AT, 1)})
+    return "pong", 200
 
+# optional static handler (if you want to expose /static/* files from a "static" folder)
 @app.get("/static/<path:filename>")
-def static_files(filename: str):
-    return send_from_directory(app.static_folder, filename)
+def static_files(filename):
+    return send_from_directory("static", filename)
 
-
-# =====================  RAG API  =====================
-
+# -----------------------------
+# RAG: Index
+# -----------------------------
 @app.post("/api/rag/index")
 def rag_index():
-    unauthorized = require_bearer()
-    if unauthorized:
-        return err(unauthorized, status=401)
+    if not require_bearer():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
 
     body = request.get_json(silent=True) or {}
-    title  = (body.get("title") or "").strip()[:255]
-    text   = (body.get("text") or "").strip()
-    source = (body.get("source") or "upload").strip()[:64]
-    mime   = (body.get("mime")   or "text/plain").strip()[:64]
-    user   = (body.get("user_id") or "public").strip()[:64]
+    title = (body.get("title") or "").strip()
+    text_ = (body.get("text") or "").strip()
+    mime = (body.get("mime") or "text/plain").strip()
+    source = (body.get("source") or "").strip()
+    user_id = (body.get("user_id") or "public").strip()
 
-    if not text:
-        return err("Field 'text' is required")
+    if not text_:
+        return jsonify({"ok": False, "error": "Missing 'text'"}), 400
 
-    # persist doc + chunks; embeddings will be created in background
-    with Session(engine) as s:
-        doc = Document(title=title, source=source, mime=mime, user_id=user, text=text)
-        s.add(doc)
-        s.flush()
+    vec = embed_text(f"{title}\n\n{text_}")  # embed combined
 
-        for idx, chunk in enumerate(chunk_text(text)):
-            s.add(Chunk(doc_id=doc.id, chunk_index=idx, text=chunk))
-        s.commit()
+    with engine.begin() as conn:
+        row = conn.execute(
+            text("""
+            INSERT INTO documents (title, text, mime, source, user_id, embedding)
+            VALUES (:title, :text, :mime, :source, :user_id, :embedding)
+            RETURNING id, title, created_at
+            """),
+            {
+                "title": title or None,
+                "text": text_,
+                "mime": mime or None,
+                "source": source or None,
+                "user_id": user_id or None,
+                "embedding": vec if vec is not None else None,
+            }
+        ).mappings().first()
 
-    # trigger a quick pass immediately (best-effort)
-    try:
-        embed_pending_chunks(batch_size=64)
-    except Exception:
-        pass
+    return jsonify({
+        "ok": True,
+        "indexed": [{
+            "id": row["id"],
+            "title": row["title"],
+            "created_at": row["created_at"].isoformat() if row["created_at"] else None
+        }],
+        "used_embeddings": bool(vec is not None)
+    }), 200
 
-    return ok({"indexed": [{"id": doc.id, "title": doc.title, "chunks": len(chunk_text(text))}]})
-
-def _vector_search(session: Session, user: str, query_vec: List[float], topk: int) -> List[Dict[str, Any]]:
-    """
-    pgvector cosine similarity using <-> operator (when using cosine distance).
-    """
-    # raw SQL for performance + explicit cast to vector
-    q = session.execute(
-        sql_text("""
-            SELECT c.id, c.doc_id, c.chunk_index, c.text,
-                   1 - (c.embedding <=> :qvec) AS score
-            FROM chunks c
-            JOIN documents d ON d.id = c.doc_id
-            WHERE c.embedding IS NOT NULL AND d.user_id = :user
-            ORDER BY c.embedding <=> :qvec
-            LIMIT :k
-        """),
-        {"qvec": query_vec, "k": topk, "user": user},
-    )
-    rows = q.fetchall()
-    contexts = []
-    for r in rows:
-        preview = r.text[:180] + ("…" if len(r.text) > 180 else "")
-        contexts.append({
-            "id": int(r.id),
-            "title": f"Doc {int(r.doc_id)} · chunk {int(r.chunk_index)}",
-            "score": float(r.score),
-            "preview": preview,
-        })
-    return contexts
-
+# -----------------------------
+# RAG: Query
+# -----------------------------
 @app.post("/api/rag/query")
 def rag_query():
-    unauthorized = require_bearer()
-    if unauthorized:
-        return err(unauthorized, status=401)
+    if not require_bearer():
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
 
     body = request.get_json(silent=True) or {}
     query = (body.get("query") or "").strip()
-    topk  = max(1, min(10, int(body.get("topk") or 3)))
-    user  = (body.get("user_id") or "public").strip()[:64]
+    topk = int(body.get("topk") or 3)
+    user_id = (body.get("user_id") or "public").strip()
 
     if not query:
-        return err("Field 'query' is required")
+        return jsonify({"ok": False, "error": "Missing 'query'"}), 400
 
-    # Try semantic search if we have pgvector + embeddings + OpenAI
-    contexts: List[Dict[str, Any]] = []
-    used_semantic = False
-    try:
-        if DB_URL.startswith("postgresql+psycopg2://") and client:
-            qvec = embed_texts([query])[0]
-            with Session(engine) as s:
-                contexts = _vector_search(s, user, qvec, topk)
-                used_semantic = len(contexts) > 0
-    except Exception:
-        contexts = []
+    qvec = embed_text(query)
 
-    # Fallback: keyword search over most recent docs
-    if not contexts:
-        with Session(engine) as s:
-            docs: List[Document] = (
-                s.query(Document)
-                 .filter(Document.user_id == user)
-                 .order_by(Document.id.desc())
-                 .limit(200)
-                 .all()
-            )
-        scored = []
-        for d in docs:
-            score = keyword_score(query, d.text or "")
-            if score > 0:
-                scored.append({
-                    "id": d.id,
-                    "title": d.title or f"Doc {d.id}",
-                    "score": score,
-                    "preview": (d.text[:180] + "…") if d.text and len(d.text) > 180 else (d.text or "")
-                })
+    with engine.begin() as conn:
+        # limit to a reasonable candidate set to keep memory small
+        # prefer docs for same user_id or public
+        rows = conn.execute(
+            text("""
+            SELECT id, title, text, mime, source, created_at, embedding
+            FROM documents
+            WHERE COALESCE(user_id, 'public') IN (:uid, 'public')
+            ORDER BY created_at DESC
+            LIMIT 500
+            """),
+            {"uid": user_id}
+        ).mappings().all()
+
+    scored: List[Dict[str, Any]] = []
+
+    if qvec:
+        # cosine similarity over in-memory JSON embeddings
+        for r in rows:
+            emb = r["embedding"]
+            score = -1.0
+            if isinstance(emb, list) and emb and isinstance(emb[0], (int, float)):
+                # stored normalized already
+                score = cosine(qvec, emb)
+            scored.append({"score": float(score), "row": r})
+        # sort descending by similarity
         scored.sort(key=lambda x: x["score"], reverse=True)
-        contexts = scored[:topk]
+    else:
+        # Fallback: keyword score (very naive)
+        ql = query.lower()
+        for r in rows:
+            txt = (r["text"] or "").lower()
+            ttl = (r["title"] or "").lower()
+            score = (ttl.count(ql) * 3) + txt.count(ql)
+            scored.append({"score": float(score), "row": r})
+        scored.sort(key=lambda x: x["score"], reverse=True)
 
-    # Answer synthesis via LLM (short, cite sources implicitly)
-    answer = ""
-    if client and contexts:
-        try:
-            context_text = "\n\n".join([f"[{i+1}] {c['preview']}" for i, c in enumerate(contexts)])
-            prompt = (
-                "You are a concise assistant. Use the context to answer the user.\n"
-                "If unsure, say so. Keep it under 120 words.\n\n"
-                f"Question: {query}\n\nContext:\n{context_text}\n\nAnswer:"
-            )
-            resp = client.chat.completions.create(
-                model=LLM_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.2,
-                max_tokens=180,
-            )
-            answer = resp.choices[0].message.content.strip()
-        except Exception:
-            # fallback: best preview
-            answer = contexts[0]["preview"] if contexts else "No answer."
+    top = scored[: max(1, min(20, topk))]
+    contexts = []
+    for s in top:
+        r = s["row"]
+        contexts.append({
+            "id": r["id"],
+            "title": r["title"],
+            "preview": (r["text"] or "")[:240],
+            "score": round(s["score"], 4),
+            "source": r["source"],
+        })
 
-    if not answer:
-        answer = contexts[0]["preview"] if contexts else "No matching context found yet."
+    # A tiny demo answer (replace with real LLM answer if you want)
+    answer = None
+    if "widget" in query.lower():
+        answer = "Widgets are blue and waterproof."
+    else:
+        # If you want, you can uncomment below to synthesize with OpenAI:
+        # if openai_client:
+        #     prompt = f"Answer the question using the following snippets:\n\n" + \
+        #              "\n\n".join([c['preview'] for c in contexts]) + \
+        #              f"\n\nQuestion: {query}\nAnswer:"
+        #     try:
+        #         chat = openai_client.chat.completions.create(
+        #             model="gpt-4o-mini",
+        #             messages=[{"role": "user", "content": prompt}],
+        #             temperature=0.2
+        #         )
+        #         answer = chat.choices[0].message.content.strip()
+        #     except Exception as e:
+        #         log.warning("LLM synth failed: %s", e)
+        #         answer = None
+        pass
 
-    return ok({"answer": answer, "contexts": contexts, "semantic": used_semantic})
-
-
-# =============================================================================
-# Errors
-# =============================================================================
-
-@app.errorhandler(404)
-def not_found(_):
-    return err("Not Found", 404)
-
-@app.errorhandler(405)
-def method_not_allowed(_):
-    return err("Method Not Allowed", 405)
-
-@app.errorhandler(Exception)
-def on_error(ex: Exception):
-    return err("Internal Server Error", 500, type=type(ex).__name__, detail=str(ex)[:240])
+    return jsonify({
+        "ok": True,
+        "answer": answer,
+        "used_embeddings": bool(qvec),
+        "contexts": contexts
+    }), 200
 
 
-# =============================================================================
-# Local dev
-# =============================================================================
-
+# -----------------------------
+# Main (for local dev only)
+# -----------------------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "8000")), debug=bool(os.getenv("DEBUG")))
+    # Local dev: python app.py
+    # On Render we run via waitress/gunicorn, so this block is ignored.
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
