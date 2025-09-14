@@ -1,20 +1,37 @@
+# === Web stack
 Flask==3.0.3
 flask-cors==4.0.1
-waitress==3.0.0
 gunicorn==21.2.0
+waitress==3.0.0
+Jinja2==3.1.4
+Werkzeug==3.0.3
+python-dotenv==1.0.1
 
+# === OpenAI + utils
 openai==1.40.0
 tiktoken==0.7.0
-
-SQLAlchemy==2.0.31
-psycopg2-binary==2.9.9
-pgvector==0.2.5
-
-APScheduler==3.10.4
-
 requests==2.31.0
 beautifulsoup4==4.12.3
-python-dotenv==1.0.1
+tqdm==4.67.1
+
+# === Scheduling / misc
+APScheduler==3.10.4
+
+# === Database + vectors
+SQLAlchemy==2.0.31
+psycopg[binary]==3.2.1           # << add v3 (satisfies "import psycopg")
+psycopg2-binary==2.9.9           # keep v2 for libs that still expect it
+pgvector==0.2.5                  # psycopg3 adapter
+sqlalchemy-pgvector==0.2.5       # SQLAlchemy integration
+
+# === Parsing helpers
+regex==2025.9.1
+
+# (transitive pins your log showed)
+anyio==4.10.0
+httpx==0.28.1
+httpcore==1.0.9
+typing-extensions==4.15.0
 
 
 
