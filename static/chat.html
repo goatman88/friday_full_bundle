@@ -1,56 +1,163 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Friday – Browser Chat</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <style>
-    body { font-family: system-ui, sans-serif; background: #0f172a; color: #e9eefc; margin: 0; padding: 0; }
-    .wrap { max-width: 640px; margin: 40px auto; padding: 20px; background: #1e293b; border-radius: 12px; }
-    h2 { margin-top: 0; }
-    label { display:block; margin: 8px 0 4px; }
-    input, textarea { width: 100%; padding: 10px; border-radius: 6px; border: none; margin-bottom: 12px; }
-    button { padding: 10px 16px; background:#2563eb; border: none; border-radius:8px; color: white; cursor:pointer; }
-    pre { background: #0b1220; padding: 12px; border-radius: 8px; overflow-x:auto; }
-  </style>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Friday RAG Console</title>
+<style>
+  :root { --bg:#0b1220; --panel:#111a2b; --text:#e6eefc; --muted:#9bb0d3; --acc:#79ffe1; }
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font:15px/1.35 system-ui,Segoe UI,Roboto,Helvetica,Arial}
+  header{padding:16px 20px;border-bottom:1px solid #1b2740;background:var(--panel)}
+  h1{margin:0;font-size:18px}
+  main{display:grid;grid-template-columns:380px 1fr;gap:16px;padding:16px}
+  .card{background:var(--panel);border:1px solid #1b2740;border-radius:10px;padding:14px}
+  label{display:block;font-size:12px;color:var(--muted);margin:10px 0 6px}
+  input,textarea,select,button{width:100%;padding:10px;border-radius:8px;border:1px solid #26324f;background:#0f1626;color:var(--text)}
+  button{cursor:pointer;background:#18233a}
+  button.primary{background:linear-gradient(135deg,#3a78ff,#00d3a7);border:none;color:black;font-weight:600}
+  .row{display:flex;gap:8px;align-items:center}
+  .row > *{flex:1}
+  .log{white-space:pre-wrap;max-height:60vh;overflow:auto;background:#0a0f1c;border-radius:8px;padding:10px;border:1px solid #1b2740}
+  .pill{display:inline-block;background:#0a172c;border:1px solid #1b2740;color:var(--muted);padding:3px 8px;border-radius:999px;margin:2px 6px 2px 0;font-size:12px}
+  .ctx{border:1px solid #253357;border-radius:8px;padding:8px;margin:8px 0;background:#0a1222}
+  small{color:var(--muted)}
+  .ok{color:#6efacc}
+  .err{color:#ff8a8a}
+</style>
 </head>
 <body>
-  <div class="wrap">
-    <h2>Friday – Browser Chat</h2>
-    <label>API Token</label>
-    <input id="token" type="password" placeholder="Paste your token here">
-    <button onclick="saveToken()">Save</button>
-    <hr>
-    <label>Message</label>
-    <textarea id="msg" rows="3" placeholder="Type your message..."></textarea>
-    <button onclick="sendMsg()">Send</button>
-    <button onclick="clearMsg()">Clear</button>
-    <h3>Reply</h3>
-    <pre id="reply"></pre>
-  </div>
+<header><h1>Friday • RAG Console</h1></header>
+<main>
+  <section class="card">
+    <label>Base URL</label>
+    <input id="base" placeholder="https://your-service.onrender.com"/>
+    <label>Bearer Token</label>
+    <input id="token" placeholder="mvtest_abc123…" />
+    <div class="row">
+      <button id="save">Save</button>
+      <button id="ping">Health</button>
+      <button id="routes">Routes</button>
+    </div>
+
+    <hr style="border:0;border-top:1px solid #1b2740;margin:16px 0">
+
+    <label>Index document</label>
+    <input id="title" placeholder="Widget FAQ"/>
+    <textarea id="text" rows="6" placeholder="Paste text to index…"></textarea>
+    <div class="row">
+      <input type="file" id="file" accept=".txt,.md,.csv"/>
+      <select id="source">
+        <option value="faq">faq</option>
+        <option value="note">note</option>
+        <option value="doc">doc</option>
+      </select>
+    </div>
+    <button class="primary" id="btnIndex">POST /api/rag/index</button>
+
+    <hr style="border:0;border-top:1px solid #1b2740;margin:16px 0">
+
+    <label>Query</label>
+    <input id="query" value="What color are widgets?"/>
+    <div class="row">
+      <input id="topk" type="number" min="1" max="10" value="3"/>
+      <button class="primary" id="btnQuery">POST /api/rag/query</button>
+    </div>
+    <small>Tips: credentials persist in localStorage. Use <span class="pill">Health</span> to test connectivity.</small>
+  </section>
+
+  <section class="card">
+    <div class="row">
+      <div><b>Output</b></div>
+      <button id="clear">Clear</button>
+    </div>
+    <div id="out" class="log"></div>
+  </section>
+</main>
 
 <script>
-function saveToken() {
-  localStorage.setItem("api_token", document.getElementById("token").value);
-  alert("Token saved (local only)");
+const $ = (id) => document.getElementById(id);
+const out = $("out");
+
+function loadCfg(){
+  $("base").value = localStorage.getItem("base") || "";
+  $("token").value = localStorage.getItem("token") || "";
 }
-function clearMsg() {
-  document.getElementById("msg").value = "";
+function saveCfg(){
+  localStorage.setItem("base", $("base").value.trim());
+  localStorage.setItem("token", $("token").value.trim());
+  log("Saved settings.", "ok");
 }
-async function sendMsg() {
-  const token = localStorage.getItem("api_token") || "";
-  const msg = document.getElementById("msg").value;
-  const resp = await fetch("/chat", {
-    method: "POST",
-    headers: {
-      "Authorization": "Bearer " + token,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ message: msg })
+function hdrs(){
+  const t = $("token").value.trim();
+  return t ? { "Authorization": "Bearer " + t } : {};
+}
+function log(msg, cls=""){ out.innerHTML += `<div class="${cls}">${msg}</div>`; out.scrollTop = out.scrollHeight; }
+function code(obj){ return `<pre>${escapeHtml(JSON.stringify(obj, null, 2))}</pre>`; }
+function escapeHtml(s){return s.replace(/[&<>"']/g,m=>({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[m]));}
+
+async function getJSON(path){
+  const base = $("base").value.trim().replace(/\/+$/,"");
+  const r = await fetch(base + path, { headers: hdrs() });
+  const j = await r.json().catch(()=>({}));
+  if(!r.ok) throw {status:r.status, data:j};
+  return j;
+}
+async function postJSON(path, body){
+  const base = $("base").value.trim().replace(/\/+$/,"");
+  const r = await fetch(base + path, {
+    method:"POST",
+    headers: { "Content-Type":"application/json", ...hdrs() },
+    body: JSON.stringify(body)
   });
-  const data = await resp.json();
-  document.getElementById("reply").textContent = JSON.stringify(data,null,2);
+  const j = await r.json().catch(()=>({}));
+  if(!r.ok) throw {status:r.status, data:j};
+  return j;
 }
+
+$("save").onclick = saveCfg;
+$("clear").onclick = ()=> out.innerHTML = "";
+
+$("ping").onclick = async ()=>{
+  try{ const j = await getJSON("/health"); log("Health: " + code(j), "ok"); }
+  catch(e){ log("Health error " + code(e), "err"); }
+};
+$("routes").onclick = async ()=>{
+  try{ const j = await getJSON("/__routes"); log("Routes: " + code(j), "ok"); }
+  catch(e){ log("Routes error " + code(e), "err"); }
+};
+
+$("file").addEventListener("change", async (ev)=>{
+  const f = ev.target.files[0]; if(!f) return;
+  const text = await f.text();
+  $("text").value = text.slice(0, 100000); // simple guard
+  if(!$("title").value) $("title").value = f.name.replace(/\.(txt|md|csv)$/i,"");
+  log(`Loaded file: ${f.name} (${f.size} bytes)`, "ok");
+});
+
+$("btnIndex").onclick = async ()=>{
+  const body = { title: $("title").value, text: $("text").value, source: $("source").value };
+  try{ const j = await postJSON("/api/rag/index", body); log("Indexed: " + code(j), "ok"); }
+  catch(e){ log("Index error ("+(e.status||"")+") " + code(e.data||e), "err"); }
+};
+
+$("btnQuery").onclick = async ()=>{
+  const body = { query: $("query").value, topk: Number($("topk").value||3) };
+  try{
+    const j = await postJSON("/api/rag/query", body);
+    const items = (j.contexts||[]).map(c=>(
+      `<div class="ctx">
+         <div><b>${escapeHtml(c.title||"")}</b></div>
+         <small>score: ${c.score?.toFixed?.(4)||0} • id: ${escapeHtml(c.id||"")} • src: ${escapeHtml(c.source||"")}</small>
+         <div>${escapeHtml(c.preview||"")}</div>
+       </div>`
+    )).join("");
+    log(`Answer: <div class="pill">ok=${j.ok}</div><div style="margin:6px 0 10px">${escapeHtml(j.answer||"")}</div>` + items, "ok");
+  } catch(e){
+    log("Query error ("+(e.status||"")+") " + code(e.data||e), "err");
+  }
+};
+
+loadCfg();
 </script>
 </body>
 </html>
