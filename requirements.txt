@@ -1,19 +1,21 @@
 Flask==3.0.3
 flask-cors==4.0.1
-gunicorn==21.2.0
-openai==1.40.0
-python-dotenv==1.0.1
 waitress==3.0.0
-Jinja2==3.1.4
-Werkzeug==3.0.3
-pydantic==2.11.1
+gunicorn==21.2.0
+
+openai==1.40.0
 tiktoken==0.7.0
-apscheduler==3.10.4
+
+SQLAlchemy==2.0.31
+psycopg2-binary==2.9.9
+pgvector==0.2.5
+
+APScheduler==3.10.4
+
 requests==2.31.0
 beautifulsoup4==4.12.3
-SQLAlchemy==2.0.31
-psycopg[binary]==3.1.19
-pgvector==0.2.5
+python-dotenv==1.0.1
+
 
 
 
