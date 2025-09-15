@@ -5,6 +5,7 @@ from flask_cors import CORS
 
 try:
     from openai import OpenAI
+    client = OpenAI()  # no proxies kw
 except Exception as e:
     # If the SDK import fails, surface it clearly at /health
     OpenAI = None
