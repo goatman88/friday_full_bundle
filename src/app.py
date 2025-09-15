@@ -14,6 +14,7 @@ log = logging.getLogger("friday")
 import os
 from flask import Flask
 from backend.rag_blueprint import bp as rag_bp
+app.register_blueprint(rag_bp)
 
 def create_app():
     app = Flask(__name__)
