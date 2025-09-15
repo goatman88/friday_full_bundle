@@ -20,6 +20,10 @@ from openai_client import make_openai_client
 app = Flask(__name__)
 CORS(app)
 
+# --- add S3 uploads ---
+from s3_uploads import bp_s3  # <<< add
+app.register_blueprint(bp_s3)  # <<< add
+
 API_TOKEN = os.getenv("API_TOKEN", "")
 AWS_REGION = os.getenv("AWS_REGION") or "us-east-1"
 S3_BUCKET = os.getenv("S3_BUCKET")
