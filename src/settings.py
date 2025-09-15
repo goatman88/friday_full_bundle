@@ -1,15 +1,16 @@
 import os
 
-# Basic config with sane defaults
-FRIDAY_NAME = os.getenv("FRIDAY_NAME", "Friday")
-API_TOKEN   = os.getenv("API_TOKEN", "")  # optional Bearer auth for write ops
-ENV         = os.getenv("ENV", "prod")
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
+AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+S3_BUCKET = os.getenv("S3_BUCKET", "")
+AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID", "")
+AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "")
+CORS_ALLOWED_ORIGINS = [o.strip() for o in os.getenv("CORS_ALLOWED_ORIGINS", "*").split(",")]
+MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "512"))
 
-# CORS
-FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "*")  # replace with your site later
+# Basic guards
+if not ADMIN_TOKEN:
+    print("[WARN] ADMIN_TOKEN not set — /admin endpoints will reject requests.")
+if not (S3_BUCKET and AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY):
+    print("[WARN] S3 env vars incomplete — uploads will be disabled.")
 
-# OpenAI – make sure OPENAI_API_KEY is set in Render > Environment
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-
-# Health
-COMMIT_SHA = os.getenv("RENDER_GIT_COMMIT", "")[:7]
