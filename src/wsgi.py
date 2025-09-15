@@ -1,9 +1,5 @@
-from app import app
-
-
-
-if __name__ == "__main__":
-    app.run()
+# src/wsgi.py
+from src.app import app  # ✅ absolute import, no dot
 
 
 
