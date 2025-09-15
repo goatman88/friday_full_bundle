@@ -1,18 +1,15 @@
-# src/app.py
 import os
 from datetime import datetime
 from typing import List, Dict, Any
-
 from flask import Flask, jsonify, request, abort
 from flask_cors import CORS
-
 from openai_client import make_openai_client
 
 app = Flask(__name__)
 CORS(app)
-
 API_TOKEN = os.getenv("API_TOKEN", "")
 
+# Create client once, with the safe factory (no proxies kw)
 oai = make_openai_client()
 
 def routes_list() -> List[str]:
@@ -112,6 +109,7 @@ _DB: List[Dict[str, Any]] = []
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
+
 
 
 
