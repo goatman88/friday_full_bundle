@@ -1,29 +1,26 @@
+from __future__ import annotations
 import os
-import json
-import logging
-from datetime import datetime
-from functools import wraps
-
-from flask import Flask, jsonify, request
-
-# ---- Logging (use constant, not string to avoid "Unknown level: 'info'") ----
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO))
-log = logging.getLogger("friday")
-# app.py (snippet)
-import os
-from flask import Flask
+from flask import Flask, jsonify
 from backend.rag_blueprint import bp as rag_bp
-app.register_blueprint(rag_bp)
 
 def create_app():
     app = Flask(__name__)
+
+    # Max upload size (MB) – for /index_file
     max_mb = int(os.environ.get("MAX_UPLOAD_MB", "25"))
     app.config["MAX_CONTENT_LENGTH"] = max_mb * 1024 * 1024
+
+    # Register blueprints
     app.register_blueprint(rag_bp)
+
+    @app.get("/ping")
+    def ping():
+        return jsonify({"ok": True, "app": "Friday", "status": "alive"})
+
     return app
 
 app = create_app()
+
 
 # ---- Flask app --------------------------------------------------------------
 app = Flask(__name__)
