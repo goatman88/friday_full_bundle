@@ -1,44 +1,33 @@
-from __future__ import annotations
-import os, json, math, time
-from typing import List, Dict, Any, Optional
-from flask import Flask, request, jsonify, send_from_directory
-from datetime import datetime
+from flask import Flask, jsonify, request, send_from_directory, abort
 from openai import OpenAI
-import numpy as np
+import os, math
+from typing import Any, Dict, List, Optional
 
 from . import settings
-from .db import db
-from .s3_uploads import bp as s3_bp  # you already have this file
-# If you mounted s3 endpoints onto a Blueprint named bp earlier, we reuse it.
+from . import db
+from .s3_uploads import s3_bp  # keeps your existing S3 routes
 
-# ---- Flask app
+# ---- Flask app & static /admin
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 app.register_blueprint(s3_bp, url_prefix="/api/s3")
 
-# ---- OpenAI client (NO proxies kwarg)
+# ---- OpenAI client (no proxies kw)
 client = OpenAI(api_key=settings.OPENAI_API_KEY)
 
-EMBED_MODEL = "text-embedding-3-small"  # 1536 dims
-
-# ---- Admin guard
 def require_admin():
-    secret = request.headers.get("X-Admin-Secret") or request.args.get("secret")
+    """Protect admin UI & admin endpoints by shared secret."""
     if not settings.ADMIN_SECRET:
-        # If not set, allow (useful for local dev)
-        return
-    if secret != settings.ADMIN_SECRET:
-        return jsonify({"ok": False, "error": "unauthorized"}), 401
+        return  # if unset, do not block (you can force it by setting the env)
+    key = request.headers.get("X-Admin-Secret") or request.args.get("key")
+    if key != settings.ADMIN_SECRET:
+        abort(401)
 
-# ---- Helpers
-def embed(text: str) -> List[float]:
-    text = text.replace("\n", " ")
-    r = client.embeddings.create(model=EMBED_MODEL, input=text)
-    return r.data[0].embedding
+@app.route("/admin")
+def admin_ui():
+    require_admin()
+    return send_from_directory(app.static_folder, "admin.html")
 
-def cosine_sim(a: np.ndarray, b: np.ndarray) -> float:
-    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8))
-
-# ---- System routes
+# ---- Diagnostics
 @app.route("/health")
 def health():
     return jsonify(ok=True, status="running")
@@ -46,171 +35,148 @@ def health():
 @app.route("/__whoami")
 def whoami():
     return jsonify({
-        "service": settings.SERVICE_NAME,
-        "python": os.popen("python --version").read().strip() or "unknown",
         "cwd": os.getcwd(),
         "module_file": __file__,
+        "python": os.popen("python -V").read().strip(),
     })
 
 @app.route("/__routes")
 def routes():
-    return jsonify(sorted([rule.rule for rule in app.url_map.iter_rules()]))
+    rule_list = sorted([str(r) for r in app.url_map.iter_rules()])
+    return jsonify(rule_list)
 
-# ---- Admin UI (static) — protect with secret
-@app.route("/admin")
-def admin_ui():
-    auth = require_admin()
-    if auth is not None:
-        return auth
-    return send_from_directory(app.static_folder, "admin.html")
+# ---- DB admin (guarded)
+@app.route("/admin/init-db", methods=["POST"])
+def init_db():
+    require_admin()
+    return jsonify(db.init_db())
 
-# ===============================
-# ==========   RAG   ============
-# ===============================
+# ---- Embeddings helper
+def embed_text(text: str) -> List[float]:
+    # OpenAI embeddings v1
+    em = client.embeddings.create(model=settings.OPENAI_EMBED_MODEL, input=text)
+    return em.data[0].embedding  # List[float]
 
+# ---- RAG: index a doc
 @app.route("/api/rag/index", methods=["POST"])
 def rag_index():
-    auth = require_admin()
-    if auth is not None: return auth
+    body = request.get_json(force=True) or {}
+    title = body.get("title") or ""
+    text = body.get("text") or ""
+    source = body.get("source") or "admin"
+    user_id = body.get("user_id") or "public"
+    mime = body.get("mime") or "text/plain"
+    metadata = body.get("metadata") or {}
 
-    data = request.get_json(force=True) or {}
-    title   = (data.get("title") or "").strip()
-    text    = (data.get("text") or "").strip()
-    source  = (data.get("source") or "").strip() or "admin"
-    mime    = (data.get("mime") or "").strip() or "text/plain"
-    user_id = (data.get("user_id") or "").strip() or "public"
+    if not text.strip():
+        return jsonify(ok=False, error="text is required"), 400
 
-    if not text:
-        return jsonify(ok=False, error="text required"), 400
+    emb = embed_text(text)
+    doc_id = db.insert_doc(title, text, source, user_id, mime, emb, metadata)
+    return jsonify(ok=True, id=doc_id)
 
-    emb = embed(text)
+# ---- RAG: upsert-batch (advanced #1)
+@app.route("/api/rag/upsert-batch", methods=["POST"])
+def rag_upsert_batch():
+    body = request.get_json(force=True) or {}
+    items: List[Dict[str, Any]] = body.get("items") or []
+    if not items:
+        return jsonify(ok=False, error="items[] required"), 400
+    rows = []
+    for it in items:
+        t = (it.get("text") or "").strip()
+        if not t:
+            continue
+        rows.append({
+            "title": it.get("title") or "",
+            "text": t,
+            "source": it.get("source") or "batch",
+            "user_id": it.get("user_id") or "public",
+            "mime": it.get("mime") or "text/plain",
+            "metadata": it.get("metadata") or {},
+            "embedding": embed_text(t),
+        })
+    res = db.upsert_batch(rows)
+    return jsonify(res)
 
-    with db() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO documents (title, text, source, mime, user_id, embedding) "
-                "VALUES (%s,%s,%s,%s,%s,%s) RETURNING id",
-                (title, text, source, mime, user_id, emb)
-            )
-            doc_id = cur.fetchone()[0]
-            cur.execute("SELECT count(*) FROM documents")
-            count = cur.fetchone()[0]
-
-    return jsonify(ok=True, id=doc_id, count=count)
-
-def _vector_search(q_emb: List[float], topk:int=5, user_id:str="public", source:Optional[str]=None):
-    where = ["user_id = %s"]
-    params: List[Any] = [user_id]
-    if source:
-        where.append("source = %s")
-        params.append(source)
-    where_sql = " AND ".join(where) if where else "TRUE"
-    sql = f"""
-        SELECT id, title, text, source, mime, user_id,
-               1 - (embedding <=> %s::vector) AS score
-        FROM documents
-        WHERE {where_sql}
-        ORDER BY embedding <=> %s::vector
-        LIMIT %s
-    """
-    # vector param appears twice (once in select via 1 - distance, once in order)
-    params2 = [q_emb] + params + [q_emb, topk]
-    with db() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, params2)
-            rows = [dict(zip([d[0] for d in cur.description], r)) for r in cur.fetchall()]
-    return rows
-
-def _keyword_search(q: str, topk:int=10, user_id:str="public"):
-    with db() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT id, title, text, source, mime, user_id,
-                       ts_rank(tsv, plainto_tsquery('english', %s)) AS score
-                FROM documents
-                WHERE user_id = %s
-                ORDER BY tsv @@ plainto_tsquery('english', %s) DESC, score DESC
-                LIMIT %s
-                """,
-                (q, user_id, q, topk)
-            )
-            rows = [dict(zip([d[0] for d in cur.description], r)) for r in cur.fetchall()]
-    return rows
-
+# ---- RAG: query (basic cosine)
 @app.route("/api/rag/query", methods=["POST"])
 def rag_query():
-    data = request.get_json(force=True) or {}
-    q     = (data.get("query") or "").strip()
-    topk  = int(data.get("topk") or 3)
-    user  = (data.get("user_id") or "public").strip()
-    if not q:
-        return jsonify(ok=False, error="query required"), 400
+    body = request.get_json(force=True) or {}
+    q = body.get("query") or ""
+    topk = int(body.get("topk") or 3)
+    if not q.strip():
+        return jsonify(ok=False, error="query is required"), 400
+    qv = embed_text(q)
+    rows = db.search_similar(qv, topk=topk)
+    return jsonify({"query": q, "topk": topk, "results": rows})
 
-    q_emb = embed(q)
-    rows = _vector_search(q_emb, topk=topk, user_id=user)
-    return jsonify(ok=True, items=rows)
-
-# ---- Advanced: hybrid + rerank (local cosine)
+# ---- RAG: query-advanced (advanced #2) - filters + light MMR
 @app.route("/api/rag/query-advanced", methods=["POST"])
 def rag_query_advanced():
-    data = request.get_json(force=True) or {}
-    q     = (data.get("query") or "").strip()
-    topk  = int(data.get("topk") or 5)
-    user  = (data.get("user_id") or "public").strip()
-    source= (data.get("source") or "").strip() or None
-    if not q:
-        return jsonify(ok=False, error="query required"), 400
+    body = request.get_json(force=True) or {}
+    q = body.get("query") or ""
+    topk = int(body.get("topk") or 5)
+    lambda_mmr = float(body.get("lambda_mmr") or 0.5)  # 0=diverse, 1=similarity
+    source = body.get("source")
+    user_id = body.get("user_id")
+    where_meta = body.get("where_meta")
 
-    q_emb = embed(q)
-    by_vec = _vector_search(q_emb, topk=max(10, topk), user_id=user, source=source)
-    by_kw  = _keyword_search(q, topk=max(10, topk), user_id=user)
+    if not q.strip():
+        return jsonify(ok=False, error="query is required"), 400
 
-    # pool & dedupe
-    pool = {}
-    for r in by_vec + by_kw:
-        pool[r["id"]] = r
-    items = list(pool.values())
+    qv = embed_text(q)
+    # pull an over-sampled pool
+    pool = db.search_similar(qv, topk=max(20, topk*4), source=source, user_id=user_id, where_meta=where_meta)
+    # simple MMR
+    selected: List[Dict[str,Any]] = []
+    selected_vecs: List[List[float]] = []
+    def cos(a,b):
+        import math
+        na = math.sqrt(sum(x*x for x in a)); nb = math.sqrt(sum(x*x for x in b))
+        return sum(x*y for x,y in zip(a,b)) / (na*nb + 1e-8)
+    for cand in pool:
+        # NOTE: we do not have vectors of docs here; to keep it light, re-embed top few texts (ok for admin/API usage)
+        dv = embed_text(cand["text"][:1500])
+        if not selected:
+            selected.append(cand); selected_vecs.append(dv); 
+        else:
+            sim_to_query = cos(dv, qv)
+            sim_to_selected = max(cos(dv, sv) for sv in selected_vecs)
+            score = lambda_mmr*sim_to_query - (1-lambda_mmr)*sim_to_selected
+            cand["_mmr"] = score
+            selected.append(cand); selected_vecs.append(dv)
+    # sort by mmr if computed
+    for c in selected: c["_mmr"] = c.get("_mmr", c.get("score", 0.0))
+    selected.sort(key=lambda r: r["_mmr"], reverse=True)
+    return jsonify({"query": q, "results": selected[:topk]})
 
-    # rerank by cosine to embedding of each document text (cheap: embed q only)
-    # we already have vector score; boost if also matched keyword.
-    def score(item):
-        vec_score = item.get("score", 0.0)
-        kw_bonus  = 0.15 if item["id"] in {x["id"] for x in by_kw} else 0.0
-        return vec_score + kw_bonus
+# ---- RAG: delete (advanced #3)
+@app.route("/api/rag/delete", methods=["POST"])
+def rag_delete():
+    require_admin()
+    body = request.get_json(force=True) or {}
+    idv = body.get("id")
+    source = body.get("source")
+    res = db.delete_docs(id=idv, source=source)
+    return jsonify(res)
 
-    items.sort(key=score, reverse=True)
-    return jsonify(ok=True, items=items[:topk])
-
-# ---- Management: list, delete, feedback
-@app.route("/api/rag/list", methods=["GET"])
-def rag_list():
-    auth = require_admin()
-    if auth is not None: return auth
-    limit = int(request.args.get("limit", "50"))
-    with db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT id, title, left(text, 300) AS preview, source, mime, user_id, created_at FROM documents ORDER BY id DESC LIMIT %s", (limit,))
-            rows = [dict(zip([d[0] for d in cur.description], r)) for r in cur.fetchall()]
-    return jsonify(ok=True, items=rows)
-
-@app.route("/api/rag/delete/<int:doc_id>", methods=["DELETE"])
-def rag_delete(doc_id: int):
-    auth = require_admin()
-    if auth is not None: return auth
-    with db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("DELETE FROM documents WHERE id=%s", (doc_id,))
-    return jsonify(ok=True, deleted=doc_id)
-
-@app.route("/api/rag/feedback", methods=["POST"])
-def rag_feedback():
-    # simple hook to log feedback server-side (extend to a table if you want)
-    auth = require_admin()
-    if auth is not None: return auth
-    data = request.get_json(force=True) or {}
-    print("[FEEDBACK]", json.dumps(data))
-    return jsonify(ok=True)
+# ---- RAG: reindex-embeddings (advanced #4)
+@app.route("/api/rag/reindex-embeddings", methods=["POST"])
+def rag_reindex():
+    require_admin()
+    body = request.get_json(force=True) or {}
+    limit = int(body.get("limit") or 200)
+    # lightweight: recompute for newest N records missing embeddings or to refresh
+    with db.get_conn() as conn, conn.cursor(row_factory=db.dict_row) as cur:
+        cur.execute("SELECT id, text FROM rag_docs ORDER BY id DESC LIMIT %s;", (limit,))
+        rows = cur.fetchall()
+        for r in rows:
+            v = embed_text(r["text"])
+            cur2 = conn.cursor()
+            cur2.execute("UPDATE rag_docs SET embedding=%s WHERE id=%s;", (v, r["id"]))
+            cur2.close()
+    return jsonify(ok=True, updated=min(limit, len(rows)))
 
 
 
