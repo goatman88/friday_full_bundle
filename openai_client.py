@@ -1,4 +1,3 @@
-# src/openai_client.py
 import os
 import httpx
 from openai import OpenAI
@@ -8,7 +7,6 @@ def make_openai_client() -> OpenAI:
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is not set")
 
-    # Optional outbound proxy (env controlled). We pass it to httpx, NOT to OpenAI()
     proxy = (
         os.getenv("OUTBOUND_HTTP_PROXY")
         or os.getenv("HTTPS_PROXY")
@@ -32,6 +30,7 @@ def make_openai_client() -> OpenAI:
         return OpenAI(api_key=api_key, http_client=httpx_client)
 
     return OpenAI(api_key=api_key)
+
 
 
 
