@@ -1,6 +1,16 @@
 import os
 import httpx
 from openai import OpenAI
+# --- keep this at the top of openai_client.py ---
+import os, httpx
+from openai import OpenAI
+
+# Prevent the SDK from picking up proxy env vars and passing `proxies=` internally.
+for _k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+    if os.environ.get(_k):
+        print(f"[openai_client] clearing {_k} to avoid httpx proxies kwarg clash")
+        os.environ.pop(_k, None)
+# ------------------------------------------------
 
 def make_openai_client() -> OpenAI:
     api_key = os.getenv("OPENAI_API_KEY")
