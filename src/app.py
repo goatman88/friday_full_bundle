@@ -1,182 +1,159 @@
-from flask import Flask, jsonify, request, send_from_directory, abort
-from openai import OpenAI
-import os, math
-from typing import Any, Dict, List, Optional
+import os
+import json
+import logging
+from datetime import datetime
+from functools import wraps
 
-from src import settings
-from . import db
-from src.s3_uploads import s3_bp  # keeps your existing S3 routes
+from flask import Flask, jsonify, request
 
-# ---- Flask app & static /admin
-app = Flask(__name__, static_folder="static", static_url_path="/static")
-app.register_blueprint(s3_bp, url_prefix="/api/s3")
+# ---- Logging (use constant, not string to avoid "Unknown level: 'info'") ----
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO))
+log = logging.getLogger("friday")
 
-# ---- OpenAI client (no proxies kw)
-client = OpenAI(api_key=settings.OPENAI_API_KEY)
+# ---- Flask app --------------------------------------------------------------
+app = Flask(__name__)
 
-def require_admin():
-    """Protect admin UI & admin endpoints by shared secret."""
-    if not settings.ADMIN_SECRET:
-        return  # if unset, do not block (you can force it by setting the env)
-    key = request.headers.get("X-Admin-Secret") or request.args.get("key")
-    if key != settings.ADMIN_SECRET:
-        abort(401)
+# Simple in-memory doc store so the API works even without a DB.
+# (Safe for smoke tests; swap with Postgres later.)
+_DOCS = []  # each item: {"id": int, "title": ..., "text": ..., "source": ..., "user_id": ...}
 
-@app.route("/admin")
-def admin_ui():
-    require_admin()
-    return send_from_directory(app.static_folder, "admin.html")
+# ---- Auth: shared-secret bearer token (simple & Render-friendly) ------------
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN")  # set in Render > Environment
+def require_bearer_token(fn):
+    """Require `Authorization: Bearer <ADMIN_TOKEN>` if ADMIN_TOKEN is set."""
+    @wraps(fn)
+    def _wrap(*args, **kwargs):
+        if not ADMIN_TOKEN:
+            return fn(*args, **kwargs)  # auth disabled
+        header = request.headers.get("Authorization", "")
+        if not header.startswith("Bearer "):
+            return jsonify(ok=False, error="missing_bearer"), 401
+        token = header.split(" ", 1)[1]
+        if token != ADMIN_TOKEN:
+            return jsonify(ok=False, error="invalid_bearer"), 403
+        return fn(*args, **kwargs)
+    return _wrap
 
-# ---- Diagnostics
-@app.route("/health")
-def health():
-    return jsonify(ok=True, status="running")
+# ---- Utility ---------------------------------------------------------------
+def _route_list():
+    rules = []
+    for r in app.url_map.iter_rules():
+        # skip static rule noise
+        if r.rule.startswith("/static"):
+            continue
+        methods = ",".join(sorted(m for m in r.methods if m in {"GET","POST","PUT","DELETE"}))
+        rules.append({"path": r.rule, "methods": methods})
+    return sorted(rules, key=lambda x: x["path"])
 
-@app.route("/__whoami")
+# ---- Core routes ------------------------------------------------------------
+@app.get("/")
+def root():
+    return jsonify(
+        ok=True,
+        service="friday",
+        message="It works. See /health, /__routes, /__whoami."
+    )
+
+@app.get("/__routes")
+def routes():
+    return jsonify([r["path"] for r in _route_list()])
+
+@app.get("/__whoami")
 def whoami():
     return jsonify({
         "cwd": os.getcwd(),
         "module_file": __file__,
-        "python": os.popen("python -V").read().strip(),
+        "python": f"Python {os.sys.version.split()[0]}",
+        "app_id": id(app)
     })
 
-@app.route("/__routes")
-def routes():
-    rule_list = sorted([str(r) for r in app.url_map.iter_rules()])
-    return jsonify(rule_list)
+@app.get("/health")
+def health():
+    return jsonify(ok=True, status="running", time=datetime.utcnow().isoformat()+"Z")
 
-# ---- DB admin (guarded)
-@app.route("/admin/init-db", methods=["POST"])
-def init_db():
-    require_admin()
-    return jsonify(db.init_db())
-
-# ---- Embeddings helper
-def embed_text(text: str) -> List[float]:
-    # OpenAI embeddings v1
-    em = client.embeddings.create(model=settings.OPENAI_EMBED_MODEL, input=text)
-    return em.data[0].embedding  # List[float]
-
-# ---- RAG: index a doc
-@app.route("/api/rag/index", methods=["POST"])
+# ---- RAG-ish endpoints (in-memory for now; DB layer can be dropped in later)-
+@app.post("/api/rag/index")
+@require_bearer_token
 def rag_index():
-    body = request.get_json(force=True) or {}
-    title = body.get("title") or ""
-    text = body.get("text") or ""
-    source = body.get("source") or "admin"
-    user_id = body.get("user_id") or "public"
-    mime = body.get("mime") or "text/plain"
-    metadata = body.get("metadata") or {}
+    """
+    Accepts JSON like:
+    {
+      "title": "Widget FAQ",
+      "text":  "Widgets are blue...",
+      "source":"faq",
+      "mime":  "text/plain",
+      "user_id":"public"
+    }
+    """
+    try:
+        data = request.get_json(force=True, silent=False) or {}
+        required = ("title","text")
+        for k in required:
+            if not data.get(k):
+                return jsonify(ok=False, error=f"missing_{k}"), 400
 
-    if not text.strip():
-        return jsonify(ok=False, error="text is required"), 400
+        doc_id = len(_DOCS) + 1
+        item = {
+            "id": doc_id,
+            "title": data["title"],
+            "text": data["text"],
+            "source": data.get("source") or "unknown",
+            "mime": data.get("mime") or "text/plain",
+            "user_id": data.get("user_id") or "public",
+            "created_at": datetime.utcnow().isoformat()+"Z"
+        }
+        _DOCS.append(item)
+        return jsonify(ok=True, id=doc_id, size=len(item["text"])), 201
+    except Exception as e:
+        log.exception("rag_index failed")
+        return jsonify(ok=False, error=str(e)), 500
 
-    emb = embed_text(text)
-    doc_id = db.insert_doc(title, text, source, user_id, mime, emb, metadata)
-    return jsonify(ok=True, id=doc_id)
-
-# ---- RAG: upsert-batch (advanced #1)
-@app.route("/api/rag/upsert-batch", methods=["POST"])
-def rag_upsert_batch():
-    body = request.get_json(force=True) or {}
-    items: List[Dict[str, Any]] = body.get("items") or []
-    if not items:
-        return jsonify(ok=False, error="items[] required"), 400
-    rows = []
-    for it in items:
-        t = (it.get("text") or "").strip()
-        if not t:
-            continue
-        rows.append({
-            "title": it.get("title") or "",
-            "text": t,
-            "source": it.get("source") or "batch",
-            "user_id": it.get("user_id") or "public",
-            "mime": it.get("mime") or "text/plain",
-            "metadata": it.get("metadata") or {},
-            "embedding": embed_text(t),
-        })
-    res = db.upsert_batch(rows)
-    return jsonify(res)
-
-# ---- RAG: query (basic cosine)
-@app.route("/api/rag/query", methods=["POST"])
+@app.post("/api/rag/query")
 def rag_query():
-    body = request.get_json(force=True) or {}
-    q = body.get("query") or ""
-    topk = int(body.get("topk") or 3)
-    if not q.strip():
-        return jsonify(ok=False, error="query is required"), 400
-    qv = embed_text(q)
-    rows = db.search_similar(qv, topk=topk)
-    return jsonify({"query": q, "topk": topk, "results": rows})
+    """
+    Accepts JSON like: { "query": "What color are widgets?", "topk": 3 }
+    Returns naive keyword matches from the in-memory docs.
+    """
+    data = request.get_json(force=True, silent=False) or {}
+    q = (data.get("query") or "").strip()
+    topk = int(data.get("topk") or 3)
+    if not q:
+        return jsonify(ok=False, error="missing_query"), 400
 
-# ---- RAG: query-advanced (advanced #2) - filters + light MMR
-@app.route("/api/rag/query-advanced", methods=["POST"])
-def rag_query_advanced():
-    body = request.get_json(force=True) or {}
-    q = body.get("query") or ""
-    topk = int(body.get("topk") or 5)
-    lambda_mmr = float(body.get("lambda_mmr") or 0.5)  # 0=diverse, 1=similarity
-    source = body.get("source")
-    user_id = body.get("user_id")
-    where_meta = body.get("where_meta")
+    # super simple match score = count of query words appearing in text/title
+    words = [w.lower() for w in q.split() if w.strip()]
+    scored = []
+    for d in _DOCS:
+        hay = (d["title"] + " " + d["text"]).lower()
+        score = sum(hay.count(w) for w in words)
+        if score > 0:
+            scored.append((score, d))
+    scored.sort(key=lambda t: t[0], reverse=True)
+    hits = [dict(id=d["id"], title=d["title"], source=d["source"], score=score) for score, d in scored[:topk]]
 
-    if not q.strip():
-        return jsonify(ok=False, error="query is required"), 400
+    return jsonify(ok=True, query=q, topk=topk, hits=hits)
 
-    qv = embed_text(q)
-    # pull an over-sampled pool
-    pool = db.search_similar(qv, topk=max(20, topk*4), source=source, user_id=user_id, where_meta=where_meta)
-    # simple MMR
-    selected: List[Dict[str,Any]] = []
-    selected_vecs: List[List[float]] = []
-    def cos(a,b):
-        import math
-        na = math.sqrt(sum(x*x for x in a)); nb = math.sqrt(sum(x*x for x in b))
-        return sum(x*y for x,y in zip(a,b)) / (na*nb + 1e-8)
-    for cand in pool:
-        # NOTE: we do not have vectors of docs here; to keep it light, re-embed top few texts (ok for admin/API usage)
-        dv = embed_text(cand["text"][:1500])
-        if not selected:
-            selected.append(cand); selected_vecs.append(dv); 
-        else:
-            sim_to_query = cos(dv, qv)
-            sim_to_selected = max(cos(dv, sv) for sv in selected_vecs)
-            score = lambda_mmr*sim_to_query - (1-lambda_mmr)*sim_to_selected
-            cand["_mmr"] = score
-            selected.append(cand); selected_vecs.append(dv)
-    # sort by mmr if computed
-    for c in selected: c["_mmr"] = c.get("_mmr", c.get("score", 0.0))
-    selected.sort(key=lambda r: r["_mmr"], reverse=True)
-    return jsonify({"query": q, "results": selected[:topk]})
+# ---- Admin (behind bearer token) -------------------------------------------
+@app.get("/admin")
+@require_bearer_token
+def admin_home():
+    return jsonify(
+        ok=True,
+        routes=[r["path"] for r in _route_list()],
+        docs=len(_DOCS)
+    )
 
-# ---- RAG: delete (advanced #3)
-@app.route("/api/rag/delete", methods=["POST"])
-def rag_delete():
-    require_admin()
-    body = request.get_json(force=True) or {}
-    idv = body.get("id")
-    source = body.get("source")
-    res = db.delete_docs(id=idv, source=source)
-    return jsonify(res)
+# ---- Error handlers ---------------------------------------------------------
+@app.errorhandler(404)
+def _404(_e):
+    return jsonify(ok=False, error="not_found"), 404
 
-# ---- RAG: reindex-embeddings (advanced #4)
-@app.route("/api/rag/reindex-embeddings", methods=["POST"])
-def rag_reindex():
-    require_admin()
-    body = request.get_json(force=True) or {}
-    limit = int(body.get("limit") or 200)
-    # lightweight: recompute for newest N records missing embeddings or to refresh
-    with db.get_conn() as conn, conn.cursor(row_factory=db.dict_row) as cur:
-        cur.execute("SELECT id, text FROM rag_docs ORDER BY id DESC LIMIT %s;", (limit,))
-        rows = cur.fetchall()
-        for r in rows:
-            v = embed_text(r["text"])
-            cur2 = conn.cursor()
-            cur2.execute("UPDATE rag_docs SET embedding=%s WHERE id=%s;", (v, r["id"]))
-            cur2.close()
-    return jsonify(ok=True, updated=min(limit, len(rows)))
+@app.errorhandler(500)
+def _500(e):
+    log.exception("Unhandled error")
+    return jsonify(ok=False, error="internal_error"), 500
+
 
 
 
