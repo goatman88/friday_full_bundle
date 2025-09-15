@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Friday Admin</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    :root { --bg:#0b1020; --card:#11162a; --ink:#e6ecff; --muted:#a9b4d0; --accent:#7aa2ff; --ok:#4ade80; --bad:#fb7185; }
+    * { box-sizing: border-box; }
+    body { margin:0; font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, Apple Color Emoji, Segoe UI Emoji; color:var(--ink); background:radial-gradient(1200px 600px at 30% -10%, #14214e, transparent), var(--bg); }
+    a { color: var(--accent); text-decoration: none; }
+    h1 { font-size: 22px; margin: 0 0 8px; }
+    h2 { font-size: 16px; margin: 18px 0 8px; color: var(--muted);}
+    .wrap { max-width: 1100px; margin: 32px auto; padding: 0 16px; }
+    .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px; }
+    .card { background: var(--card); border:1px solid rgba(255,255,255,.06); border-radius:12px; padding:16px; }
+    .span6 { grid-column: span 6; } .span12 { grid-column: span 12; }
+    label { display:block; font-size:12px; color:var(--muted); margin-bottom:6px; }
+    input[type="text"], textarea, select, input[type="number"] {
+      width: 100%; background: #0c1226; color: var(--ink);
+      border:1px solid rgba(255,255,255,.08); border-radius:10px; padding:10px 12px; outline: none;
+    }
+    textarea { min-height: 100px; resize: vertical; }
+    button { background: linear-gradient(180deg,#5f85ff,#476cf8); border:0; color:#fff; padding:10px 14px; border-radius:10px; cursor:pointer; }
+    button.secondary { background: #0c1226; border:1px solid rgba(255,255,255,.12); }
+    .row { display:flex; gap:10px; align-items:center; flex-wrap: wrap; }
+    .pill { padding:6px 10px; border-radius:999px; background:#0c1226; border:1px solid rgba(255,255,255,.08); color:#c7d2fe; font-size:12px;}
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .muted { color: var(--muted); }
+    .ok { color: var(--ok); } .bad { color: var(--bad); }
+    progress { width:100%; height:10px; }
+    .hr { height:1px; background:rgba(255,255,255,.06); margin:12px 0; }
+    pre { white-space: pre-wrap; background:#0b1123; border:1px solid rgba(255,255,255,.08); padding:10px; border-radius:10px; max-height:260px; overflow:auto; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="row" style="justify-content:space-between;margin-bottom:12px;">
+      <h1>Friday Admin</h1>
+      <div class="row">
+        <span class="pill">/health: <span id="healthStatus" class="muted">checking…</span></span>
+        <span class="pill">env: <span id="envStatus" class="muted">–</span></span>
+      </div>
+    </div>
+
+    <div class="grid">
+      <!-- RAG Index -->
+      <section class="card span6">
+        <h2>Index a doc</h2>
+        <label>Title</label>
+        <input id="idx_title" type="text" placeholder="Widget FAQ" />
+        <label>Source</label>
+        <input id="idx_source" type="text" placeholder="faq" />
+        <label>User ID</label>
+        <input id="idx_user" type="text" value="public" />
+        <label>MIME</label>
+        <input id="idx_mime" type="text" value="text/plain" />
+        <label>Text</label>
+        <textarea id="idx_text" placeholder="Widgets are blue and waterproof…"></textarea>
+        <div class="row" style="margin-top:10px;">
+          <button id="btnIndex">Index</button>
+          <div class="muted mono" id="idxResult"></div>
+        </div>
+      </section>
+
+      <!-- RAG Query -->
+      <section class="card span6">
+        <h2>RAG query</h2>
+        <label>Query</label>
+        <input id="q_text" type="text" placeholder="What color are widgets?" />
+        <label>Top K</label>
+        <input id="q_topk" type="number" value="3" min="1" max="20" />
+        <div class="row" style="margin-top:10px;">
+          <button id="btnQuery">Search</button>
+        </div>
+        <div class="hr"></div>
+        <pre id="q_out" class="mono"></pre>
+      </section>
+
+      <!-- S3 Single-part -->
+      <section class="card span6">
+        <h2>S3 upload (single PUT)</h2>
+        <label>Key</label>
+        <input id="s3_key" type="text" placeholder="uploads/demo.bin" />
+        <label>File</label>
+        <input id="s3_file" type="file" />
+        <div class="row" style="margin-top:10px;">
+          <button id="btnS3Put">Upload</button>
+          <span id="s3_put_msg" class="muted mono"></span>
+        </div>
+        <progress id="s3_put_prog" max="100" value="0" style="margin-top:10px;"></progress>
+      </section>
+
+      <!-- S3 Multipart -->
+      <section class="card span6">
+        <h2>S3 upload (multipart)</h2>
+        <label>Key</label>
+        <input id="mp_key" type="text" placeholder="uploads/big.dat" />
+        <label>Part size (MB)</label>
+        <input id="mp_size" type="number" value="8" min="5" />
+        <label>File</label>
+        <input id="mp_file" type="file" />
+        <div class="row" style="margin-top:10px;">
+          <button id="btnMultipart">Upload multipart</button>
+          <span id="mp_msg" class="muted mono"></span>
+        </div>
+        <progress id="mp_prog" max="100" value="0" style="margin-top:10px;"></progress>
+        <div class="hr"></div>
+        <pre id="mp_log" class="mono"></pre>
+      </section>
+
+      <!-- Live routes -->
+      <section class="card span12">
+        <h2>Routes</h2>
+        <pre id="routes" class="mono">loading…</pre>
+      </section>
+    </div>
+  </div>
+
+<script>
+const api = location.origin; // same origin — no CORS headaches
+
+async function getJSON(url, opts={}) {
+  const res = await fetch(url, { headers: {"Content-Type":"application/json"}, ...opts });
+  const txt = await res.text();
+  try { return { ok: res.ok, status: res.status, json: JSON.parse(txt) }; }
+  catch { return { ok: res.ok, status: res.status, json: {raw: txt} }; }
+}
+
+async function init() {
+  // health
+  try {
+    const h = await getJSON(`${api}/health`);
+    document.getElementById('healthStatus').textContent = h.ok && h.json?.ok ? 'ok' : 'bad';
+    document.getElementById('healthStatus').className = h.ok ? 'ok' : 'bad';
+  } catch { document.getElementById('healthStatus').textContent = 'bad'; }
+
+  // routes
+  try {
+    const r = await getJSON(`${api}/__routes`);
+    document.getElementById('routes').textContent = JSON.stringify(r.json, null, 2);
+  } catch (e) { document.getElementById('routes').textContent = String(e); }
+
+  // env snapshot (what matters)
+  const env = [
+    ['OPENAI_API_KEY', !!(window.OPENAI_API_KEY)], // always false here, just a placeholder
+  ];
+  document.getElementById('envStatus').textContent = 'server env';
+}
+init();
+
+// ---- RAG: index ----
+document.getElementById('btnIndex').addEventListener('click', async () => {
+  const body = {
+    title: document.getElementById('idx_title').value.trim(),
+    text: document.getElementById('idx_text').value.trim(),
+    source: document.getElementById('idx_source').value.trim() || 'admin',
+    mime: document.getElementById('idx_mime').value.trim() || 'text/plain',
+    user_id: document.getElementById('idx_user').value.trim() || 'public',
+  };
+  const out = document.getElementById('idxResult');
+  out.textContent = 'indexing…';
+  const r = await getJSON(`${api}/api/rag/index`, { method:'POST', body: JSON.stringify(body) });
+  out.textContent = r.ok ? `ok (id: ${r.json.id}, total: ${r.json.count})` : `error: ${JSON.stringify(r.json)}`;
+});
+
+// ---- RAG: query ----
+document.getElementById('btnQuery').addEventListener('click', async () => {
+  const body = {
+    query: document.getElementById('q_text').value.trim(),
+    topk: Number(document.getElementById('q_topk').value || 3)
+  };
+  const out = document.getElementById('q_out');
+  out.textContent = 'searching…';
+  const r = await getJSON(`${api}/api/rag/query`, { method:'POST', body: JSON.stringify(body) });
+  out.textContent = JSON.stringify(r.json, null, 2);
+});
+
+// ---- S3 single PUT ----
+document.getElementById('btnS3Put').addEventListener('click', async () => {
+  const key = document.getElementById('s3_key').value.trim();
+  const file = document.getElementById('s3_file').files[0];
+  const msg = document.getElementById('s3_put_msg');
+  const prog = document.getElementById('s3_put_prog');
+  if (!key || !file) { msg.textContent = 'choose a file & key'; return; }
+
+  msg.textContent = 'requesting presigned URL…';
+  const r = await getJSON(`${api}/api/s3/sign`, { method:'POST', body: JSON.stringify({ key, content_type: file.type || 'application/octet-stream'})});
+  if (!r.ok || !r.json.url) { msg.textContent = 'presign failed'; return; }
+
+  msg.textContent = 'uploading…';
+  prog.value = 0;
+
+  await fetch(r.json.url, {
+    method: 'PUT',
+    headers: { 'Content-Type': file.type || 'application/octet-stream' },
+    body: file,
+  }).then(res => {
+    if (!res.ok) throw new Error('S3 PUT failed');
+    prog.value = 100;
+    msg.textContent = 'done ✓';
+  }).catch(err => {
+    msg.textContent = 'error: ' + err.message;
+  });
+});
+
+// ---- Multipart helpers ----
+function splitParts(file, partBytes) {
+  const parts = [];
+  let offset = 0, i = 1;
+  while (offset < file.size) {
+    const end = Math.min(offset + partBytes, file.size);
+    parts.push({ number: i++, blob: file.slice(offset, end) });
+    offset = end;
+  }
+  return parts;
+}
+
+// ---- S3 multipart ----
+document.getElementById('btnMultipart').addEventListener('click', async () => {
+  const key = document.getElementById('mp_key').value.trim();
+  const mb = Math.max(5, Number(document.getElementById('mp_size').value || 8));
+  const file = document.getElementById('mp_file').files[0];
+  const msg = document.getElementById('mp_msg');
+  const prog = document.getElementById('mp_prog');
+  const log = document.getElementById('mp_log');
+
+  if (!key || !file) { msg.textContent = 'choose a file & key'; return; }
+
+  msg.textContent = 'create multipart…';
+  log.textContent = '';
+  prog.value = 0;
+
+  const create = await getJSON(`${api}/api/s3/multipart/create`, {
+    method:'POST', body: JSON.stringify({ key, content_type: file.type || 'application/octet-stream' })
+  });
+  if (!create.ok) { msg.textContent = 'create failed'; log.textContent = JSON.stringify(create.json, null, 2); return; }
+
+  const uploadId = create.json.upload_id;
+  const partBytes = mb * 1024 * 1024;
+  const parts = splitParts(file, partBytes);
+  const etags = [];
+  let uploaded = 0;
+
+  for (const p of parts) {
+    msg.textContent = `part ${p.number}/${parts.length}…`;
+    const pre = await getJSON(`${api}/api/s3/multipart/part`, {
+      method:'POST', body: JSON.stringify({ key, upload_id: uploadId, part_number: p.number })
+    });
+    if (!pre.ok) { msg.textContent = 'part presign failed'; log.textContent = JSON.stringify(pre.json,null,2); return; }
+
+    const res = await fetch(pre.json.url, { method:'PUT', body: p.blob });
+    if (!res.ok) { msg.textContent = 'part upload failed'; log.textContent = `HTTP ${res.status}`; return; }
+    const etag = res.headers.get('ETag') || res.headers.get('etag');
+    etags.push({ ETag: etag, PartNumber: p.number });
+
+    uploaded += p.blob.size;
+    prog.value = Math.round((uploaded / file.size) * 100);
+  }
+
+  msg.textContent = 'completing…';
+  const done = await getJSON(`${api}/api/s3/multipart/complete`, {
+    method:'POST', body: JSON.stringify({ key, upload_id: uploadId, parts: etags })
+  });
+  if (!done.ok) { msg.textContent = 'complete failed'; log.textContent = JSON.stringify(done.json,null,2); return; }
+
+  msg.textContent = 'done ✓';
+  log.textContent = JSON.stringify(done.json, null, 2);
+});
+</script>
+</body>
+</html>
