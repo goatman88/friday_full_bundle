@@ -1,38 +1,27 @@
-# === Web stack
 Flask==3.0.3
 flask-cors==4.0.1
-gunicorn==22.0.0
 waitress==3.0.0
+gunicorn==21.2.0
+
+openai==1.40.0
+requests==2.31.0
+tiktoken==0.7.0
+pydantic==2.11.1
 Jinja2==3.1.4
 Werkzeug==3.0.3
-python-dotenv==1.0.1
+itsdangerous==2.2.0
+blinker==1.9.0
 
-# === OpenAI + utils
-openai==1.40.0
-tiktoken==0.7.0
-requests==2.31.0
-beautifulsoup4==4.12.3
-tqdm==4.67.1
-
-# === Scheduling / misc
 APScheduler==3.10.4
+beautifulsoup4==4.12.3
 
-# === Database + vectors
+# Postgres driver (kept for your DB wiring next steps)
+psycopg2-binary==2.9.9
 SQLAlchemy==2.0.31
-psycopg[binary]==3.2.1            # satisfies "import psycopg"
-psycopg2-binary==2.9.9            # keep if any code still uses psycopg2
-pgvector==0.2.5                   # includes sqlalchemy integration
-
-# Transitives your logs pinned
-anyio==4.10.0
-httpx==0.27.2
-httpcore==1.0.5
-typing-extensions==4.15.0
-regex==2025.9.1
 
 # S3
-boto3==1.35.28
-botocore==1.35.34
+boto3==1.34.158
+botocore==1.34.158
 
 
 
