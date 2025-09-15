@@ -1,0 +1,90 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Admin</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
+    .card { border: 1px solid #ddd; border-radius: 8px; padding: 16px; max-width: 720px; }
+    input, button { padding: 8px; font-size: 14px; }
+    .row { margin: 8px 0; }
+    progress { width: 100%; height: 16px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+  </style>
+</head>
+<body>
+  <h1>/admin</h1>
+  <div class="card">
+    <div class="row">Bucket: <span class="mono">{{ bucket }}</span></div>
+    <div class="row">Max size: {{ max_mb }} MB</div>
+    <div class="row"><input id="token" placeholder="ADMIN_TOKEN" /></div>
+    <div class="row"><input id="file" type="file" /></div>
+    <div class="row">
+      <button id="btnUpload">Upload to S3 (multipart)</button>
+    </div>
+    <div class="row"><progress id="prog" max="100" value="0"></progress></div>
+    <pre id="log" class="mono"></pre>
+  </div>
+
+  <script type="module">
+    const logEl = document.getElementById('log');
+    const prog = document.getElementById('prog');
+    const tokenEl = document.getElementById('token');
+    const btn = document.getElementById('btnUpload');
+    const fileEl = document.getElementById('file');
+
+    function log(...args){ logEl.textContent += args.join(' ') + "\n"; }
+    function sumETags(parts){ return parts.map(p => ({ partNumber: p.partNumber, etag: p.etag })); }
+
+    btn.onclick = async () => {
+      const f = fileEl.files?.[0];
+      const adminToken = tokenEl.value.trim();
+      if (!f) { alert("Pick a file first"); return; }
+      if (!adminToken) { alert("Enter ADMIN_TOKEN"); return; }
+
+      // 1) init
+      const key = `uploads/${Date.now()}_${encodeURIComponent(f.name)}`;
+      const initRes = await fetch('/api/uploads/init', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-admin-token': adminToken },
+        body: JSON.stringify({ key, content_type: f.type || 'application/octet-stream', total_size: f.size })
+      });
+      const init = await initRes.json();
+      if (!init.ok) { log('Init failed', JSON.stringify(init)); return; }
+      log('UploadId:', init.upload_id, 'Parts:', init.parts.length, 'Chunk:', init.chunk_size);
+
+      // 2) upload parts directly to S3
+      const partsDone = [];
+      let uploaded = 0;
+      const total = f.size;
+      const chunkSize = init.chunk_size;
+
+      for (const p of init.parts) {
+        const start = (p.partNumber - 1) * chunkSize;
+        const end = Math.min(start + chunkSize, total);
+        if (start >= total) break;
+
+        const blob = f.slice(start, end);
+        const put = await fetch(p.url, { method: 'PUT', body: blob });
+        if (!put.ok) { log('Part failed', p.partNumber, put.status); return; }
+        const etag = put.headers.get('ETag')?.replaceAll('"','') || '';
+        partsDone.push({ partNumber: p.partNumber, etag });
+
+        uploaded = end;
+        prog.value = Math.round(uploaded / total * 100);
+      }
+
+      // 3) complete
+      const finRes = await fetch('/api/uploads/complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-admin-token': adminToken },
+        body: JSON.stringify({ key, upload_id: init.upload_id, parts: sumETags(partsDone) })
+      });
+      const fin = await finRes.json();
+      log('Complete:', JSON.stringify(fin, null, 2));
+      alert('Upload complete');
+    };
+  </script>
+</body>
+</html>
