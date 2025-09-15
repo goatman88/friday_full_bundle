@@ -1,6 +1,8 @@
-from app import app
+# This is the module waitress will import:
+# Start Command:  waitress-serve --listen=0.0.0.0:$PORT wsgi:app
 
-# Expose Flask app for waitress/gunicorn
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+from app import create_app
+
+app = create_app()
+
 
