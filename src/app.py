@@ -1,116 +1,96 @@
+# src/app.py
 import os
-import time
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-from openai import OpenAI
 
-from .settings import FRIDAY_NAME, API_TOKEN, FRONTEND_ORIGIN, OPENAI_API_KEY, COMMIT_SHA
+try:
+    from openai import OpenAI
+except Exception as e:
+    # If the SDK import fails, surface it clearly at /health
+    OpenAI = None
+    _openai_import_error = e
+else:
+    _openai_import_error = None
 
 app = Flask(__name__)
-CORS(
-    app,
-    resources={r"/*": {"origins": [FRONTEND_ORIGIN] if FRONTEND_ORIGIN != "*" else "*"}},
-    supports_credentials=False,
-)
+CORS(app, supports_credentials=True)
 
-# ---- OpenAI client (NO proxies kw) ----
-# The SDK reads OPENAI_API_KEY from env automatically, but we pass it explicitly too.
-_oai = OpenAI(api_key=OPENAI_API_KEY or None)
+# ---- tiny helpers ----
+def routes_list():
+    return ["/", "/__routes", "/__whoami", "/health", "/ping",
+            "/api/rag/index", "/api/rag/query"]
 
-# ---- tiny in-memory index just for smoke tests ----
-_INDEX = []  # each item: {id,title,text,source,mime,user_id,ts}
-
-def _auth_ok(req: request) -> bool:
-    """Optional Bearer token gate for mutating routes."""
-    if not API_TOKEN:  # no token configured => allow
-        return True
-    header = req.headers.get("Authorization", "")
-    return header == f"Bearer {API_TOKEN}"
-
-@app.route("/", methods=["GET"])
-def root():
-    return jsonify({
-        "message": f"{FRIDAY_NAME} backend is running",
-        "ok": True,
-        "routes": [r.rule for r in app.url_map.iter_rules()],
-        "commit": COMMIT_SHA,
-    })
-
-@app.route("/__routes", methods=["GET"])
-def list_routes():
-    return jsonify([r.rule for r in app.url_map.iter_rules()])
-
-@app.route("/__whoami", methods=["GET"])
-def whoami():
-    return jsonify({
-        "app_id": int(time.time() * 1000),
+def _whoami():
+    return {
+        "app_id": os.getpid(),
         "cwd": os.getcwd(),
         "module_file": __file__,
-        "python": os.popen("python -V").read().strip() or "unknown",
+        "python": f"Python {os.sys.version.split()[0]}",
+    }
+
+def get_openai_client():
+    """
+    Construct OpenAI client lazily and safely.
+    IMPORTANT: No 'proxies' kwarg; we let the SDK handle env automatically.
+    """
+    if OpenAI is None:
+        raise RuntimeError(f"openai import error: {_openai_import_error!r}")
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY not set")
+    # Do NOT pass proxies=... here.
+    return OpenAI(api_key=api_key)
+
+# ---- basic routes ----
+@app.get("/")
+def root():
+    return jsonify({
+        "message": "Friday backend is running",
+        "ok": True,
+        "routes": routes_list(),
     })
 
-@app.route("/health", methods=["GET"])
+@app.get("/__routes")
+def __routes():
+    return jsonify(routes_list())
+
+@app.get("/__whoami")
+def whoami():
+    return jsonify(_whoami())
+
+@app.get("/health")
 def health():
-    return jsonify({"ok": True, "status": "running", "commit": COMMIT_SHA})
+    if _openai_import_error:
+        return jsonify({"ok": False, "status": "import_error", "error": str(_openai_import_error)}), 500
+    return jsonify({"ok": True, "status": "running"})
 
-@app.route("/ping", methods=["GET"])
+@app.get("/ping")
 def ping():
-    return jsonify({"pong": True, "ts": time.time()})
+    return jsonify({"pong": True})
 
-# ---- RAG-ish smoke routes ----
-
-@app.route("/api/rag/index", methods=["POST"])
+# ---- RAG (stubbed; your real impl can drop in here) ----
+# POST /api/rag/index  {title, text, source, mime?, user_id?}
+@app.post("/api/rag/index")
 def rag_index():
-    if not _auth_ok(request):
-        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    payload = request.get_json(force=True, silent=True) or {}
+    # TODO: persist to Postgres/pgvector (your existing code can live here)
+    return jsonify({"ok": True, "indexed": {k: payload.get(k) for k in ("title","source")}})
 
-    data = request.get_json(silent=True) or {}
-    item = {
-        "id": f"doc_{len(_INDEX)+1}",
-        "title": data.get("title", "Untitled"),
-        "text": data.get("text", ""),
-        "source": data.get("source", "user"),
-        "mime": data.get("mime", "text/plain"),
-        "user_id": data.get("user_id", "public"),
-        "ts": time.time(),
-    }
-    _INDEX.append(item)
-    return jsonify({"ok": True, "indexed": True, "doc": {"id": item["id"], "title": item["title"]}})
-
-@app.route("/api/rag/query", methods=["POST"])
+# POST /api/rag/query  {query, topk?}
+@app.post("/api/rag/query")
 def rag_query():
-    data = request.get_json(silent=True) or {}
-    q = data.get("query", "")
-    topk = int(data.get("topk", 3))
+    payload = request.get_json(force=True, silent=True) or {}
+    q = payload.get("query", "")
+    topk = int(payload.get("topk", 3))
+    # Example call that proves OpenAI is usable, but is not required:
+    # client = get_openai_client()
+    # _ = client.responses.create(model="gpt-4.1-mini", input=f"Echo: {q}")
+    return jsonify({"ok": True, "answer": f"(stub) you asked: {q}", "topk": topk})
 
-    # toy keyword rank
-    scored = []
-    for it in _INDEX:
-        score = sum(1 for w in q.lower().split() if w in it["text"].lower())
-        if score:
-            scored.append((score, it))
-    scored.sort(reverse=True, key=lambda x: x[0])
-    ctx = [{"id": it["id"], "title": it["title"], "preview": it["text"][:120], "score": s} for s, it in scored[:topk]]
+# WSGI entrypoint
+def create_app():
+    return app
 
-    # synth answer via OpenAI (optional)
-    answer = ""
-    if OPENAI_API_KEY and q:
-        try:
-            # tiny, safe completion
-            prompt = f"Answer briefly:\nQ: {q}\nContext snippets:\n" + "\n".join(
-                f"- {c['title']}: {c['preview']}" for c in ctx
-            )
-            chat = _oai.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.2,
-                max_tokens=150,
-            )
-            answer = (chat.choices[0].message.content or "").strip()
-        except Exception as e:
-            answer = f"(LLM unavailable: {e})"
-
-    return jsonify({"ok": True, "answer": answer, "contexts": ctx})
 
 
 
