@@ -1,6 +1,6 @@
-Flask>=2.2,<3
-flask-cors==4.0.1
-waitress==3.0.0
+Flask>=3.0,<4
+flask-cors>=4,<5
+waitress>=3,<4
 gunicorn==21.2.0
 python-dotenv==1.0.1
 
@@ -17,7 +17,6 @@ APScheduler==3.10.4
 beautifulsoup4==4.12.3
 
 # Postgres driver (kept for your DB wiring next steps)
-psycopg2-binary==2.9.9
 SQLAlchemy==2.0.31
 
 # S3
