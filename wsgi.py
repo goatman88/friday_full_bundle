@@ -1,9 +1,6 @@
-# src/wsgi.py
-# Force-load our guard before importing the app
-import sitecustomize  # noqa: F401
-
-# Now import your Flask app
-from app import app  # this must define `app = Flask(__name__)`
 from app import app
+
+# Expose Flask app for waitress/gunicorn
 if __name__ == "__main__":
-    app.run()
+    app.run(host="0.0.0.0", port=5000)
+
