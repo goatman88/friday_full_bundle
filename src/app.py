@@ -10,6 +10,19 @@ from flask import Flask, jsonify, request
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO))
 log = logging.getLogger("friday")
+# app.py (snippet)
+import os
+from flask import Flask
+from backend.rag_blueprint import bp as rag_bp
+
+def create_app():
+    app = Flask(__name__)
+    max_mb = int(os.environ.get("MAX_UPLOAD_MB", "25"))
+    app.config["MAX_CONTENT_LENGTH"] = max_mb * 1024 * 1024
+    app.register_blueprint(rag_bp)
+    return app
+
+app = create_app()
 
 # ---- Flask app --------------------------------------------------------------
 app = Flask(__name__)
