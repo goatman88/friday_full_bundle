@@ -1,5 +1,5 @@
-from src.app import app  # DO NOT prefix with "src." in the import path here
-application = app
+from app import app
+
 
 
 if __name__ == "__main__":
