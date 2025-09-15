@@ -1,8 +1,8 @@
-# src/wsgi.py
+# Minimal, import from module in the *current* folder (because we cd into src)
+from app import app  # <- DO NOT prefix with "src."
 
-from src.app import app  # import the Flask app instance
+# WSGI entry point object that Waitress will look for
+# (Waitress accepts "wsgi:app" so this must be named "app")
+# Nothing else needed here.
 
-# Expose as WSGI callable
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
 
