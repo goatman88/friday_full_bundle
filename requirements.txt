@@ -1,7 +1,7 @@
 # === Web stack
 Flask==3.0.3
 flask-cors==4.0.1
-gunicorn==21.2.0
+gunicorn==22.0.0
 waitress==3.0.0
 Jinja2==3.1.4
 Werkzeug==3.0.3
