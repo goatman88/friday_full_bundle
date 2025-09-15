@@ -9,6 +9,124 @@ import requests
 from openai import OpenAI
 from backend.db import fetchone, fetchall, execute
 
+# add to imports at the top:
+import mimetypes
+from werkzeug.utils import secure_filename
+from pdfminer.high_level import extract_text as pdf_extract_text
+from docx import Document
+from backend.storage_s3 import put_bytes
+
+ALLOWED_EXTS = {".pdf", ".docx", ".txt"}
+
+def _ext(name: str) -> str:
+    name = name or ""
+    dot = name.rfind(".")
+    return name[dot:].lower() if dot != -1 else ""
+
+def _read_pdf_bytes(b: bytes) -> str:
+    # pdfminer needs a path or a bytes-like object; easiest is to pass bytes via a temp file.
+    # To avoid temp files in Render ephemeral FS, pdfminer supports file-like objects, but a temp file is simplest.
+    import tempfile, os as _os
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        tmp.write(b)
+        tmp.flush()
+        path = tmp.name
+    try:
+        txt = pdf_extract_text(path) or ""
+        return _clean_text(txt)
+    finally:
+        try: _os.remove(path)
+        except Exception: pass
+
+def _read_docx_bytes(b: bytes) -> str:
+    import io
+    f = io.BytesIO(b)
+    doc = Document(f)
+    return _clean_text("\n".join(p.text for p in doc.paragraphs))
+
+@bp.route("/index_file", methods=["POST"])
+def index_file_route():
+    """
+    multipart/form-data:
+      file: (required) pdf/docx/txt
+      title: optional
+      external_id: optional (we'll upsert by this if given)
+      meta: optional JSON string
+    """
+    if "file" not in request.files:
+        return jsonify({"error": "No file field"}), 400
+
+    up = request.files["file"]
+    filename = secure_filename(up.filename or "upload.bin")
+    ext = _ext(filename)
+    if ext not in ALLOWED_EXTS:
+        return jsonify({"error": f"Unsupported file type: {ext}"}), 400
+
+    raw = up.read()
+    if not raw:
+        return jsonify({"error": "Empty file"}), 400
+
+    # store in S3
+    ctype = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    s3_uri = put_bytes(raw, filename, content_type=ctype)
+
+    # parse text
+    if ext == ".pdf":
+        text = _read_pdf_bytes(raw)
+        source = "pdf"
+    elif ext == ".docx":
+        text = _read_docx_bytes(raw)
+        source = "docx"
+    else:
+        try:
+            text = raw.decode("utf-8", errors="ignore")
+        except Exception:
+            text = ""
+        text = _clean_text(text)
+        source = "txt"
+
+    if not text:
+        return jsonify({"error": "No extractable text"}), 400
+
+    # optional metadata/title/external_id
+    title = request.form.get("title") or filename
+    external_id = request.form.get("external_id") or None
+    meta_str = request.form.get("meta") or "{}"
+    try:
+        meta = json.loads(meta_str)
+    except Exception:
+        meta = {}
+
+    # preserve S3 URI in meta
+    meta = dict(meta or {})
+    meta["s3_uri"] = s3_uri
+    meta["filename"] = filename
+    meta["content_type"] = ctype
+
+    # chunk + embed + insert
+    chunks = _chunk_text(text)
+    if not chunks:
+        return jsonify({"error": "No indexable text after parsing"}), 400
+
+    if external_id:
+        doc_id = _upsert_doc_by_external_id(title, source, meta, external_id)
+    else:
+        doc_id = _insert_document(title, source, meta, None)
+
+    embeds = _embed_texts(chunks)
+    _insert_chunks(doc_id, chunks, embeds)
+
+    return jsonify({
+        "ok": True,
+        "document_id": doc_id,
+        "title": title,
+        "source": source,
+        "s3_uri": s3_uri,
+        "chunks_indexed": len(chunks),
+        "dims": EMBEDDING_DIMS,
+        "model": EMBEDDING_MODEL
+    })
+
 bp = Blueprint("rag", __name__, url_prefix="/api/rag")
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
