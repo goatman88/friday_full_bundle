@@ -314,10 +314,29 @@ def query_route():
     q = _clean_text(data.query)
     if not q:
         return jsonify({"error": "Empty query"}), 400
+
     q_emb = _embed_texts([q])[0]
     hits = _similarity_search(q_emb, k=data.k)
-    # You can add a lightweight “answer synthesizer” step here if desired
-    return jsonify({"matches": hits, "model": EMBEDDING_MODEL})
+
+    context_blocks = "\n\n".join([f"[{i+1}] {h['text']}" for i,h in enumerate(hits)])
+    prompt = f"""You are Friday, a concise assistant.
+Use ONLY the context below. Cite blocks like [1], [2] inline.
+
+Question: {data.query}
+
+Context:
+{context_blocks}
+"""
+
+    completion = oai.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.2,
+    )
+    answer = completion.choices[0].message.content
+
+    return jsonify({"matches": hits, "answer": answer, "model": EMBEDDING_MODEL})
+
 
 @bp.route("/delete", methods=["POST"])
 def delete_route():
