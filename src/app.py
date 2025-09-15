@@ -18,7 +18,16 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("friday")
 
 # ---- Flask app ----
-app = Flask(__name__)
+from flask import Flask, jsonify, request, send_from_directory  # add send_from_directory
+
+app = Flask(__name__, static_folder="static", static_url_path="/static")
+
+@app.route("/admin")
+def admin_ui():
+    # serves /static/admin.html without redirects (keeps it simple)
+    return send_from_directory(app.static_folder, "admin.html")
+
+
 
 # ---- OpenAI client (no proxies kw) ----
 # Requires OPENAI_API_KEY in env
