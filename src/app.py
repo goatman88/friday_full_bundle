@@ -3,9 +3,9 @@ from openai import OpenAI
 import os, math
 from typing import Any, Dict, List, Optional
 
-from . import settings
+from src import settings
 from . import db
-from .s3_uploads import s3_bp  # keeps your existing S3 routes
+from src.s3_uploads import s3_bp  # keeps your existing S3 routes
 
 # ---- Flask app & static /admin
 app = Flask(__name__, static_folder="static", static_url_path="/static")
