@@ -35,6 +35,23 @@ def require_bearer_token(fn):
         return fn(*args, **kwargs)
     return _wrap
 
+# app.py (snippet)
+from flask import Flask
+from backend.rag_blueprint import bp as rag_bp
+
+def create_app():
+    app = Flask(__name__)
+    # ... your other setup (CORS, logging, etc)
+    app.register_blueprint(rag_bp)
+    return app
+
+app = create_app()
+
+# Health route (if you don’t have one)
+@app.get("/ping")
+def ping():
+    return {"ok": True, "app": "Friday", "status": "alive"}
+
 # ---- Utility ---------------------------------------------------------------
 def _route_list():
     rules = []
