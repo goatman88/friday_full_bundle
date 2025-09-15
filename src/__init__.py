@@ -1,4 +1,2 @@
-# Keeps 'src' importable as a package.
-# You can also put package-wide constants here if you like.
-__all__ = []
+# keep file present so Python treats /src as a package
 
