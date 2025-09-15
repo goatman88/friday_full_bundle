@@ -39,7 +39,14 @@
       <h1>Friday Admin</h1>
       <div class="row">
         <span class="pill">/health: <span id="healthStatus" class="muted">checking…</span></span>
-        <span class="pill">env: <span id="envStatus" class="muted">–</span></span>
+        <span class="pill">secret: <span id="secretStatus" class="muted">not set</span></span>
+      </div>
+    </div>
+
+    <div class="card span12" style="margin-bottom:12px;">
+      <div class="row">
+        <button id="setSecret" class="secondary">Enter Admin Secret</button>
+        <span class="muted">This secret is stored in <span class="mono">sessionStorage</span> and sent as <span class="mono">X-Admin-Secret</span> on each admin call.</span>
       </div>
     </div>
 
@@ -118,38 +125,51 @@
   </div>
 
 <script>
-const api = location.origin; // same origin — no CORS headaches
+const api = location.origin;
+
+function adminHeaders() {
+  const sec = sessionStorage.getItem('ADMIN_SECRET') || '';
+  const h = { "Content-Type":"application/json" };
+  if (sec) h["X-Admin-Secret"] = sec;
+  return h;
+}
 
 async function getJSON(url, opts={}) {
-  const res = await fetch(url, { headers: {"Content-Type":"application/json"}, ...opts });
+  const res = await fetch(url, { headers: adminHeaders(), ...opts });
   const txt = await res.text();
   try { return { ok: res.ok, status: res.status, json: JSON.parse(txt) }; }
   catch { return { ok: res.ok, status: res.status, json: {raw: txt} }; }
 }
 
+function setSecretLabel() {
+  const s = sessionStorage.getItem('ADMIN_SECRET');
+  document.getElementById('secretStatus').textContent = s ? 'set' : 'not set';
+  document.getElementById('secretStatus').className = s ? 'ok' : 'bad';
+}
+
+document.getElementById('setSecret').onclick = () => {
+  const v = prompt("Enter ADMIN_SECRET");
+  if (v !== null) sessionStorage.setItem('ADMIN_SECRET', v.trim());
+  setSecretLabel();
+  init(); // recheck
+};
+
 async function init() {
-  // health
+  setSecretLabel();
   try {
     const h = await getJSON(`${api}/health`);
     document.getElementById('healthStatus').textContent = h.ok && h.json?.ok ? 'ok' : 'bad';
     document.getElementById('healthStatus').className = h.ok ? 'ok' : 'bad';
   } catch { document.getElementById('healthStatus').textContent = 'bad'; }
 
-  // routes
   try {
     const r = await getJSON(`${api}/__routes`);
     document.getElementById('routes').textContent = JSON.stringify(r.json, null, 2);
   } catch (e) { document.getElementById('routes').textContent = String(e); }
-
-  // env snapshot (what matters)
-  const env = [
-    ['OPENAI_API_KEY', !!(window.OPENAI_API_KEY)], // always false here, just a placeholder
-  ];
-  document.getElementById('envStatus').textContent = 'server env';
 }
 init();
 
-// ---- RAG: index ----
+// Index
 document.getElementById('btnIndex').addEventListener('click', async () => {
   const body = {
     title: document.getElementById('idx_title').value.trim(),
@@ -164,7 +184,7 @@ document.getElementById('btnIndex').addEventListener('click', async () => {
   out.textContent = r.ok ? `ok (id: ${r.json.id}, total: ${r.json.count})` : `error: ${JSON.stringify(r.json)}`;
 });
 
-// ---- RAG: query ----
+// Query
 document.getElementById('btnQuery').addEventListener('click', async () => {
   const body = {
     query: document.getElementById('q_text').value.trim(),
@@ -172,11 +192,11 @@ document.getElementById('btnQuery').addEventListener('click', async () => {
   };
   const out = document.getElementById('q_out');
   out.textContent = 'searching…';
-  const r = await getJSON(`${api}/api/rag/query`, { method:'POST', body: JSON.stringify(body) });
+  const r = await getJSON(`${api}/api/rag/query-advanced`, { method:'POST', body: JSON.stringify(body) });
   out.textContent = JSON.stringify(r.json, null, 2);
 });
 
-// ---- S3 single PUT ----
+// S3 single PUT
 document.getElementById('btnS3Put').addEventListener('click', async () => {
   const key = document.getElementById('s3_key').value.trim();
   const file = document.getElementById('s3_file').files[0];
@@ -184,39 +204,28 @@ document.getElementById('btnS3Put').addEventListener('click', async () => {
   const prog = document.getElementById('s3_put_prog');
   if (!key || !file) { msg.textContent = 'choose a file & key'; return; }
 
-  msg.textContent = 'requesting presigned URL…';
+  msg.textContent = 'presigning…';
   const r = await getJSON(`${api}/api/s3/sign`, { method:'POST', body: JSON.stringify({ key, content_type: file.type || 'application/octet-stream'})});
   if (!r.ok || !r.json.url) { msg.textContent = 'presign failed'; return; }
 
   msg.textContent = 'uploading…';
   prog.value = 0;
-
-  await fetch(r.json.url, {
-    method: 'PUT',
-    headers: { 'Content-Type': file.type || 'application/octet-stream' },
-    body: file,
-  }).then(res => {
-    if (!res.ok) throw new Error('S3 PUT failed');
-    prog.value = 100;
-    msg.textContent = 'done ✓';
-  }).catch(err => {
-    msg.textContent = 'error: ' + err.message;
-  });
+  await fetch(r.json.url, { method:'PUT', headers:{'Content-Type': file.type || 'application/octet-stream'}, body: file })
+    .then(res => { if(!res.ok) throw new Error('S3 PUT failed'); prog.value=100; msg.textContent='done ✓'; })
+    .catch(err => { msg.textContent = 'error: ' + err.message; });
 });
 
-// ---- Multipart helpers ----
+// Multipart
 function splitParts(file, partBytes) {
   const parts = [];
-  let offset = 0, i = 1;
-  while (offset < file.size) {
-    const end = Math.min(offset + partBytes, file.size);
-    parts.push({ number: i++, blob: file.slice(offset, end) });
-    offset = end;
+  let off = 0, i = 1;
+  while (off < file.size) {
+    const end = Math.min(off + partBytes, file.size);
+    parts.push({ number: i++, blob: file.slice(off, end) });
+    off = end;
   }
   return parts;
 }
-
-// ---- S3 multipart ----
 document.getElementById('btnMultipart').addEventListener('click', async () => {
   const key = document.getElementById('mp_key').value.trim();
   const mb = Math.max(5, Number(document.getElementById('mp_size').value || 8));
@@ -228,13 +237,8 @@ document.getElementById('btnMultipart').addEventListener('click', async () => {
   if (!key || !file) { msg.textContent = 'choose a file & key'; return; }
 
   msg.textContent = 'create multipart…';
-  log.textContent = '';
-  prog.value = 0;
-
-  const create = await getJSON(`${api}/api/s3/multipart/create`, {
-    method:'POST', body: JSON.stringify({ key, content_type: file.type || 'application/octet-stream' })
-  });
-  if (!create.ok) { msg.textContent = 'create failed'; log.textContent = JSON.stringify(create.json, null, 2); return; }
+  const create = await getJSON(`${api}/api/s3/multipart/create`, { method:'POST', body: JSON.stringify({ key, content_type: file.type || 'application/octet-stream' }) });
+  if (!create.ok) { msg.textContent = 'create failed'; log.textContent = JSON.stringify(create.json,null,2); return; }
 
   const uploadId = create.json.upload_id;
   const partBytes = mb * 1024 * 1024;
@@ -244,11 +248,8 @@ document.getElementById('btnMultipart').addEventListener('click', async () => {
 
   for (const p of parts) {
     msg.textContent = `part ${p.number}/${parts.length}…`;
-    const pre = await getJSON(`${api}/api/s3/multipart/part`, {
-      method:'POST', body: JSON.stringify({ key, upload_id: uploadId, part_number: p.number })
-    });
+    const pre = await getJSON(`${api}/api/s3/multipart/part`, { method:'POST', body: JSON.stringify({ key, upload_id: uploadId, part_number: p.number }) });
     if (!pre.ok) { msg.textContent = 'part presign failed'; log.textContent = JSON.stringify(pre.json,null,2); return; }
-
     const res = await fetch(pre.json.url, { method:'PUT', body: p.blob });
     if (!res.ok) { msg.textContent = 'part upload failed'; log.textContent = `HTTP ${res.status}`; return; }
     const etag = res.headers.get('ETag') || res.headers.get('etag');
@@ -259,9 +260,7 @@ document.getElementById('btnMultipart').addEventListener('click', async () => {
   }
 
   msg.textContent = 'completing…';
-  const done = await getJSON(`${api}/api/s3/multipart/complete`, {
-    method:'POST', body: JSON.stringify({ key, upload_id: uploadId, parts: etags })
-  });
+  const done = await getJSON(`${api}/api/s3/multipart/complete`, { method:'POST', body: JSON.stringify({ key, upload_id: uploadId, parts: etags }) });
   if (!done.ok) { msg.textContent = 'complete failed'; log.textContent = JSON.stringify(done.json,null,2); return; }
 
   msg.textContent = 'done ✓';
@@ -270,3 +269,4 @@ document.getElementById('btnMultipart').addEventListener('click', async () => {
 </script>
 </body>
 </html>
+
