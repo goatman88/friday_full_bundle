@@ -1,8 +1,7 @@
-# This is the module waitress will import:
-# Start Command:  waitress-serve --listen=0.0.0.0:$PORT wsgi:app
+from src.app import app  # adjust path if your Flask app is elsewhere
 
-from app import create_app
+if __name__ == "__main__":
+    app.run()
 
-app = create_app()
 
 
