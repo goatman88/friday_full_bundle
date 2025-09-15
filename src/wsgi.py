@@ -1,5 +1,6 @@
-# src/wsgi.py
-from src.app import app  # ✅ absolute import, no dot
+# Absolute import so we don't hit "attempted relative import" issues
+from src.app import app  # WSGI callable for waitress-serve:  src.wsgi:app
+
 
 
 
