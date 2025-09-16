@@ -1,7 +1,12 @@
 from __future__ import annotations
 import os
 from flask import Flask, jsonify
-from backend.rag_blueprint import bp as rag_bp
+# replace:
+# from backend.rag_blueprint import bp as rag_bp
+
+# with:
+from .backend.rag_blueprint import bp as rag_bp
+
 
 def create_app():
     app = Flask(__name__)
