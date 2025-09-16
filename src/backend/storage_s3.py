@@ -9,7 +9,7 @@ _BUCKET = os.getenv("S3_BUCKET")
 _PREFIX = os.getenv("S3_PREFIX", "uploads/")
 _REGION = os.getenv("AWS_DEFAULT_REGION", "us-east-1")
 
-# Build client (don’t raise here; let callers handle missing envs via AWS errors)
+# Build client explicitly (avoids boto3 picking partial creds somewhere else)
 _S3 = boto3.client(
     "s3",
     region_name=_REGION,
@@ -20,7 +20,7 @@ _S3 = boto3.client(
 
 def put_bytes(data: bytes, filename: str, content_type: str = "application/octet-stream") -> str:
     """
-    Upload raw bytes and return an s3:// URI the rest of the app stores.
+    Upload raw bytes to S3 and return an s3:// URI used elsewhere in the app.
     """
     if not _BUCKET:
         raise RuntimeError("S3_BUCKET is not set")
@@ -31,6 +31,7 @@ def put_bytes(data: bytes, filename: str, content_type: str = "application/octet
 def presign_get_url(s3_uri: str, expires_seconds: int = 600) -> str:
     """
     Create a presigned HTTPS GET URL from an s3://bucket/key URI.
+    (The object does not have to exist to generate this.)
     """
     if not isinstance(s3_uri, str) or not s3_uri.startswith("s3://"):
         raise ValueError("presign_get_url expects 's3://bucket/key'")
@@ -43,6 +44,7 @@ def presign_get_url(s3_uri: str, expires_seconds: int = 600) -> str:
     )
 
 __all__ = ["put_bytes", "presign_get_url"]
+
 
 
 
