@@ -128,6 +128,62 @@ def file_url():
     # Here we’ll just deny when there’s no DB linkage in this example:
     return jsonify({"ok": False, "error": "wire /file_url to your DB lookup"}), 400
 
+# --- SSE: live job updates ---
+import json, time
+from flask import Response
+
+@bp.get("/stream/<job_id>")
+def stream(job_id: str):
+    """
+    Server-Sent Events stream for job status.
+    Emits an event whenever the job changes, plus periodic heartbeats.
+    """
+    # tiny guard so proxies don’t buffer
+    headers = {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",  # helpful on some platforms
+    }
+
+    def gen():
+        last_sent = 0.0
+        heartbeat_at = time.time()
+        # send initial snapshot if present
+        job = job_get(job_id)
+        if job:
+            payload = json.dumps({"ok": True, "job": job})
+            yield f"event: update\ndata: {payload}\n\n"
+            last_sent = job.get("updated_at", 0.0)
+        else:
+            # let the client know it doesn't exist yet (maybe just created)
+            payload = json.dumps({"ok": False, "error": "not_found_yet"})
+            yield f"event: noop\ndata: {payload}\n\n"
+
+        # stream until done/error, with heartbeat
+        while True:
+            job = job_get(job_id)
+            now = time.time()
+
+            # heartbeat every 15s
+            if now - heartbeat_at >= 15:
+                yield ": hb\n\n"   # comment line; keeps connection alive
+                heartbeat_at = now
+
+            if job:
+                updated_at = job.get("updated_at", 0.0)
+                if updated_at > last_sent:
+                    payload = json.dumps({"ok": True, "job": job})
+                    yield f"event: update\ndata: {payload}\n\n"
+                    last_sent = updated_at
+
+                    # stop after terminal state
+                    if job.get("status") in ("done", "error"):
+                        break
+
+            time.sleep(0.8)
+
+    return Response(gen(), headers=headers)
 
 
 
