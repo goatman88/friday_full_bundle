@@ -1,12 +1,12 @@
-import CrawlUpload from "./components/CrawlUpload";
-import MultiUploader from "./components/MultiUploader";
+import CrawlUploadWithStatus from "./components/CrawlUploadWithStatus";
+import MultiUploaderWithStatus from "./components/MultiUploaderWithStatus";
 
 export default function App() {
   return (
     <main style={{ padding: 20 }}>
-      <CrawlUpload />
+      <CrawlUploadWithStatus />
       <hr />
-      <MultiUploader />
+      <MultiUploaderWithStatus />
     </main>
   );
 }
