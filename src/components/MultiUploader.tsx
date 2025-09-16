@@ -1,17 +1,18 @@
-import React, { useCallback, useRef, useState } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import API_BASE from "../lib/apiBase";
 
 type FileState = {
-  id: string;            // external_id
+  id: string;                 // external_id also used as job_id
   file: File;
-  progress: number;      // 0..100 (PUT to S3)
-  phase: "queued" | "signing" | "uploading" | "confirming" | "done" | "error";
+  putProgress: number;        // PUT to S3 progress 0..100
+  jobStatus?: string;         // queued | processing | done | error
+  jobProgress?: number;       // 0..100 (server-reported)
   message?: string;
+  stage: "queued" | "signing" | "uploading" | "confirming" | "processing" | "done" | "error";
   downloadUrl?: string;
 };
 
 function putWithProgress(url: string, file: File, contentType: string, onProgress: (pct: number) => void) {
-  // Use XHR to get upload progress (fetch doesn't expose upload progress)
   return new Promise<Response>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("PUT", url, true);
@@ -28,7 +29,6 @@ function putWithProgress(url: string, file: File, contentType: string, onProgres
         reject(new Error(`S3 PUT failed: ${xhr.status} ${xhr.responseText || ""}`));
         return;
       }
-      // fabricate a fetch-like Response
       resolve(new Response(xhr.responseText, { status: xhr.status }));
     };
     xhr.onerror = () => reject(new Error("Network error during S3 PUT"));
@@ -36,35 +36,38 @@ function putWithProgress(url: string, file: File, contentType: string, onProgres
   });
 }
 
-export default function MultiUploader() {
-  const [files, setFiles] = useState<FileState[]>([]);
+export default function MultiUploaderWithStatus() {
+  const [items, setItems] = useState<FileState[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const addFiles = useCallback((picked: FileList | null) => {
-    if (!picked || picked.length === 0) return;
-    const next: FileState[] = Array.from(picked).map((f) => ({
+  const canStart = useMemo(() => items.some(i => i.stage === "queued" || i.stage === "error"), [items]);
+
+  const addFiles = (list: FileList | null) => {
+    if (!list || list.length === 0) return;
+    const next = Array.from(list).map((f) => ({
       id: crypto.randomUUID(),
       file: f,
-      progress: 0,
-      phase: "queued",
+      putProgress: 0,
+      stage: "queued" as const
     }));
-    setFiles((prev) => [...prev, ...next]);
-  }, []);
+    setItems(prev => [...prev, ...next]);
+  };
 
   const onDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault(); e.stopPropagation(); setDragOver(false);
     addFiles(e.dataTransfer.files);
   };
 
-  const onPickClick = () => inputRef.current?.click();
+  function patch(id: string, p: Partial<FileState>) {
+    setItems(prev => prev.map(it => it.id === id ? { ...it, ...p } : it));
+  }
 
-  async function processOne(item: FileState) {
-    const { file, id } = item;
+  async function processOne(it: FileState) {
+    const { file, id } = it;
     const contentType = file.type || "application/octet-stream";
 
-    // 1) Presign
-    update(item.id, { phase: "signing", message: "Requesting presigned URL…" });
+    patch(id, { stage: "signing", message: "Presigning…" });
     const ask = await fetch(`${API_BASE}/api/rag/upload_url`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -72,23 +75,19 @@ export default function MultiUploader() {
     }).then(r => r.json()).catch(e => ({ ok: false, error: String(e) }));
 
     if (!ask?.ok || !ask.url || !ask.s3_uri) {
-      update(item.id, { phase: "error", message: "Presign failed: " + (ask?.error || "unknown") });
+      patch(id, { stage: "error", message: "Presign failed: " + (ask?.error || "unknown") });
       return;
     }
 
-    // 2) PUT to S3 with progress
-    update(item.id, { phase: "uploading", message: "Uploading to S3…", progress: 0 });
+    patch(id, { stage: "uploading", message: "Uploading to S3…", putProgress: 0 });
     try {
-      await putWithProgress(ask.url, file, contentType, (pct) => {
-        update(item.id, { progress: pct });
-      });
+      await putWithProgress(ask.url, file, contentType, (pct) => patch(id, { putProgress: pct }));
     } catch (err: any) {
-      update(item.id, { phase: "error", message: err?.message || "Upload failed" });
+      patch(id, { stage: "error", message: err?.message || "Upload failed" });
       return;
     }
 
-    // 3) Confirm (server will parse/index)
-    update(item.id, { phase: "confirming", message: "Confirming & indexing…" });
+    patch(id, { stage: "confirming", message: "Confirming…"});
     const confirm = await fetch(`${API_BASE}/api/rag/confirm_upload`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -96,60 +95,67 @@ export default function MultiUploader() {
     }).then(r => r.json()).catch(e => ({ ok: false, error: String(e) }));
 
     if (!confirm?.ok) {
-      update(item.id, { phase: "error", message: "Confirm failed: " + (confirm?.error || "unknown") });
+      patch(id, { stage: "error", message: "Confirm failed: " + (confirm?.error || "unknown") });
       return;
     }
 
-    // 4) Optional: presigned GET to show link
-    const got = await fetch(
-      `${API_BASE}/api/rag/file_url?external_id=${encodeURIComponent(id)}`
-    ).then(r => r.json()).catch(() => ({} as any));
+    // Poll job status until done/error
+    patch(id, { stage: "processing", message: "Processing on server…", jobStatus: "processing", jobProgress: 5 });
+    await pollStatusUntilDone(id);
 
-    update(item.id, {
-      phase: "done",
-      progress: 100,
-      message: "Done",
-      downloadUrl: got?.ok ? got.url : undefined
-    });
+    // (Optional) fetch presigned GET for link if you want
+    // const got = await fetch(`${API_BASE}/api/rag/file_url?external_id=${encodeURIComponent(id)}`)
+    //   .then(r => r.json()).catch(() => ({}));
+    // if (got?.ok) patch(id, { downloadUrl: got.url });
+
   }
 
-  function update(id: string, patch: Partial<FileState>) {
-    setFiles((prev) => prev.map((f) => (f.id === id ? { ...f, ...patch } : f)));
+  async function pollStatusUntilDone(id: string) {
+    // simple polling loop
+    for (;;) {
+      // eslint-disable-next-line no-await-in-loop
+      const res = await fetch(`${API_BASE}/api/rag/status/${id}`).then(r => r.json()).catch(() => null);
+      if (res?.ok) {
+        const job = res.job;
+        patch(id, { jobStatus: job.status, jobProgress: job.progress, message: job.message });
+        if (job.status === "done") { patch(id, { stage: "done" }); break; }
+        if (job.status === "error") { patch(id, { stage: "error" }); break; }
+      } else {
+        patch(id, { message: "Status check failed" });
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise(r => setTimeout(r, 1200));
+    }
   }
 
   async function startAll() {
     if (!API_BASE) {
-      alert("Set your API base env (VITE_API_BASE / NEXT_PUBLIC_API_BASE / REACT_APP_API_BASE).");
+      alert("Set API base env: VITE_API_BASE / NEXT_PUBLIC_API_BASE / REACT_APP_API_BASE");
       return;
     }
-    // run sequentially (simple), or in parallel with Promise.all for speed
-    for (const item of files) {
-      if (item.phase === "queued" || item.phase === "error") {
+    for (const it of items) {
+      if (it.stage === "queued" || it.stage === "error") {
         // eslint-disable-next-line no-await-in-loop
-        await processOne(item);
+        await processOne(it);
       }
     }
   }
 
   return (
-    <div style={{ padding: 16, maxWidth: 700 }}>
-      <h3 style={{ marginTop: 0 }}>Multi-file Upload (Drag & Drop + Progress + Indexing)</h3>
+    <div style={{ padding: 16, maxWidth: 800 }}>
+      <h3>Multi-file Upload + PUT Progress + Server Status</h3>
 
       <div
         onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
         onDragLeave={() => setDragOver(false)}
         onDrop={onDrop}
+        onClick={() => inputRef.current?.click()}
         style={{
-          border: "2px dashed",
-          borderColor: dragOver ? "#4f46e5" : "#999",
-          padding: 24,
-          borderRadius: 10,
+          border: "2px dashed", borderColor: dragOver ? "#4f46e5" : "#999",
+          padding: 22, borderRadius: 10, textAlign: "center",
           background: dragOver ? "rgba(79,70,229,0.06)" : "transparent",
-          textAlign: "center",
-          cursor: "pointer",
-          marginBottom: 12
+          cursor: "pointer", marginBottom: 12
         }}
-        onClick={onPickClick}
       >
         <div style={{ fontSize: 14, opacity: 0.8 }}>
           {dragOver ? "Drop files…" : "Click or drag multiple files here"}
@@ -165,48 +171,55 @@ export default function MultiUploader() {
 
       <button
         onClick={startAll}
-        disabled={files.length === 0}
+        disabled={!canStart}
         style={{
-          padding: "10px 14px",
-          borderRadius: 8,
-          border: "none",
-          background: files.length ? "#4f46e5" : "#bbb",
-          color: "white",
-          cursor: files.length ? "pointer" : "not-allowed",
-          marginBottom: 14
+          padding: "10px 14px", borderRadius: 8, border: "none",
+          background: canStart ? "#4f46e5" : "#bbb", color: "white",
+          cursor: canStart ? "pointer" : "not-allowed", marginBottom: 12
         }}
       >
         Start Uploads
       </button>
 
-      {files.length === 0 ? (
+      {items.length === 0 ? (
         <div style={{ opacity: 0.7 }}>No files queued.</div>
       ) : (
         <div>
-          {files.map((f) => (
-            <div key={f.id} style={{ borderBottom: "1px solid #eee", padding: "8px 0" }}>
+          {items.map((it) => (
+            <div key={it.id} style={{ borderBottom: "1px solid #eee", padding: "10px 0" }}>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
-                <strong>{f.file.name}</strong>
-                <span style={{ opacity: 0.7 }}>{f.phase} {f.progress ? `(${f.progress}%)` : ""}</span>
+                <strong>{it.file.name}</strong>
+                <span style={{ opacity: 0.7 }}>
+                  {it.stage}
+                  {typeof it.putProgress === "number" && it.stage === "uploading" ? ` (${it.putProgress}%)` : ""}
+                </span>
               </div>
-              <div style={{
-                height: 8, background: "#eee", borderRadius: 6, overflow: "hidden", marginTop: 6
-              }}>
+
+              {/* PUT progress */}
+              <div style={{ height: 6, background: "#eee", borderRadius: 6, overflow: "hidden", marginTop: 6 }}>
                 <div style={{
-                  width: `${f.progress}%`,
+                  width: `${it.putProgress}%`,
                   height: "100%",
-                  background: f.phase === "error" ? "#b91c1c" : "#4f46e5",
-                  transition: "width .15s linear"
+                  background: it.stage === "error" ? "#b91c1c" : "#4f46e5",
+                  transition: "width .12s linear"
                 }} />
               </div>
-              <div style={{ fontSize: 12, marginTop: 6, opacity: 0.85 }}>
-                {f.message}
-                {f.downloadUrl && (
-                  <>
-                    {" · "}
-                    <a href={f.downloadUrl} target="_blank" rel="noreferrer">open</a>
-                  </>
-                )}
+
+              {/* Server job progress */}
+              {typeof it.jobProgress === "number" && (
+                <div style={{ height: 6, background: "#eee", borderRadius: 6, overflow: "hidden", marginTop: 6 }}>
+                  <div style={{
+                    width: `${it.jobProgress}%`,
+                    height: "100%",
+                    background: it.jobStatus === "error" ? "#b91c1c" : "#0ea5e9",
+                    transition: "width .12s linear"
+                  }} />
+                </div>
+              )}
+
+              <div style={{ fontSize: 12, marginTop: 6, opacity: 0.9 }}>
+                {it.message}
+                {it.downloadUrl && <> · <a href={it.downloadUrl} target="_blank" rel="noreferrer">open</a></>}
               </div>
             </div>
           ))}
