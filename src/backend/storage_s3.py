@@ -4,50 +4,26 @@ import os, uuid
 import boto3
 from botocore.client import Config
 
-# Load env vars
-bucket = os.environ.get("S3_BUCKET")
-prefix = os.environ.get("S3_PREFIX", "uploads/")
-region = os.environ.get("AWS_REGION", "us-east-1")
+# Env
+_BUCKET = os.getenv("S3_BUCKET")
+_PREFIX = os.getenv("S3_PREFIX", "uploads/")
+_REGION = os.getenv("AWS_DEFAULT_REGION", "us-east-1")
 
-if not bucket:
-    raise RuntimeError("S3_BUCKET is not set")
-
-# Create S3 client
-_s3 = boto3.client(
-    "s3",
-    region_name=region,
-    aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
-    aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
-    config=Config(signature_version="s3v4"),
-)
-
-def put_bytes(data: bytes, filename: str, content_type: str = "application/octet-stream") -> str:
-    """Upload raw bytes and return the object key."""
-    key = f"{prefix.rstrip('/')}/{uuid.uuid4().hex}-{filename}"
-    _s3.put_object(Bucket=bucket, Key=key, Body=data, ContentType=content_type)
-    return key
-
-def presign_get_url(key: str, expires_in: int = 3600) -> str:
-    """Generate a presigned GET URL for an S3 object."""
-    return _s3.generate_presigned_url(
-        "get_object",
-        Params={"Bucket": bucket, "Key": key},
-        ExpiresIn=expires_in,
-    )
-
-# Build client explicitly so boto3 doesn't pick up partial creds somewhere else
+# Build client (don’t raise here; let callers handle missing envs via AWS errors)
 _S3 = boto3.client(
     "s3",
     region_name=_REGION,
-    aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
-    aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
+    aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+    aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
     config=Config(signature_version="s3v4"),
 )
 
 def put_bytes(data: bytes, filename: str, content_type: str = "application/octet-stream") -> str:
     """
-    Upload raw bytes to S3 under a unique key and return an s3:// URI.
+    Upload raw bytes and return an s3:// URI the rest of the app stores.
     """
+    if not _BUCKET:
+        raise RuntimeError("S3_BUCKET is not set")
     key = f"{_PREFIX.rstrip('/')}/{uuid.uuid4().hex}-{filename}"
     _S3.put_object(Bucket=_BUCKET, Key=key, Body=data, ContentType=content_type)
     return f"s3://{_BUCKET}/{key}"
@@ -55,33 +31,19 @@ def put_bytes(data: bytes, filename: str, content_type: str = "application/octet
 def presign_get_url(s3_uri: str, expires_seconds: int = 600) -> str:
     """
     Create a presigned HTTPS GET URL from an s3://bucket/key URI.
-    (The object does not need to exist to generate this URL.)
     """
     if not isinstance(s3_uri, str) or not s3_uri.startswith("s3://"):
-        raise ValueError("presign_get_url expects something like 's3://bucket/key'")
-
+        raise ValueError("presign_get_url expects 's3://bucket/key'")
     _, rest = s3_uri.split("s3://", 1)
     bucket, key = rest.split("/", 1)
-    if not bucket or not key:
-        raise ValueError("presign_get_url: malformed s3_uri (missing bucket/key)")
-
     return _S3.generate_presigned_url(
         "get_object",
         Params={"Bucket": bucket, "Key": key},
         ExpiresIn=expires_seconds,
     )
 
-# Optional: direct browser upload helper (keep commented until needed)
-# def presign_put_url(filename: str, content_type: str = "application/octet-stream", expires_seconds: int = 600) -> tuple[str, str]:
-#     key = f"{_PREFIX.rstrip('/')}/{uuid.uuid4().hex}-{filename}"
-#     url = _S3.generate_presigned_url(
-#         "put_object",
-#         Params={"Bucket": _BUCKET, "Key": key, "ContentType": content_type},
-#         ExpiresIn=expires_seconds,
-#     )
-#     return url, f"s3://{_BUCKET}/{key}"
-
 __all__ = ["put_bytes", "presign_get_url"]
+
 
 
 
