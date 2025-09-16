@@ -3,8 +3,13 @@ from __future__ import annotations
 import os
 from flask import Flask, jsonify
 
-def create_app() -> Flask:
+from flask_cors import CORS
+
+def create_app():
     app = Flask(__name__)
+    CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=False)
+    ...
+
 
     @app.get("/ping")
     def ping():
