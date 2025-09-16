@@ -1,53 +1,66 @@
+# src/backend/db.py
 from __future__ import annotations
-import os
-from contextlib import contextmanager
-import psycopg
+import os, json
+from typing import Any, Iterable, Optional
 
-DATABASE_URL = os.environ.get("DATABASE_URL")
+import psycopg
+from psycopg_pool import ConnectionPool
+
+DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL is not set")
 
-_use_pool = True
-try:
-    from psycopg_pool import ConnectionPool
-except Exception:
-    _use_pool = False
+# Fast, safe pool for web apps
+pool = ConnectionPool(
+    conninfo=DATABASE_URL,
+    min_size=1,
+    max_size=int(os.getenv("DB_POOL_MAX", "10")),
+    kwargs={"application_name": "friday"},
+)
 
-if _use_pool:
-    pool = ConnectionPool(
-        conninfo=DATABASE_URL,
-        min_size=1,
-        max_size=10,
-        kwargs={"options": "-c statement_timeout=15000"},
-    )
+def execute(sql: str, params: Optional[Iterable[Any]] = None) -> int:
+    """Run INSERT/UPDATE/DELETE. Returns rowcount."""
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(sql, params or ())
+        return cur.rowcount
 
-    @contextmanager
-    def get_conn():
-        with pool.connection() as conn:
-            yield conn
-else:
-    @contextmanager
-    def get_conn():
-        with psycopg.connect(DATABASE_URL, options="-c statement_timeout=15000") as conn:
-            yield conn
+def fetchone(sql: str, params: Optional[Iterable[Any]] = None) -> Optional[tuple]:
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(sql, params or ())
+        return cur.fetchone()
 
-def fetchone(sql: str, params=None):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, params or ())
-            return cur.fetchone()
+def fetchall(sql: str, params: Optional[Iterable[Any]] = None) -> list[tuple]:
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(sql, params or ())
+        return cur.fetchall()
 
-def fetchall(sql: str, params=None):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, params or ())
-            return cur.fetchall()
+def ensure_schema() -> None:
+    """Create pgvector schema + tables/indexes if missing."""
+    ddl = """
+    CREATE EXTENSION IF NOT EXISTS vector;
 
-def execute(sql: str, params=None, many: bool=False):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            if many:
-                cur.executemany(sql, params or [])
-            else:
-                cur.execute(sql, params or ())
-        conn.commit()
+    CREATE TABLE IF NOT EXISTS documents (
+        id           BIGSERIAL PRIMARY KEY,
+        external_id  TEXT UNIQUE,
+        title        TEXT,
+        s3_uri       TEXT NOT NULL,
+        content      TEXT,
+        embedding    VECTOR(1536), -- default dim; can be 3072 if you set EMBEDDING_DIMS=3072
+        created_at   TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    -- HNSW index for cosine distance (needs pgvector >= 0.5.0)
+    DO $$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE schemaname = 'public' AND indexname = 'idx_documents_embedding_hnsw'
+        ) THEN
+            CREATE INDEX idx_documents_embedding_hnsw ON documents
+            USING hnsw (embedding vector_cosine_ops);
+        END IF;
+    END$$;
+    """
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(ddl)
+
