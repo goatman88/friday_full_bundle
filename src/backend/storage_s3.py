@@ -16,13 +16,31 @@ _S3 = boto3.client(
     config=Config(signature_version="s3v4"),
 )
 
+def _new_key(filename: str) -> str:
+    return f"{_PREFIX.rstrip('/')}/{uuid.uuid4().hex}-{filename}"
+
 def put_bytes(data: bytes, filename: str, content_type: str = "application/octet-stream") -> str:
-    """Upload bytes to S3 and return an s3:// URI."""
+    """Server-side upload of bytes (useful for small files). Returns s3:// URI."""
     if not _BUCKET:
         raise RuntimeError("S3_BUCKET is not set")
-    key = f"{_PREFIX.rstrip('/')}/{uuid.uuid4().hex}-{filename}"
+    key = _new_key(filename)
     _S3.put_object(Bucket=_BUCKET, Key=key, Body=data, ContentType=content_type)
     return f"s3://{_BUCKET}/{key}"
+
+def presign_put_url(filename: str, content_type: str = "application/octet-stream", expires_seconds: int = 600) -> tuple[str, str]:
+    """
+    Create a presigned HTTPS PUT URL for direct browser upload.
+    Returns (url, s3_uri).
+    """
+    if not _BUCKET:
+        raise RuntimeError("S3_BUCKET is not set")
+    key = _new_key(filename)
+    url = _S3.generate_presigned_url(
+        "put_object",
+        Params={"Bucket": _BUCKET, "Key": key, "ContentType": content_type},
+        ExpiresIn=expires_seconds,
+    )
+    return url, f"s3://{_BUCKET}/{key}"
 
 def presign_get_url(s3_uri: str, expires_seconds: int = 600) -> str:
     """Create a presigned HTTPS GET URL from an s3://bucket/key URI."""
@@ -36,7 +54,8 @@ def presign_get_url(s3_uri: str, expires_seconds: int = 600) -> str:
         ExpiresIn=expires_seconds,
     )
 
-__all__ = ["put_bytes", "presign_get_url"]
+__all__ = ["put_bytes", "presign_put_url", "presign_get_url"]
+
 
 
 
