@@ -1,236 +1,168 @@
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, {useCallback, useMemo, useRef, useState} from "react";
+import { api } from "../lib/api";
 
-const API_BASE = import.meta.env.VITE_API_BASE?.replace(/\/+$/,"") || "http://127.0.0.1:8000";
-
-async function postJSON(path, body) {
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new Error(`POST ${path} ${res.status}: ${txt}`);
-  }
-  return res.json();
+function prettyBytes(n){
+  if(!Number.isFinite(n)) return "";
+  const u=["B","KB","MB","GB"]; let i=0;
+  while(n>=1024 && i<u.length-1){ n/=1024; i++; }
+  return `${n.toFixed(n<10&&i>0?1:0)} ${u[i]}`;
 }
 
-function prettyBytes(n) {
-  if (n == null || isNaN(n)) return "-";
-  const units = ["B","KB","MB","GB"];
-  let i = 0;
-  let v = n;
-  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
-  return `${v.toFixed(1)} ${units[i]}`;
-}
+export default function MultiUploader(){
+  const [files, setFiles] = useState([]);               // [{file, status, pct, err, s3_uri}]
+  const [dragOver, setDragOver] = useState(false);
+  const inputRef = useRef(null);
 
-export default function MultiUploader() {
-  const [items, setItems] = useState([]);  // [{file, id, status, pct, s3Uri, putUrl, error}]
-  const [uploading, setUploading] = useState(false);
-  const dropRef = useRef(null);
-
-  const accept = useMemo(() => ([
-    ".pdf",".docx",".txt",".md",".csv",".json",".pptx",".xlsx",".html"
-  ]), []);
-
-  const onPick = useCallback((filesList) => {
-    const files = Array.from(filesList || []);
-    if (!files.length) return;
-    const rows = files.map((f, idx) => ({
-      id: `${Date.now()}_${idx}_${f.name}`,
-      file: f,
-      status: "queued",
-      pct: 0,
-      s3Uri: null,
-      putUrl: null,
-      error: null,
+  const onPick = (list) => {
+    const items = Array.from(list || []).map(f => ({
+      file: f, status: "ready", pct: 0, err: "", s3_uri: ""
     }));
-    setItems(prev => [...prev, ...rows]);
-  }, []);
-
-  const onDrop = useCallback((e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    onPick(e.dataTransfer.files);
-  }, [onPick]);
-
-  const onDragOver = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (dropRef.current) dropRef.current.dataset.active = "1";
-  };
-  const onDragLeave = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (dropRef.current) delete dropRef.current.dataset.active;
+    setFiles(prev => [...prev, ...items]);
   };
 
-  const removeItem = (id) => setItems(prev => prev.filter(r => r.id !== id));
-  const reset = () => setItems([]);
+  const onDrop = useCallback((e)=>{
+    e.preventDefault();
+    setDragOver(false);
+    if (e.dataTransfer?.files?.length) onPick(e.dataTransfer.files);
+  },[]);
 
-  async function uploadOne(row) {
-    const file = row.file;
-    const contentType = file.type || "application/octet-stream";
+  const onClickChoose = ()=> inputRef.current?.click();
 
-    // 1) Ask backend for presigned PUT URL
-    const presign = await postJSON("/api/rag/file_url", {
-      filename: file.name,
-      content_type: contentType,
+  const uploadOne = async (idx) => {
+    const it = files[idx]; if(!it) return;
+    const f = it.file;
+    const update = (patch)=> setFiles(arr=>{
+      const clone = [...arr]; clone[idx] = {...clone[idx], ...patch}; return clone;
     });
-    // expected: { put_url, s3_uri }
-    if (!presign?.put_url || !presign?.s3_uri) {
-      throw new Error(`Bad presign response: ${JSON.stringify(presign)}`);
+
+    try{
+      update({status:"presigning", pct:5, err:""});
+      const { put_url, s3_uri } = await api.presign({ filename: f.name, content_type: f.type || "application/octet-stream" });
+
+      update({status:"uploading", pct:15});
+      await new Promise((resolve, reject)=>{
+        const xhr = new XMLHttpRequest();
+        xhr.open("PUT", put_url);
+        xhr.setRequestHeader("Content-Type", f.type || "application/octet-stream");
+        xhr.upload.onprogress = (e)=>{
+          if(e.lengthComputable){
+            const pct = 15 + Math.round((e.loaded/e.total)*70);
+            update({pct});
+          }
+        };
+        xhr.onload = ()=> xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(`PUT ${xhr.status}`));
+        xhr.onerror = ()=> reject(new Error("Network error"));
+        xhr.send(f);
+      });
+
+      update({status:"confirming", pct:95});
+      await api.confirm({
+        s3_uri,
+        title: f.name,
+        external_id: `file_${Date.now()}_${idx}`,
+        content: ""  // optional: extra text metadata for your indexer
+      });
+
+      update({status:"done", pct:100, s3_uri});
+    }catch(err){
+      update({status:"error", err:String(err)});
     }
+  };
 
-    // 2) PUT file → S3 (stream progress)
-    const putUrl = presign.put_url;
-    await new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      xhr.open("PUT", putUrl);
-      xhr.setRequestHeader("Content-Type", contentType);
-      xhr.upload.onprogress = (evt) => {
-        if (evt.lengthComputable) {
-          const pct = Math.round((evt.loaded / evt.total) * 100);
-          setItems(prev => prev.map(r => r.id === row.id ? { ...r, pct, status: "uploading" } : r));
-        }
-      };
-      xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          resolve();
-        } else {
-          reject(new Error(`S3 PUT failed: ${xhr.status} ${xhr.responseText || ""}`));
-        }
-      };
-      xhr.onerror = () => reject(new Error("S3 PUT network error"));
-      xhr.send(file);
-    });
-
-    // 3) Confirm upload so backend can parse/index
-    const confirm = await postJSON("/api/rag/confirm_upload", {
-      s3_uri: presign.s3_uri,
-      title: file.name,
-      external_id: row.id,
-      // Optional: inline content for tiny .txt; big docs will be parsed from S3
-      content: undefined,
-    });
-
-    setItems(prev => prev.map(r =>
-      r.id === row.id ? { ...r, pct: 100, status: "done", s3Uri: presign.s3_uri, putUrl: presign.put_url } : r
-    ));
-    return confirm;
-  }
-
-  const startAll = async () => {
-    if (!items.length) return;
-    setUploading(true);
-    try {
-      // run sequentially (simpler to read logs). Flip to Promise.all for parallel.
-      for (const row of items) {
-        try {
-          await uploadOne(row);
-        } catch (err) {
-          setItems(prev => prev.map(r =>
-            r.id === row.id ? { ...r, status: "error", error: String(err) } : r
-          ));
-        }
+  const uploadAll = async ()=>{
+    for(let i=0;i<files.length;i++){
+      const it = files[i];
+      if(it.status==="ready" || it.status==="error"){
+        // eslint-disable-next-line no-await-in-loop
+        await uploadOne(i);
       }
-    } finally {
-      setUploading(false);
     }
   };
+
+  const anyUploading = useMemo(()=> files.some(f=>["presigning","uploading","confirming"].includes(f.status)),[files]);
 
   return (
-    <div style={{maxWidth: 900, margin: "40px auto", padding: "0 16px", fontFamily: "system-ui, sans-serif"}}>
-      <h1 style={{marginBottom: 8}}>Multi Uploader</h1>
-      <p style={{marginTop: 0, color: "#555"}}>
-        Drag files here or click the button. We’ll presign → PUT to S3 → confirm with the backend.
+    <div style={{maxWidth:900, margin:"40px auto", fontFamily:"system-ui, sans-serif"}}>
+      <h1>Multi-file Upload</h1>
+      <p>
+        Backend: <code>{import.meta.env.VITE_API_BASE || "(same origin)"}</code>
       </p>
 
       <div
-        ref={dropRef}
+        onDragOver={(e)=>{e.preventDefault(); setDragOver(true);}}
+        onDragLeave={()=>setDragOver(false)}
         onDrop={onDrop}
-        onDragOver={onDragOver}
-        onDragLeave={onDragLeave}
+        onClick={onClickChoose}
         style={{
-          border: "2px dashed #888",
-          borderRadius: 12,
-          padding: 28,
-          textAlign: "center",
-          marginBottom: 16,
-          background: dropRef.current?.dataset.active ? "#f5faff" : "transparent",
+          border:"2px dashed #888",
+          borderColor: dragOver? "#4f46e5" : "#888",
+          padding:"40px",
+          borderRadius:12,
+          textAlign:"center",
+          cursor:"pointer",
+          background: dragOver? "#eef2ff":"transparent"
         }}
+        role="button"
+        tabIndex={0}
       >
+        <strong>Drag & drop</strong> files here or <u>click to choose</u>
         <input
-          id="picker"
+          ref={inputRef}
           type="file"
           multiple
-          accept={accept.join(",")}
-          onChange={(e) => onPick(e.target.files)}
-          style={{ display: "none" }}
+          onChange={(e)=> onPick(e.target.files)}
+          style={{display:"none"}}
         />
-        <div style={{marginBottom: 8}}>Drop files here</div>
-        <button onClick={() => document.getElementById("picker").click()}>
-          Choose files
-        </button>
-        <div style={{marginTop: 8, fontSize: 12, color: "#777"}}>
-          Allowed: {accept.join(" ")}
-        </div>
       </div>
 
-      <div style={{display: "flex", gap: 8, marginBottom: 16}}>
-        <button onClick={startAll} disabled={!items.length || uploading}>Start upload</button>
-        <button onClick={reset} disabled={!items.length || uploading}>Clear</button>
-      </div>
+      {files.length>0 && (
+        <>
+          <div style={{display:"flex", justifyContent:"space-between", marginTop:20}}>
+            <div>{files.length} file(s) queued</div>
+            <div>
+              <button
+                onClick={uploadAll}
+                disabled={anyUploading}
+                style={{padding:"8px 14px", borderRadius:8, border:"1px solid #ddd", background:"#4f46e5", color:"#fff"}}
+              >
+                {anyUploading ? "Uploading…" : "Start upload"}
+              </button>
+            </div>
+          </div>
 
-      {!items.length ? (
-        <div style={{color: "#777"}}>No files selected yet.</div>
-      ) : (
-        <ul style={{listStyle:"none", padding: 0, margin: 0, display: "grid", gap: 12}}>
-          {items.map(row => (
-            <li key={row.id} style={{border: "1px solid #ddd", borderRadius: 10, padding: 12}}>
-              <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", gap: 12}}>
-                <div style={{fontWeight: 600}}>{row.file.name}</div>
-                <div style={{fontSize:12, color:"#666"}}>
-                  {prettyBytes(row.file.size)} · {row.file.type || "application/octet-stream"}
+          <ul style={{listStyle:"none", padding:0, marginTop:16}}>
+            {files.map((it, i)=>(
+              <li key={i} style={{padding:"10px 0", borderBottom:"1px solid #eee"}}>
+                <div style={{display:"flex", gap:12, alignItems:"center", justifyContent:"space-between"}}>
+                  <div style={{minWidth:0, flex:1}}>
+                    <div style={{fontWeight:600, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{it.file.name}</div>
+                    <div style={{fontSize:12, color:"#666"}}>
+                      {prettyBytes(it.file.size)} · {it.file.type || "application/octet-stream"}
+                    </div>
+                  </div>
+                  <div style={{width:240}}>
+                    <div style={{height:8, background:"#eee", borderRadius:999}}>
+                      <div style={{height:8, background:"#4f46e5", width:`${it.pct}%`, borderRadius:999}}/>
+                    </div>
+                    <div style={{fontSize:12, color:"#666", textAlign:"right"}}>{it.pct}%</div>
+                  </div>
+                  <div style={{width:120, textAlign:"right"}}>
+                    {it.status==="ready" && (
+                      <button onClick={()=>uploadOne(i)} style={{padding:"6px 10px", borderRadius:6, border:"1px solid #ddd"}}>Upload</button>
+                    )}
+                    {it.status==="done" && <span style={{color:"#059669"}}>Done</span>}
+                    {["presigning","uploading","confirming"].includes(it.status) && <span> {it.status}…</span>}
+                    {it.status==="error" && <span style={{color:"#b91c1c"}}>Error</span>}
+                  </div>
                 </div>
-              </div>
-
-              <div style={{marginTop: 8, height: 8, background:"#eee", borderRadius: 999}}>
-                <div
-                  style={{
-                    width: `${row.pct}%`,
-                    height: "100%",
-                    background: row.status === "error" ? "#e11d48" : "#3b82f6",
-                    borderRadius: 999,
-                    transition: "width .2s",
-                  }}
-                />
-              </div>
-
-              <div style={{display:"flex", justifyContent:"space-between", marginTop: 8, fontSize: 12}}>
-                <div>
-                  Status: <b>{row.status}</b>
-                  {row.status === "uploading" || row.status === "done" ? ` · ${row.pct}%` : ""}
-                </div>
-                <div style={{display:"flex", gap: 8}}>
-                  {row.s3Uri ? <code title="S3 URI">{row.s3Uri}</code> : null}
-                </div>
-              </div>
-
-              {row.error ? (
-                <div style={{marginTop: 8, color:"#b91c1c", fontSize: 12, whiteSpace:"pre-wrap"}}>
-                  {row.error}
-                </div>
-              ) : null}
-
-              <div style={{marginTop: 8, display:"flex", gap: 8}}>
-                <button onClick={() => removeItem(row.id)} disabled={uploading}>Remove</button>
-              </div>
-            </li>
-          ))}
-        </ul>
+                {it.err && <div style={{color:"#b91c1c", fontSize:12, marginTop:6}}>{it.err}</div>}
+              </li>
+            ))}
+          </ul>
+        </>
       )}
     </div>
   );
 }
+
 
