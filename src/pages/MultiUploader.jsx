@@ -1,293 +1,236 @@
-import React, { useMemo, useRef, useState } from 'react'
+import React, { useCallback, useMemo, useRef, useState } from "react";
 
-const API_BASE = import.meta.env.VITE_API_BASE?.replace(/\/+$/, '') || ''
+const API_BASE = import.meta.env.VITE_API_BASE?.replace(/\/+$/,"") || "http://127.0.0.1:8000";
 
-/**
- * Assumptions (matches the backend you deployed):
- * 1) POST  /api/rag/file_url
- *    Body: { filename, content_type, external_id }
- *    -> { put_url, s3_url, key }   // put_url is the presigned PUT
- *
- * 2) POST  /api/rag/confirm_upload
- *    Body: { s3_url, filename, title, external_id }
- *    -> { ok: true, job_id }
- *
- * 3) GET   /api/rag/stream/:job_id   (text/event-stream)
- *    -> emits SSE events with {"status": "...", "progress": 0-100}
- */
+async function postJSON(path, body) {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(`POST ${path} ${res.status}: ${txt}`);
+  }
+  return res.json();
+}
+
+function prettyBytes(n) {
+  if (n == null || isNaN(n)) return "-";
+  const units = ["B","KB","MB","GB"];
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(1)} ${units[i]}`;
+}
 
 export default function MultiUploader() {
-  const [files, setFiles] = useState([])
-  const inputRef = useRef(null)
+  const [items, setItems] = useState([]);  // [{file, id, status, pct, s3Uri, putUrl, error}]
+  const [uploading, setUploading] = useState(false);
+  const dropRef = useRef(null);
 
-  const onPick = (e) => {
-    const f = Array.from(e.target.files || [])
-    if (f.length) {
-      // map files to our UI model
-      const mapped = f.map(file => ({
-        file,
-        id: crypto.randomUUID(),
-        putProgress: 0,
-        sseProgress: 0,
-        sseStatus: 'pending',
-        jobId: null,
-        done: false,
-        error: null
-      }))
-      setFiles(prev => [...prev, ...mapped])
+  const accept = useMemo(() => ([
+    ".pdf",".docx",".txt",".md",".csv",".json",".pptx",".xlsx",".html"
+  ]), []);
+
+  const onPick = useCallback((filesList) => {
+    const files = Array.from(filesList || []);
+    if (!files.length) return;
+    const rows = files.map((f, idx) => ({
+      id: `${Date.now()}_${idx}_${f.name}`,
+      file: f,
+      status: "queued",
+      pct: 0,
+      s3Uri: null,
+      putUrl: null,
+      error: null,
+    }));
+    setItems(prev => [...prev, ...rows]);
+  }, []);
+
+  const onDrop = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onPick(e.dataTransfer.files);
+  }, [onPick]);
+
+  const onDragOver = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (dropRef.current) dropRef.current.dataset.active = "1";
+  };
+  const onDragLeave = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (dropRef.current) delete dropRef.current.dataset.active;
+  };
+
+  const removeItem = (id) => setItems(prev => prev.filter(r => r.id !== id));
+  const reset = () => setItems([]);
+
+  async function uploadOne(row) {
+    const file = row.file;
+    const contentType = file.type || "application/octet-stream";
+
+    // 1) Ask backend for presigned PUT URL
+    const presign = await postJSON("/api/rag/file_url", {
+      filename: file.name,
+      content_type: contentType,
+    });
+    // expected: { put_url, s3_uri }
+    if (!presign?.put_url || !presign?.s3_uri) {
+      throw new Error(`Bad presign response: ${JSON.stringify(presign)}`);
     }
+
+    // 2) PUT file → S3 (stream progress)
+    const putUrl = presign.put_url;
+    await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("PUT", putUrl);
+      xhr.setRequestHeader("Content-Type", contentType);
+      xhr.upload.onprogress = (evt) => {
+        if (evt.lengthComputable) {
+          const pct = Math.round((evt.loaded / evt.total) * 100);
+          setItems(prev => prev.map(r => r.id === row.id ? { ...r, pct, status: "uploading" } : r));
+        }
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve();
+        } else {
+          reject(new Error(`S3 PUT failed: ${xhr.status} ${xhr.responseText || ""}`));
+        }
+      };
+      xhr.onerror = () => reject(new Error("S3 PUT network error"));
+      xhr.send(file);
+    });
+
+    // 3) Confirm upload so backend can parse/index
+    const confirm = await postJSON("/api/rag/confirm_upload", {
+      s3_uri: presign.s3_uri,
+      title: file.name,
+      external_id: row.id,
+      // Optional: inline content for tiny .txt; big docs will be parsed from S3
+      content: undefined,
+    });
+
+    setItems(prev => prev.map(r =>
+      r.id === row.id ? { ...r, pct: 100, status: "done", s3Uri: presign.s3_uri, putUrl: presign.put_url } : r
+    ));
+    return confirm;
   }
 
-  const onDrop = (e) => {
-    e.preventDefault()
-    const f = Array.from(e.dataTransfer.files || [])
-    if (f.length) {
-      const mapped = f.map(file => ({
-        file,
-        id: crypto.randomUUID(),
-        putProgress: 0,
-        sseProgress: 0,
-        sseStatus: 'pending',
-        jobId: null,
-        done: false,
-        error: null
-      }))
-      setFiles(prev => [...prev, ...mapped])
-    }
-  }
-
-  const onDragOver = (e) => e.preventDefault()
-
-  const removeItem = (id) => {
-    setFiles(prev => prev.filter(x => x.id !== id))
-  }
-
-  const humanSize = (bytes) => {
-    if (bytes < 1024) return `${bytes} B`
-    if (bytes < 1024**2) return `${(bytes/1024).toFixed(1)} KB`
-    if (bytes < 1024**3) return `${(bytes/1024**2).toFixed(1)} MB`
-    return `${(bytes/1024**3).toFixed(1)} GB`
-  }
-
-  const canUpload = useMemo(() => files.some(f => !f.done && !f.error), [files])
-
-  // ——— Core flow per file ———
-  const startUpload = async () => {
-    for (const item of files) {
-      if (item.done || item.error) continue
-      try {
-        // 1) Get presigned PUT URL
-        const ct = item.file.type || 'application/octet-stream'
-        const externalId = `ext_${item.id}`
-        const r1 = await fetch(`${API_BASE}/api/rag/file_url`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            filename: item.file.name,
-            content_type: ct,
-            external_id: externalId
-          })
-        })
-        if (!r1.ok) throw new Error(`file_url failed: ${r1.status}`)
-        const { put_url, s3_url } = await r1.json()
-
-        // 2) PUT file bytes to S3 with progress
-        await putWithProgress(put_url, item.file, (pct) => {
-          setFiles(prev => prev.map(x => x.id === item.id ? { ...x, putProgress: pct } : x))
-        })
-
-        // 3) Confirm upload (this kicks off parsing/indexing)
-        const r2 = await fetch(`${API_BASE}/api/rag/confirm_upload`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            s3_url,
-            filename: item.file.name,
-            title: item.file.name,
-            external_id: externalId
-          })
-        })
-        if (!r2.ok) throw new Error(`confirm_upload failed: ${r2.status}`)
-        const { job_id } = await r2.json()
-
-        // 4) Listen to SSE for job status
-        await listenSSE(job_id, (msg) => {
-          const pct = typeof msg.progress === 'number' ? msg.progress : undefined
-          const status = msg.status || '…'
-          setFiles(prev => prev.map(x => x.id === item.id
-            ? { ...x, jobId: job_id, sseStatus: status, sseProgress: pct ?? x.sseProgress }
-            : x
-          ))
-        })
-
-        // 5) done
-        setFiles(prev => prev.map(x => x.id === item.id ? { ...x, done: true, sseStatus: 'done', sseProgress: 100 } : x))
-      } catch (err) {
-        setFiles(prev => prev.map(x => x.id === item.id ? { ...x, error: String(err) } : x))
+  const startAll = async () => {
+    if (!items.length) return;
+    setUploading(true);
+    try {
+      // run sequentially (simpler to read logs). Flip to Promise.all for parallel.
+      for (const row of items) {
+        try {
+          await uploadOne(row);
+        } catch (err) {
+          setItems(prev => prev.map(r =>
+            r.id === row.id ? { ...r, status: "error", error: String(err) } : r
+          ));
+        }
       }
+    } finally {
+      setUploading(false);
     }
-  }
+  };
 
   return (
-    <main style={{ padding: 24, fontFamily: 'system-ui, sans-serif', lineHeight: 1.35 }}>
-      <h1>Multi-file Upload + Progress + Live Status</h1>
-      <p style={{ opacity: 0.8, marginTop: 4 }}>
-        Backend: <code>{API_BASE || '(missing VITE_API_BASE)'}</code>
+    <div style={{maxWidth: 900, margin: "40px auto", padding: "0 16px", fontFamily: "system-ui, sans-serif"}}>
+      <h1 style={{marginBottom: 8}}>Multi Uploader</h1>
+      <p style={{marginTop: 0, color: "#555"}}>
+        Drag files here or click the button. We’ll presign → PUT to S3 → confirm with the backend.
       </p>
 
-      <section
+      <div
+        ref={dropRef}
         onDrop={onDrop}
         onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
         style={{
-          marginTop: 16,
-          padding: 24,
-          border: '2px dashed #888',
-          borderRadius: 10,
-          background: '#fafafa'
-        }}>
-        <p><b>Drag & drop</b> PDFs/DOCXs/TXTs here, or</p>
-        <button onClick={() => inputRef.current?.click()}>Choose files</button>
+          border: "2px dashed #888",
+          borderRadius: 12,
+          padding: 28,
+          textAlign: "center",
+          marginBottom: 16,
+          background: dropRef.current?.dataset.active ? "#f5faff" : "transparent",
+        }}
+      >
         <input
-          ref={inputRef}
+          id="picker"
           type="file"
           multiple
-          style={{ display: 'none' }}
-          onChange={onPick}
+          accept={accept.join(",")}
+          onChange={(e) => onPick(e.target.files)}
+          style={{ display: "none" }}
         />
-      </section>
+        <div style={{marginBottom: 8}}>Drop files here</div>
+        <button onClick={() => document.getElementById("picker").click()}>
+          Choose files
+        </button>
+        <div style={{marginTop: 8, fontSize: 12, color: "#777"}}>
+          Allowed: {accept.join(" ")}
+        </div>
+      </div>
 
-      <div style={{ marginTop: 24 }}>
-        {files.length === 0 && <div style={{ opacity: 0.7 }}>No files selected yet.</div>}
-        {files.map(item => (
-          <div key={item.id} style={{
-            border: '1px solid #ddd',
-            borderRadius: 10,
-            padding: 12,
-            marginBottom: 12
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-              <div>
-                <div><b>{item.file.name}</b></div>
-                <div style={{ fontSize: 12, opacity: 0.75 }}>
-                  {item.file.type || 'unknown'} • {humanSize(item.file.size)}
+      <div style={{display: "flex", gap: 8, marginBottom: 16}}>
+        <button onClick={startAll} disabled={!items.length || uploading}>Start upload</button>
+        <button onClick={reset} disabled={!items.length || uploading}>Clear</button>
+      </div>
+
+      {!items.length ? (
+        <div style={{color: "#777"}}>No files selected yet.</div>
+      ) : (
+        <ul style={{listStyle:"none", padding: 0, margin: 0, display: "grid", gap: 12}}>
+          {items.map(row => (
+            <li key={row.id} style={{border: "1px solid #ddd", borderRadius: 10, padding: 12}}>
+              <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", gap: 12}}>
+                <div style={{fontWeight: 600}}>{row.file.name}</div>
+                <div style={{fontSize:12, color:"#666"}}>
+                  {prettyBytes(row.file.size)} · {row.file.type || "application/octet-stream"}
                 </div>
               </div>
-              <div>
-                <button onClick={() => removeItem(item.id)} disabled={!item.error && !item.done}>Remove</button>
+
+              <div style={{marginTop: 8, height: 8, background:"#eee", borderRadius: 999}}>
+                <div
+                  style={{
+                    width: `${row.pct}%`,
+                    height: "100%",
+                    background: row.status === "error" ? "#e11d48" : "#3b82f6",
+                    borderRadius: 999,
+                    transition: "width .2s",
+                  }}
+                />
               </div>
-            </div>
 
-            {/* PUT progress */}
-            <div style={{ marginTop: 10 }}>
-              <div style={{ fontSize: 12, marginBottom: 4 }}>S3 Upload</div>
-              <ProgressBar value={item.putProgress} color="#7c4dff" />
-            </div>
-
-            {/* SSE status */}
-            <div style={{ marginTop: 10 }}>
-              <div style={{ fontSize: 12, marginBottom: 4 }}>
-                Parse/Index status: {item.sseStatus}{item.jobId ? ` (job: ${item.jobId})` : ''}
+              <div style={{display:"flex", justifyContent:"space-between", marginTop: 8, fontSize: 12}}>
+                <div>
+                  Status: <b>{row.status}</b>
+                  {row.status === "uploading" || row.status === "done" ? ` · ${row.pct}%` : ""}
+                </div>
+                <div style={{display:"flex", gap: 8}}>
+                  {row.s3Uri ? <code title="S3 URI">{row.s3Uri}</code> : null}
+                </div>
               </div>
-              <ProgressBar value={item.sseProgress} color="#2196f3" />
-            </div>
 
-            {item.error && (
-              <div style={{ marginTop: 10, color: '#b00020', fontSize: 13 }}>
-                {item.error}
+              {row.error ? (
+                <div style={{marginTop: 8, color:"#b91c1c", fontSize: 12, whiteSpace:"pre-wrap"}}>
+                  {row.error}
+                </div>
+              ) : null}
+
+              <div style={{marginTop: 8, display:"flex", gap: 8}}>
+                <button onClick={() => removeItem(row.id)} disabled={uploading}>Remove</button>
               </div>
-            )}
-            {item.done && !item.error && (
-              <div style={{ marginTop: 10, color: '#2e7d32', fontSize: 13 }}>
-                ✅ Done
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-
-      <div style={{ marginTop: 16 }}>
-        <button onClick={startUpload} disabled={!canUpload}>Start Uploads</button>
-      </div>
-    </main>
-  )
-}
-
-/* ---------- helpers ---------- */
-
-function ProgressBar({ value = 0, color = '#2196f3' }) {
-  const pct = Math.max(0, Math.min(100, Math.round(value || 0)))
-  return (
-    <div style={{
-      height: 10,
-      background: '#eee',
-      borderRadius: 6,
-      overflow: 'hidden'
-    }}>
-      <div style={{
-        width: `${pct}%`,
-        height: '100%',
-        background: color,
-        transition: 'width .2s linear'
-      }} />
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
-  )
+  );
 }
 
-async function putWithProgress(url, file, onProgress) {
-  // Use fetch with ReadableStream to manually report progress
-  const total = file.size
-  let loaded = 0
-
-  const stream = file.stream()
-  const reader = stream.getReader()
-
-  const body = new ReadableStream({
-    start(controller) {
-      function push() {
-        reader.read().then(({ done, value }) => {
-          if (done) {
-            controller.close()
-            return
-          }
-          loaded += value.byteLength
-          onProgress(Math.round((loaded / total) * 100))
-          controller.enqueue(value)
-          push()
-        })
-      }
-      push()
-    }
-  })
-
-  const r = await fetch(url, {
-    method: 'PUT',
-    headers: { 'Content-Type': file.type || 'application/octet-stream' },
-    body
-  })
-  if (!r.ok) throw new Error(`PUT failed: ${r.status}`)
-}
-
-async function listenSSE(jobId, onMessage) {
-  return new Promise((resolve, reject) => {
-    const url = `${API_BASE}/api/rag/stream/${encodeURIComponent(jobId)}`
-    const ev = new EventSource(url, { withCredentials: false })
-
-    ev.onmessage = (e) => {
-      try {
-        const data = JSON.parse(e.data)
-        onMessage?.(data)
-        if (data.status === 'done' || data.status === 'failed') {
-          ev.close()
-          if (data.status === 'done') resolve()
-          else reject(new Error('job failed'))
-        }
-      } catch (err) {
-        // non-JSON keep-alives are fine to ignore
-      }
-    }
-    ev.onerror = () => {
-      ev.close()
-      reject(new Error('SSE connection error'))
-    }
-  })
-}
