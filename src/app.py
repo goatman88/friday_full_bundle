@@ -6,16 +6,16 @@ from flask import Flask, jsonify
 def create_app() -> Flask:
     app = Flask(__name__)
 
-    # Health
     @app.get("/ping")
     def ping():
         return jsonify({"app": "Friday", "ok": True, "status": "alive"})
 
-    # S3 health endpoint (import inside so we test the same code path used at runtime)
+    # Health check for S3
     @app.get("/api/health/s3")
     def health_s3():
         try:
-            from .backend.storage_s3 import presign_get_url  # relative import
+            # relative import through the package
+            from .backend.storage_s3 import presign_get_url
         except Exception as e:
             return jsonify({"ok": False, "stage": "import", "error": str(e)}), 500
 
@@ -30,13 +30,12 @@ def create_app() -> Flask:
         except Exception as e:
             return jsonify({"ok": False, "stage": "presign", "error": str(e)}), 500
 
-    # Register RAG blueprint
-    from .backend.rag_blueprint import bp as rag_bp  # relative import
+    # Register RAG endpoints
+    from .backend.rag_blueprint import bp as rag_bp
     app.register_blueprint(rag_bp)
 
     return app
 
-# export for wsgi
 app = create_app()
 
 
