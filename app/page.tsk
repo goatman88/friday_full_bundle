@@ -1,0 +1,5 @@
+"use client";
+import DirectUpload from "@/components/DirectUpload";
+export default function Page() {
+  return <DirectUpload />;
+}
