@@ -3,83 +3,56 @@ import API_BASE from "../lib/apiBase";
 
 export default function CrawlUpload() {
   const [file, setFile] = useState<File | null>(null);
-  const [status, setStatus] = useState("");
-  const [downloadUrl, setDownloadUrl] = useState("");
+  const [msg, setMsg] = useState("");
+  const [href, setHref] = useState("");
 
-  async function handleUpload() {
-    if (!file) {
-      setStatus("Pick a file first.");
-      return;
-    }
-    setStatus("Requesting presigned PUT…");
+  async function run() {
+    if (!file) return setMsg("Pick a file first.");
+    const content_type = file.type || "application/octet-stream";
 
-    // 1) Ask backend for PUT URL (Content-Type must match your PUT)
+    setMsg("Presigning…");
     const ask = await fetch(`${API_BASE}/api/rag/upload_url`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        filename: file.name,
-        content_type: file.type || "application/octet-stream"
-      })
+      body: JSON.stringify({ filename: file.name, content_type })
     }).then(r => r.json());
 
-    if (!ask.ok) {
-      setStatus("Failed to get upload URL: " + (ask.error || "unknown"));
-      return;
-    }
-    const { url, s3_uri } = ask;
+    if (!ask.ok) return setMsg("Presign failed: " + (ask.error || "unknown"));
 
-    // 2) PUT directly to S3
-    setStatus("Uploading to S3…");
-    const put = await fetch(url, {
+    setMsg("Uploading…");
+    const put = await fetch(ask.url, {
       method: "PUT",
-      headers: { "Content-Type": file.type || "application/octet-stream" },
+      headers: { "Content-Type": content_type },
       body: file
     });
-    if (!put.ok) {
-      setStatus(`S3 PUT failed: ${put.status} ${await put.text().catch(()=> "")}`);
-      return;
-    }
+    if (!put.ok) return setMsg("S3 PUT failed: " + put.status);
 
-    // 3) Confirm + index pointer
-    setStatus("Confirming upload…");
+    setMsg("Confirming…");
     const external_id = crypto.randomUUID();
     const confirm = await fetch(`${API_BASE}/api/rag/confirm_upload`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ s3_uri, title: file.name, external_id })
+      body: JSON.stringify({ s3_uri: ask.s3_uri, title: file.name, external_id })
     }).then(r => r.json());
 
-    if (!confirm.ok) {
-      setStatus("Confirm failed: " + (confirm.error || "unknown"));
-      return;
-    }
+    if (!confirm.ok) return setMsg("Confirm failed: " + (confirm.error || "unknown"));
 
-    // 4) Get a presigned GET for the user
     const got = await fetch(
       `${API_BASE}/api/rag/file_url?external_id=${encodeURIComponent(external_id)}`
     ).then(r => r.json());
 
-    if (got.ok && got.url) {
-      setDownloadUrl(got.url);
-      setStatus("Done ✅");
-    } else {
-      setStatus("Indexed, but couldn’t create download URL.");
-    }
+    setMsg("Done ✅");
+    if (got.ok) setHref(got.url);
   }
 
   return (
     <div style={{ padding: 16 }}>
       <h3>Crawl Upload</h3>
-      <input type="file" onChange={e => setFile(e.target.files?.[0] || null)} />
-      <button onClick={handleUpload} style={{ marginLeft: 8 }}>Upload</button>
-      <div style={{ marginTop: 8 }}>{status}</div>
-      {downloadUrl && (
-        <div style={{ marginTop: 8 }}>
-          <a href={downloadUrl} target="_blank" rel="noreferrer">Open file (presigned GET)</a>
-        </div>
-      )}
-      {!API_BASE && <div style={{ color: "#b91c1c" }}>Set API base env first.</div>}
+      <input type="file" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+      <button onClick={run} style={{ marginLeft: 8 }}>Upload</button>
+      <div style={{ marginTop: 8 }}>{msg}</div>
+      {href && <a href={href} target="_blank" rel="noreferrer">open</a>}
     </div>
   );
 }
+
