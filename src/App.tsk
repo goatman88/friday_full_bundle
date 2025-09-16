@@ -1,0 +1,4 @@
+import DirectUpload from "./components/DirectUpload";
+export default function App() {
+  return <DirectUpload />;
+}
