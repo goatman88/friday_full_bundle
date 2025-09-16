@@ -1,10 +1,34 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import API_BASE from "../lib/apiBase";
 
-export default function CrawlUpload() {
+type Job = { status: string; progress: number; message?: string };
+
+export default function CrawlUploadWithStatus() {
   const [file, setFile] = useState<File | null>(null);
   const [msg, setMsg] = useState("");
-  const [href, setHref] = useState("");
+  const [job, setJob] = useState<Job | null>(null);
+  const [jobId, setJobId] = useState<string>("");
+
+  const pollTimer = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!jobId) return;
+    const poll = async () => {
+      const j = await fetch(`${API_BASE}/api/rag/status/${jobId}`)
+        .then(r => r.json())
+        .catch(() => null);
+      if (j?.ok) {
+        setJob(j.job);
+        if (j.job.status === "done" || j.job.status === "error") {
+          if (pollTimer.current) window.clearInterval(pollTimer.current);
+          pollTimer.current = null;
+        }
+      }
+    };
+    poll(); // immediate
+    pollTimer.current = window.setInterval(poll, 1200) as any;
+    return () => { if (pollTimer.current) window.clearInterval(pollTimer.current); };
+  }, [jobId]);
 
   async function run() {
     if (!file) return setMsg("Pick a file first.");
@@ -27,8 +51,8 @@ export default function CrawlUpload() {
     });
     if (!put.ok) return setMsg("S3 PUT failed: " + put.status);
 
-    setMsg("Confirming…");
     const external_id = crypto.randomUUID();
+    setMsg("Confirming (job started)…");
     const confirm = await fetch(`${API_BASE}/api/rag/confirm_upload`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -37,22 +61,27 @@ export default function CrawlUpload() {
 
     if (!confirm.ok) return setMsg("Confirm failed: " + (confirm.error || "unknown"));
 
-    const got = await fetch(
-      `${API_BASE}/api/rag/file_url?external_id=${encodeURIComponent(external_id)}`
-    ).then(r => r.json());
-
-    setMsg("Done ✅");
-    if (got.ok) setHref(got.url);
+    setJobId(confirm.job_id);
+    setMsg("Processing on server…");
   }
 
   return (
     <div style={{ padding: 16 }}>
-      <h3>Crawl Upload</h3>
+      <h3>Crawl Upload + Status</h3>
       <input type="file" onChange={(e) => setFile(e.target.files?.[0] || null)} />
       <button onClick={run} style={{ marginLeft: 8 }}>Upload</button>
+
       <div style={{ marginTop: 8 }}>{msg}</div>
-      {href && <a href={href} target="_blank" rel="noreferrer">open</a>}
+      {job && (
+        <div style={{ marginTop: 8, fontSize: 14 }}>
+          <div>Status: <b>{job.status}</b></div>
+          <div>Progress: {job.progress}%</div>
+          {job.message && <div>Note: {job.message}</div>}
+        </div>
+      )}
+      {!API_BASE && <div style={{ color: "#b91c1c" }}>Set API base env first.</div>}
     </div>
   );
 }
+
 
