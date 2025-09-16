@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import API_BASE from "../lib/apiBase";
+import { useSSEJob, JobUpdate } from "../hooks/useSSEJob";
 
 type Job = { status: string; progress: number; message?: string };
 
@@ -10,25 +11,39 @@ export default function CrawlUploadWithStatus() {
   const [jobId, setJobId] = useState<string>("");
 
   const pollTimer = useRef<number | null>(null);
+  const { start, stop, supported } = useSSEJob(jobId, (u: JobUpdate) => {
+    if (u.ok && u.job) {
+      setJob({ status: u.job.status, progress: u.job.progress, message: u.job.message });
+      if (u.job.status === "done" || u.job.status === "error") {
+        stop();
+      }
+    }
+  });
 
+  // Start SSE or polling when we have a jobId
   useEffect(() => {
     if (!jobId) return;
+
+    if (supported) {
+      start();
+      return () => stop();
+    }
+
+    // fallback: polling
     const poll = async () => {
-      const j = await fetch(`${API_BASE}/api/rag/status/${jobId}`)
-        .then(r => r.json())
-        .catch(() => null);
-      if (j?.ok) {
-        setJob(j.job);
-        if (j.job.status === "done" || j.job.status === "error") {
+      const r = await fetch(`${API_BASE}/api/rag/status/${jobId}`).then(x => x.json()).catch(() => null);
+      if (r?.ok) {
+        setJob(r.job);
+        if (r.job.status === "done" || r.job.status === "error") {
           if (pollTimer.current) window.clearInterval(pollTimer.current);
           pollTimer.current = null;
         }
       }
     };
-    poll(); // immediate
+    poll();
     pollTimer.current = window.setInterval(poll, 1200) as any;
     return () => { if (pollTimer.current) window.clearInterval(pollTimer.current); };
-  }, [jobId]);
+  }, [jobId, start, stop, supported]);
 
   async function run() {
     if (!file) return setMsg("Pick a file first.");
@@ -67,7 +82,7 @@ export default function CrawlUploadWithStatus() {
 
   return (
     <div style={{ padding: 16 }}>
-      <h3>Crawl Upload + Status</h3>
+      <h3>Crawl Upload + Live Status (SSE)</h3>
       <input type="file" onChange={(e) => setFile(e.target.files?.[0] || null)} />
       <button onClick={run} style={{ marginLeft: 8 }}>Upload</button>
 
@@ -83,5 +98,6 @@ export default function CrawlUploadWithStatus() {
     </div>
   );
 }
+
 
 
