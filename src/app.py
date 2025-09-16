@@ -178,50 +178,30 @@ def admin_home():
     )
 
 # --- S3 health endpoint ---
-import os
 from flask import jsonify
-import boto3
-from botocore.client import Config
-from botocore.exceptions import BotoCoreError, ClientError
+import os
 
 @app.get("/api/health/s3")
 def health_s3():
-    missing = []
-    for k in ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_DEFAULT_REGION", "S3_BUCKET"]:
-        if not os.environ.get(k):
-            missing.append(k)
-    if missing:
-        return jsonify({"ok": False, "error": "missing_env", "missing": missing}), 500
-
-    region = os.environ.get("AWS_DEFAULT_REGION")
-    bucket = os.environ.get("S3_BUCKET")
+    # Import here to ensure we test the same code path your app uses
     try:
-        s3 = boto3.client(
-            "s3",
-            region_name=region,
-            aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
-            aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
-            config=Config(signature_version="s3v4"),
-        )
-        # 1) list buckets (proves creds are valid)
-        buckets = [b["Name"] for b in s3.list_buckets().get("Buckets", [])]
+        from .backend.storage_s3 import presign_get_url
+    except Exception as e:
+        return jsonify({"ok": False, "stage": "import", "error": str(e)}), 500
 
-        # 2) try to presign a GET for a dummy key (does not require the object to exist)
-        dummy_key = "healthcheck/dummy.txt"
-        presigned = s3.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": bucket, "Key": dummy_key},
-            ExpiresIn=60,
-        )
-        return jsonify({
-            "ok": True,
-            "region": region,
-            "bucket": bucket,
-            "buckets_visible": buckets,
-            "presign_sample": presigned[:120] + "...",
-        })
-    except (ClientError, BotoCoreError) as e:
-        return jsonify({"ok": False, "error": "aws_error", "detail": str(e)}), 500
+    # Quick env check
+    missing = [k for k in ["AWS_ACCESS_KEY_ID","AWS_SECRET_ACCESS_KEY","AWS_DEFAULT_REGION","S3_BUCKET"] if not os.getenv(k)]
+    if missing:
+        return jsonify({"ok": False, "stage": "env", "missing": missing}), 500
+
+    # Try presigning a dummy key (no object required)
+    try:
+        bucket = os.getenv("S3_BUCKET")
+        url = presign_get_url(f"s3://{bucket}/healthcheck/dummy.txt", expires_seconds=60)
+        return jsonify({"ok": True, "bucket": bucket, "sample": url[:120]+"..."})
+    except Exception as e:
+        return jsonify({"ok": False, "stage": "presign", "error": str(e)}), 500
+
 
 # ---- Error handlers ---------------------------------------------------------
 @app.errorhandler(404)
