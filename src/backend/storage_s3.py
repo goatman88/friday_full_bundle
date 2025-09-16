@@ -4,19 +4,36 @@ import os, uuid
 import boto3
 from botocore.client import Config
 
-# Required env vars:
-# - AWS_ACCESS_KEY_ID
-# - AWS_SECRET_ACCESS_KEY
-# - AWS_DEFAULT_REGION  (e.g., "us-east-1")
-# - S3_BUCKET
-# Optional: S3_PREFIX (defaults to "uploads/")
+# Load env vars
+bucket = os.environ.get("S3_BUCKET")
+prefix = os.environ.get("S3_PREFIX", "uploads/")
+region = os.environ.get("AWS_REGION", "us-east-1")
 
-_BUCKET = os.environ.get("S3_BUCKET")
-_PREFIX = os.environ.get("S3_PREFIX", "uploads/")
-_REGION = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
-
-if not _BUCKET:
+if not bucket:
     raise RuntimeError("S3_BUCKET is not set")
+
+# Create S3 client
+_s3 = boto3.client(
+    "s3",
+    region_name=region,
+    aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
+    aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
+    config=Config(signature_version="s3v4"),
+)
+
+def put_bytes(data: bytes, filename: str, content_type: str = "application/octet-stream") -> str:
+    """Upload raw bytes and return the object key."""
+    key = f"{prefix.rstrip('/')}/{uuid.uuid4().hex}-{filename}"
+    _s3.put_object(Bucket=bucket, Key=key, Body=data, ContentType=content_type)
+    return key
+
+def presign_get_url(key: str, expires_in: int = 3600) -> str:
+    """Generate a presigned GET URL for an S3 object."""
+    return _s3.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": bucket, "Key": key},
+        ExpiresIn=expires_in,
+    )
 
 # Build client explicitly so boto3 doesn't pick up partial creds somewhere else
 _S3 = boto3.client(
