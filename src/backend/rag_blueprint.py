@@ -7,7 +7,14 @@ from pydantic import BaseModel, Field
 import requests
 from openai import OpenAI
 
-from backend.db import fetchone, fetchall, execute
+# replace these:
+# from backend.db import fetchone, fetchall, execute
+# from backend.storage_s3 import put_bytes, presign_get_url
+
+# with these:
+from .db import fetchone, fetchall, execute
+from .storage_s3 import put_bytes, presign_get_url
+
 from werkzeug.utils import secure_filename
 from pdfminer.high_level import extract_text as pdf_extract_text
 from docx import Document
