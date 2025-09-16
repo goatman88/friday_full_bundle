@@ -1,5 +1,6 @@
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import API_BASE from "../lib/apiBase";
+import { useSSEJob, JobUpdate } from "../hooks/useSSEJob";
 
 type FileState = {
   id: string;                 // external_id also used as job_id
@@ -18,17 +19,11 @@ function putWithProgress(url: string, file: File, contentType: string, onProgres
     xhr.open("PUT", url, true);
     xhr.setRequestHeader("Content-Type", contentType || "application/octet-stream");
     xhr.upload.onprogress = (evt) => {
-      if (evt.lengthComputable) {
-        const pct = Math.round((evt.loaded / evt.total) * 100);
-        onProgress(pct);
-      }
+      if (evt.lengthComputable) onProgress(Math.round((evt.loaded / evt.total) * 100));
     };
     xhr.onload = () => {
       const ok = xhr.status >= 200 && xhr.status < 300;
-      if (!ok) {
-        reject(new Error(`S3 PUT failed: ${xhr.status} ${xhr.responseText || ""}`));
-        return;
-      }
+      if (!ok) return reject(new Error(`S3 PUT failed: ${xhr.status} ${xhr.responseText || ""}`));
       resolve(new Response(xhr.responseText, { status: xhr.status }));
     };
     xhr.onerror = () => reject(new Error("Network error during S3 PUT"));
@@ -87,7 +82,7 @@ export default function MultiUploaderWithStatus() {
       return;
     }
 
-    patch(id, { stage: "confirming", message: "Confirming…"});
+    patch(id, { stage: "confirming", message: "Confirming…" });
     const confirm = await fetch(`${API_BASE}/api/rag/confirm_upload`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -99,33 +94,50 @@ export default function MultiUploaderWithStatus() {
       return;
     }
 
-    // Poll job status until done/error
-    patch(id, { stage: "processing", message: "Processing on server…", jobStatus: "processing", jobProgress: 5 });
-    await pollStatusUntilDone(id);
+    // Start SSE if supported; else fallback to polling
+    const { start, stop, supported } = useSSEJobInstance(id, (u) => {
+      if (u.ok && u.job) {
+        patch(id, {
+          jobStatus: u.job.status,
+          jobProgress: u.job.progress,
+          message: u.job.message,
+          stage: u.job.status === "done" ? "done" : (u.job.status === "error" ? "error" : "processing")
+        });
+      }
+    });
 
-    // (Optional) fetch presigned GET for link if you want
-    // const got = await fetch(`${API_BASE}/api/rag/file_url?external_id=${encodeURIComponent(id)}`)
-    //   .then(r => r.json()).catch(() => ({}));
-    // if (got?.ok) patch(id, { downloadUrl: got.url });
-
+    if (supported) {
+      start();
+      // stop is called automatically when job ends inside the handler
+    } else {
+      // fallback polling
+      patch(id, { stage: "processing", message: "Processing on server…", jobStatus: "processing", jobProgress: 5 });
+      for (;;) {
+        // eslint-disable-next-line no-await-in-loop
+        const r = await fetch(`${API_BASE}/api/rag/status/${id}`).then(x => x.json()).catch(() => null);
+        if (r?.ok) {
+          const j = r.job;
+          patch(id, {
+            jobStatus: j.status, jobProgress: j.progress, message: j.message,
+            stage: j.status === "done" ? "done" : (j.status === "error" ? "error" : "processing")
+          });
+          if (j.status === "done" || j.status === "error") break;
+        }
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise(res => setTimeout(res, 1200));
+      }
+    }
   }
 
-  async function pollStatusUntilDone(id: string) {
-    // simple polling loop
-    for (;;) {
-      // eslint-disable-next-line no-await-in-loop
-      const res = await fetch(`${API_BASE}/api/rag/status/${id}`).then(r => r.json()).catch(() => null);
-      if (res?.ok) {
-        const job = res.job;
-        patch(id, { jobStatus: job.status, jobProgress: job.progress, message: job.message });
-        if (job.status === "done") { patch(id, { stage: "done" }); break; }
-        if (job.status === "error") { patch(id, { stage: "error" }); break; }
-      } else {
-        patch(id, { message: "Status check failed" });
+  // tiny helper to bind a fresh SSE instance per file
+  function useSSEJobInstance(jobId: string, onUpdate: (u: JobUpdate) => void) {
+    const { start, stop, supported } = useSSEJob(jobId, (u) => {
+      onUpdate(u);
+      if (u.ok && u.job && (u.job.status === "done" || u.job.status === "error")) {
+        stop();
       }
-      // eslint-disable-next-line no-await-in-loop
-      await new Promise(r => setTimeout(r, 1200));
-    }
+    });
+    return { start, stop, supported };
   }
 
   async function startAll() {
@@ -143,7 +155,7 @@ export default function MultiUploaderWithStatus() {
 
   return (
     <div style={{ padding: 16, maxWidth: 800 }}>
-      <h3>Multi-file Upload + PUT Progress + Server Status</h3>
+      <h3>Multi-file Upload + PUT Progress + Live Server Status (SSE)</h3>
 
       <div
         onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
@@ -228,3 +240,4 @@ export default function MultiUploaderWithStatus() {
     </div>
   );
 }
+
