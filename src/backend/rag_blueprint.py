@@ -18,7 +18,7 @@ from .storage_s3 import put_bytes, presign_get_url
 from werkzeug.utils import secure_filename
 from pdfminer.high_level import extract_text as pdf_extract_text
 from docx import Document
-from backend.storage_s3 import put_bytes, presign_get_url
+from .storage_s3 import put_bytes, presign_get_url
 
 bp = Blueprint("rag", __name__, url_prefix="/api/rag")
 
