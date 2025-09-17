@@ -1,23 +1,60 @@
-from flask import Flask, request, jsonify
-# src/app.py
-from fastapi import FastAPI, Body
+from fastapi import FastAPI
 from pydantic import BaseModel
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 import time
 
 app = FastAPI(title="Friday RAG API", version="0.1.0")
 
-# ----- Models (minimal) -------------------------------------------------------
+# ---------- Models ----------
 class ConfirmUploadReq(BaseModel):
-    s3_uri: str | None = None
-    title: str | None = None
-    external_id: str | None = None
-    metadata: Dict[str, Any] | None = None
-    chunk: Dict[str, Any] | None = None
-    source: str | None = None
+    s3_uri: str
+    title: Optional[str] = None
+    external_id: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+    chunk: Optional[Dict[str, int]] = None
+    source: Optional[str] = "cli"
 
 class QueryReq(BaseModel):
     q: str
+
+# ---------- Handlers ----------
+def health_handler():
+    return {"status": "ok", "ts": int(time.time()), "indexed": 0}
+
+def confirm_upload_handler(_: ConfirmUploadReq):
+    # pretend we queued indexing; return a simple receipt
+    return {"ok": True, "received": True}
+
+def query_handler(body: QueryReq):
+    # dummy answer so the route exists
+    return {"answer": f"Echo: {body.q}"}
+
+# ---------- Mount the same routes on BOTH root and /api ----------
+def mount(prefix: str = ""):
+    base = FastAPI()
+
+    @base.get(f"{prefix}/health")
+    def health():
+        return health_handler()
+
+    @base.post(f"{prefix}/rag/confirm_upload")
+    def confirm_upload(payload: ConfirmUploadReq):
+        return confirm_upload_handler(payload)
+
+    @base.post(f"{prefix}/rag/query")
+    def query(payload: QueryReq):
+        return query_handler(payload)
+
+    return base
+
+# expose at root
+root = mount(prefix="")
+app.mount("", root)
+
+# and also expose under /api
+api = mount(prefix="/api")
+app.mount("/api", api)
+
 
 # ----- Health ----------------------------------------------------------------
 @app.get("/api/health")
