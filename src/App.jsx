@@ -1,7 +1,11 @@
+// src/App.jsx
 import React from "react";
-import { BrowserRouter, Routes, Route, Link } from "react-router-dom";
-import MultiUploader from "./pages/MultiUploader";
-import CrawlUpload from "./pages/CrawlUpload";
+import MultiUploader from "./multi-uploader.jsx";
+
+export default function App() {
+  return <MultiUploader />;
+}
+
 
 function Home(){
   const base = import.meta.env.VITE_API_BASE || "(same origin)";
