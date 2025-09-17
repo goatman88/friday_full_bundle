@@ -1,55 +1,72 @@
 # friday-client.ps1
-# Full end-to-end client for Friday RAG API
+# Full end-to-end test client for Friday RAG API
 
-# ========== CONFIG ==========
+$ErrorActionPreference = "Stop"
+
+# -------------------------------
+# CONFIG
+# -------------------------------
 $domain    = "https://friday-099e.onrender.com"
-$uploadUrl = "$domain/api/rag/upload_url"
-$confirmUrl= "$domain/api/rag/confirm_upload"
-$queryUrl  = "$domain/api/rag/query"
+$ragBase   = "$domain/api/rag"
 $healthUrl = "$domain/api/health"
 
-Write-Host "`n>>> Checking health..." -ForegroundColor Cyan
-$health = Invoke-RestMethod -Uri $healthUrl -Method GET
-$health | Format-List
+# Test file to upload
+$testFilePath = "demo.txt"
+Set-Content -Path $testFilePath -Value "Hello from Friday PowerShell client!" -Encoding UTF8
 
-# ========== STEP 1: Request presigned URL ==========
-Write-Host "`n>>> Requesting presigned upload URL..." -ForegroundColor Cyan
+# -------------------------------
+# 1) Health Check
+# -------------------------------
+Write-Host "`n[1] Health check..." -ForegroundColor Cyan
+$health = Invoke-RestMethod -Uri $healthUrl -Method GET
+Write-Host "Health:" ($health | ConvertTo-Json -Depth 3) -ForegroundColor Green
+
+# -------------------------------
+# 2) Upload (Presigned URL)
+# -------------------------------
+Write-Host "`n[2] Upload request..." -ForegroundColor Cyan
 $presignReq = @{
-  filename     = "demo.txt"
-  content_type = "text/plain"
+    filename    = "demo.txt"
+    contentType = "text/plain"
 }
-$presign = Invoke-RestMethod -Uri $uploadUrl -Method POST `
-  -ContentType "application/json" `
-  -Body ($presignReq | ConvertTo-Json -Depth 5)
-$presign | Format-List
+$presign = Invoke-RestMethod -Uri "$ragBase/upload_url" -Method POST -ContentType "application/json" -Body ($presignReq | ConvertTo-Json -Depth 3)
 
 $putUrl = $presign.put_url
 $s3Uri  = $presign.s3_uri
 
-# ========== STEP 2: Upload file to S3 ==========
-Write-Host "`n>>> Uploading demo content to S3..." -ForegroundColor Cyan
-$bytes = [System.Text.Encoding]::UTF8.GetBytes("Hello from Friday client via PowerShell")
-Invoke-WebRequest -Uri $putUrl -Method PUT -Body $bytes -ContentType "text/plain"
+Write-Host "PUT to S3: $s3Uri" -ForegroundColor Yellow
+Invoke-WebRequest -Uri $putUrl -Method PUT -InFile $testFilePath -ContentType "text/plain"
 Write-Host "Upload complete." -ForegroundColor Green
 
-# ========== STEP 3: Confirm / index ==========
-Write-Host "`n>>> Confirming upload..." -ForegroundColor Cyan
+# -------------------------------
+# 3) Confirm Upload / Index
+# -------------------------------
+Write-Host "`n[3] Confirm upload..." -ForegroundColor Cyan
 $confirmReq = @{
-  s3_uri     = $s3Uri
-  title      = "demo_file"
-  external_id= "demo_1"
-  metadata   = @{ collection="default"; tags=@("test"); source="cli" }
-  chunk      = @{ size=1200; overlap=150 }
+    s3_uri      = $s3Uri
+    title       = "demo_file"
+    external_id = "demo_1"
+    metadata    = @{ collection = "default"; tags = @("test"); source = "cli" }
+    chunk       = @{ size = 1200; overlap = 150 }
 }
-$confirm = Invoke-RestMethod -Uri $confirmUrl -Method POST `
-  -ContentType "application/json" `
-  -Body ($confirmReq | ConvertTo-Json -Depth 6)
-$confirm | Format-List
+$confirmUrl = "$ragBase/confirm_upload"
+$confirm = Invoke-RestMethod -Uri $confirmUrl -Method POST -ContentType "application/json" -Body ($confirmReq | ConvertTo-Json -Depth 6)
+Write-Host "Confirm response:" ($confirm | ConvertTo-Json -Depth 3) -ForegroundColor Green
 
-# ========== STEP 4: Query ==========
-Write-Host "`n>>> Querying the index..." -ForegroundColor Cyan
-$q = @{ q = "what did the fox do?" }
-$response = Invoke-RestMethod -Uri $queryUrl -Method POST `
-  -ContentType "application/json" `
-  -Body ($q | ConvertTo-Json -Depth 5)
-$response | Format-List
+# -------------------------------
+# 4) Query
+# -------------------------------
+Write-Host "`n[4] Query index..." -ForegroundColor Cyan
+$queryUrl = "$ragBase/query"
+$q = @{ q = "What did the fox do?" }
+
+try {
+    $resp = Invoke-RestMethod -Uri $queryUrl -Method POST -ContentType "application/json" -Body ($q | ConvertTo-Json -Depth 5)
+    Write-Host "Query response:" ($resp | ConvertTo-Json -Depth 3) -ForegroundColor Green
+}
+catch {
+    Write-Host "Query failed with $($_.Exception.Message)" -ForegroundColor Red
+}
+
+Write-Host "`nDone ✅" -ForegroundColor Green
+
