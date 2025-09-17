@@ -1,34 +1,24 @@
-// src/App.jsx
-import React from "react";
-import MultiUploader from "./multi-uploader.jsx";
+import { Link, Routes, Route, Navigate } from 'react-router-dom'
+import MultiUploader from './multi-uploader.jsx'
+import CrawlUploader from './crawl-uploader.jsx'
+
+const Nav = () => (
+  <nav style={{display:'flex', gap:12, padding:12, borderBottom:'1px solid #eee'}}>
+    <Link to="/multi-uploader">Multi Upload</Link>
+    <Link to="/crawl-uploader">Single + Crawl</Link>
+  </nav>
+)
 
 export default function App() {
-  return <MultiUploader />;
-}
-
-
-function Home(){
-  const base = import.meta.env.VITE_API_BASE || "(same origin)";
   return (
-    <div style={{maxWidth:720, margin:"40px auto", fontFamily:"system-ui, sans-serif"}}>
-      <h1>Friday • Upload Tools</h1>
-      <p>Backend: <code>{base}</code></p>
-      <ul>
-        <li><Link to="/multi-uploader">Multi-file Upload (S3 presign)</Link></li>
-        <li><Link to="/crawl-upload">Single URL Crawl</Link></li>
-      </ul>
-    </div>
-  );
-}
-
-export default function App(){
-  return (
-    <BrowserRouter>
+    <div style={{maxWidth:920, margin:'0 auto', fontFamily:'system-ui, sans-serif'}}>
+      <Nav />
       <Routes>
-        <Route path="/" element={<Home/>}/>
-        <Route path="/multi-uploader" element={<MultiUploader/>}/>
-        <Route path="/crawl-upload" element={<CrawlUpload/>}/>
+        <Route path="/" element={<Navigate to="/crawl-uploader" replace />} />
+        <Route path="/multi-uploader" element={<MultiUploader />} />
+        <Route path="/crawl-uploader" element={<CrawlUploader />} />
+        <Route path="*" element={<div style={{padding:24}}>Not found</div>} />
       </Routes>
-    </BrowserRouter>
-  );
+    </div>
+  )
 }
