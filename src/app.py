@@ -8,10 +8,17 @@ from flask_cors import CORS
 
 # src/app.py
 from fastapi import FastAPI
-from rag_api import router as rag_router
 
 app = FastAPI()
-app.include_router(rag_router, prefix="/api/rag")  # <-- matches the /api/rag base you used
+
+@app.get("/api/rag/health")
+def health():
+    return {"status": "ok"}
+
+@app.post("/api/rag/confirm_upload")
+def confirm_upload(payload: dict):
+    return {"received": payload}
+
 
 # ---- Flask app (Render imports this symbol) ----
 app = Flask(__name__)
