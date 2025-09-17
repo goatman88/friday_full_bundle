@@ -6,6 +6,13 @@ from datetime import timedelta
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
+# src/app.py
+from fastapi import FastAPI
+from rag_api import router as rag_router
+
+app = FastAPI()
+app.include_router(rag_router, prefix="/api/rag")  # <-- matches the /api/rag base you used
+
 # ---- Flask app (Render imports this symbol) ----
 app = Flask(__name__)
 CORS(app)
