@@ -157,6 +157,19 @@ def query(req: QueryReq) -> QueryResp:
 def health():
     return {"status": "ok", "ts": int(time.time()), "indexed": len(INDEX)}
 
+@app.get("/api/health")
+def health():
+    return {"status": "ok"}
+
+@app.post("/api/rag/confirm_upload")
+def confirm_upload():
+    # handle S3 URI confirm
+    return {"status": "uploaded"}
+
+@app.post("/api/rag/query")
+def rag_query():
+    # handle query
+    return {"answer": "stub until RAG pipeline works"}
 
 # Mount the RAG router at two prefixes so your client can try either one.
 app.include_router(rag, prefix="/rag", tags=["rag"])
