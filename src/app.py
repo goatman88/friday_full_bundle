@@ -1,185 +1,143 @@
-# app.py
+# src/app.py
 import os
-import json
-from urllib.parse import urlparse
+import uuid
+from datetime import timedelta
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-import boto3
-from botocore.exceptions import ClientError, NoCredentialsError, EndpointConnectionError
 
+# ---- Flask app (Render imports this symbol) ----
+app = Flask(__name__)
+CORS(app)
 
-def create_app() -> Flask:
-    app = Flask(__name__)
-    CORS(app)
+# ---- Config / AWS client (lazy so missing creds don't crash /health) ----
+AWS_REGION = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")
+S3_BUCKET = os.getenv("S3_BUCKET")
+S3_PREFIX = (os.getenv("S3_PREFIX") or "uploads").strip("/")
 
-    # ---- Config via environment variables ----
-    AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
-    BUCKET_NAME = os.environ.get("S3_BUCKET")  # REQUIRED
-    # Optional: If your environment already has an instance/profile role, you can
-    # omit the explicit key/secret envs below.
-    AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
-    AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
-    AWS_SESSION_TOKEN = os.getenv("AWS_SESSION_TOKEN")  # optional
+def _s3():
+    # Lazy import so the app can boot even if boto3 isn't installed properly
+    import boto3  # type: ignore
+    return boto3.client("s3", region_name=AWS_REGION)
 
-    if not BUCKET_NAME:
-        raise RuntimeError("Missing required env var S3_BUCKET")
+# ---------- Health ----------
+@app.route("/api/health", methods=["GET"])
+def health():
+    return jsonify({"ok": True, "service": "friday-rag-backend"}), 200
 
-    # ---- AWS client ----
-    boto_kwargs = {"region_name": AWS_REGION}
-    if AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY:
-        boto_kwargs.update(
-            aws_access_key_id=AWS_ACCESS_KEY_ID,
-            aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
-            aws_session_token=AWS_SESSION_TOKEN,
+@app.route("/api/health/s3", methods=["GET"])
+def health_s3():
+    try:
+        if not (AWS_REGION and S3_BUCKET):
+            return jsonify({"ok": False, "error": "Missing AWS_REGION or S3_BUCKET"}), 400
+        _s3().list_objects_v2(Bucket=S3_BUCKET, MaxKeys=1)
+        return jsonify({"ok": True, "bucket": S3_BUCKET, "region": AWS_REGION}), 200
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+# ---------- RAG: Step 2 – presign upload ----------
+@app.route("/api/rag/upload_url", methods=["POST"])
+def presign_upload():
+    """
+    Body: { "filename": "demo.txt", "content_type": "text/plain" }
+    Returns: { put_url, s3_uri, get_url, expires_sec }
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    filename = body.get("filename") or f"file-{uuid.uuid4().hex}"
+    content_type = body.get("content_type") or "application/octet-stream"
+
+    if not (AWS_REGION and S3_BUCKET):
+        return jsonify({"error": "Server missing AWS_REGION or S3_BUCKET"}), 500
+
+    key = f"{S3_PREFIX}/{uuid.uuid4().hex}/{filename}"
+    expires = int(timedelta(minutes=10).total_seconds())
+
+    try:
+        s3 = _s3()
+        put_url = s3.generate_presigned_url(
+            ClientMethod="put_object",
+            Params={"Bucket": S3_BUCKET, "Key": key, "ContentType": content_type},
+            ExpiresIn=expires,
         )
-
-    s3 = boto3.client("s3", **boto_kwargs)
-
-    # ---- Helpers ----
-    def ok(data, status=200):
-        return jsonify({"ok": True, **({"data": data} if not isinstance(data, dict) else data)}), status
-
-    def fail(message, status=400, **extra):
-        payload = {"ok": False, "error": str(message)}
-        payload.update(extra)
-        return jsonify(payload), status
-
-    def s3_key_from_uri(s3_uri: str) -> tuple[str, str]:
-        """
-        Accepts 's3://bucket/key/...' and returns (bucket, key)
-        """
-        p = urlparse(s3_uri)
-        if p.scheme != "s3" or not p.netloc or not p.path:
-            raise ValueError("s3_uri must look like s3://bucket/key")
-        return p.netloc, p.path.lstrip("/")
-
-    # ---- Health ----
-    @app.get("/api/health")
-    def root_health():
-        return ok({"status": "ok", "service": "backend"})
-
-    @app.get("/api/rag/health")
-    def rag_health():
-        # Optionally test S3 access
-        try:
-            s3.list_buckets()
-            s3_ok = True
-        except Exception as e:
-            s3_ok = False
-        return ok({"status": "ok", "s3": s3_ok})
-
-    # ---- 1) Presign upload URL ----
-    @app.post("/api/rag/upload_url")
-    def upload_url():
-        try:
-            body = request.get_json(force=True) or {}
-            filename = body.get("filename") or "demo.txt"
-            content_type = body.get("content_type") or "text/plain"
-
-            # You can prepend a folder/prefix if you want:
-            key = filename if not body.get("prefix") else f"{body['prefix'].rstrip('/')}/{filename}"
-
-            put_url = s3.generate_presigned_url(
-                ClientMethod="put_object",
-                Params={
-                    "Bucket": BUCKET_NAME,
-                    "Key": key,
-                    "ContentType": content_type,
-                },
-                ExpiresIn=3600,
-            )
-
-            return ok({
+        s3_uri = f"s3://{S3_BUCKET}/{key}"
+        get_url = f"https://{S3_BUCKET}.s3.amazonaws.com/{key}"
+        return jsonify(
+            {
                 "put_url": put_url,
-                "s3_uri": f"s3://{BUCKET_NAME}/{key}",
-                "content_type": content_type,
-            })
-        except (NoCredentialsError, EndpointConnectionError) as e:
-            return fail("S3 credential/endpoint error", 500, detail=str(e))
-        except Exception as e:
-            return fail(e, 400)
-
-    # ---- 2) Confirm / "index" the uploaded file ----
-    @app.post("/api/rag/confirm_upload")
-    def confirm_upload():
-        """
-        Body example:
-        {
-          "s3_uri": "s3://bucket/path/demo.txt",
-          "title": "Demo file",
-          "external_id": "demo_1",
-          "metadata": {"collection": "default", "tags": ["test"], "source": "cli"},
-          "chunk": {"size": 1200, "overlap": 150}
-        }
-        """
-        try:
-            body = request.get_json(force=True) or {}
-            s3_uri = body.get("s3_uri")
-            if not s3_uri:
-                return fail("Missing 's3_uri'", 400)
-
-            bucket, key = s3_key_from_uri(s3_uri)
-
-            # Verify object exists
-            try:
-                head = s3.head_object(Bucket=bucket, Key=key)
-            except ClientError as e:
-                code = e.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
-                if code == 404:
-                    return fail("S3 object not found; did you PUT the file bytes?", 404)
-                raise
-
-            # Here is where you'd trigger your real indexing pipeline.
-            # For now we just echo back the request and file size.
-            size = head.get("ContentLength")
-
-            return ok({
-                "indexed": True,
                 "s3_uri": s3_uri,
-                "bytes": size,
-                "title": body.get("title"),
-                "external_id": body.get("external_id"),
-                "metadata": body.get("metadata"),
-                "chunk": body.get("chunk"),
-                "note": "This is a demo 'confirm/index' response. Plug in your actual indexer here."
-            })
-        except Exception as e:
-            return fail(e, 400)
+                "get_url": get_url,
+                "expires_sec": expires,
+            }
+        )
+    except Exception as e:
+        return jsonify({"error": f"presign failed: {e}"}), 500
 
-    # ---- 3) Optional: naive query stub (so your script doesn’t 404) ----
-    @app.post("/api/rag/query")
-    def rag_query():
-        try:
-            body = request.get_json(force=True) or {}
-            q = body.get("q") or body.get("query") or ""
-            return ok({
-                "answer": f"(demo) You asked: {q!r}. The real RAG answerer isn’t wired yet.",
-                "status": "stub"
-            })
-        except Exception as e:
-            return fail(e, 400)
+# ---------- RAG: Step 3 – confirm/index (stub) ----------
+@app.route("/api/rag/confirm_upload", methods=["POST"])
+def confirm_upload():
+    """
+    Body example you’ve been sending:
+    {
+      "s3_uri": "s3://bucket/path/demo.txt",
+      "title": "Demo file",
+      "external_id": "demo_1",
+      "metadata": {"collection": "default", "tags": ["test"], "source": "cli"},
+      "chunk": {"size": 1200, "overlap": 150}
+    }
+    This stub just acknowledges with a fake document id.
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    s3_uri = body.get("s3_uri")
+    if not s3_uri:
+        return jsonify({"error": "s3_uri is required"}), 400
 
-    # ---- Fallback OpenAPI/docs stubs (optional) ----
-    @app.get("/openapi.json")
-    def openapi_stub():
-        return ok({"title": "Demo API", "version": "0.0.1", "paths": [
-            "/api/health", "/api/rag/health", "/api/rag/upload_url",
-            "/api/rag/confirm_upload", "/api/rag/query"
-        ]})
+    doc_id = uuid.uuid4().hex
+    # TODO: download from S3 and index your content here.
+    return jsonify({"status": "indexed", "doc_id": doc_id, "received": body}), 200
 
-    @app.get("/docs")
-    def docs_stub():
-        return ok({"message": "Add Swagger UI here if you want."})
+# ---------- RAG: Step 4 – query (stub) ----------
+@app.route("/api/rag/query", methods=["POST"])
+def rag_query():
+    """
+    Body: { "q": "what did the fox do?" }
+    Returns a stub response so your PS step doesn't 404.
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    q = body.get("q") or ""
+    return jsonify(
+        {
+            "query": q,
+            "answers": [
+                {
+                    "text": "Indexing stub is active. Replace with your vector search results.",
+                    "score": 0.0,
+                    "source": None,
+                }
+            ],
+        }
+    ), 200
 
-    return app
+# ---------- Optional docs hint ----------
+@app.route("/api", methods=["GET"])
+def api_root():
+    return jsonify(
+        {
+            "ok": True,
+            "endpoints": [
+                "GET /api/health",
+                "GET /api/health/s3",
+                "POST /api/rag/upload_url",
+                "POST /api/rag/confirm_upload",
+                "POST /api/rag/query",
+            ],
+        }
+    )
 
-
+# Local dev
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", "8080"))
-    app = create_app()
-    # Render/Heroku-style: bind to 0.0.0.0
-    app.run(host="0.0.0.0", port=port, debug=os.getenv("DEBUG", "false").lower() == "true")
+    # When running locally: python src/app.py
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
