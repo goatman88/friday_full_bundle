@@ -1,12 +1,15 @@
-fastapi==0.111.1
-uvicorn[standard]==0.30.1
-starlette==0.37.2
+fastapi==0.110.1
+starlette==0.36.3
+uvicorn==0.30.1
 pydantic==2.8.2
 pydantic-core==2.20.1
 
-python-multipart==0.0.9
+# if you use S3 later
 boto3==1.34.131
-requests==2.32.3
+s3transfer==0.10.1
+
+# optional
+jinja2==3.1.4
 
 
 

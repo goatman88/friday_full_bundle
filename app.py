@@ -1,18 +1,20 @@
-from datetime import datetime, timezone
-from typing import Optional, Dict, Any
-from pydantic import BaseModel
-from fastapi import FastAPI, APIRouter, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-# app.py (root)
-"""
-Shim to expose the FastAPI instance for Render when it runs `uvicorn app:app`.
-The actual application code lives in src/app.py
-"""
+# app.py  (root)
+from fastapi import FastAPI
+from starlette.responses import JSONResponse
 
-from src.app import app  # Import the FastAPI instance
+# IMPORTANT: ensure src is a Python package (add src/__init__.py)
+# and that src/app.py exposes `api` (a FastAPI instance)
+from src.app import api as backend_api
 
+app = FastAPI(title="Friday Shim", docs_url=None, redoc_url=None, openapi_url=None)
 
-app = FastAPI(title="Friday RAG API", version="0.1.0", openapi_url="/openapi.json")
+# Mount the real backend **at /api**
+app.mount("/api", backend_api)
+
+@app.get("/")
+async def root():
+    return JSONResponse({"ok": True, "hint": "Backend is under /api/*"})
+
 
 # --- CORS ---
 app.add_middleware(
