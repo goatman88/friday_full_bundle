@@ -3,6 +3,9 @@ from typing import Optional, Dict, Any
 from pydantic import BaseModel
 from fastapi import FastAPI, APIRouter, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+# app.py (root)
+# Expose the FastAPI instance even if Render insists on "app:app"
+from src.app import app
 
 app = FastAPI(title="Friday RAG API", version="0.1.0", openapi_url="/openapi.json")
 
