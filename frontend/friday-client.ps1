@@ -1,162 +1,120 @@
-<#
-Usage examples:
-  # from the folder where this file lives
-  Set-ExecutionPolicy -Scope Process Bypass
-  .\friday-client.ps1 -Base "https://friday-099e.onrender.com" -DoQuery:$true
-
-Notes:
-- Pass the ROOT site only as -Base (https://…onrender.com). This script will detect
-  whether routes live under /api or not and pick the correct one automatically.
+<#  Friday RAG client (robust)
+    Usage:
+      Set-ExecutionPolicy -Scope Process Bypass
+      .\friday-client.ps1 -Base "https://friday-099e.onrender.com" -DoQuery:$true
 #>
 
 [CmdletBinding()]
 param(
-  [Parameter(Mandatory = $true)]
-  [string]$Base,                              # e.g. https://friday-099e.onrender.com  (root only)
-
-  [string]$Collection = "default",
-  [switch]$DoQuery = $false,                  # true to call /rag/query if exposed
-  [string]$FileName = "demo.txt",
-  [string]$ContentType = "text/plain",
-  [string]$InlineText = "Hello from Friday via PowerShell"
+  [Parameter(Mandatory=$true)]
+  [string]$Base,                          # e.g. https://friday-099e.onrender.com  (no trailing slash)
+  [switch]$DoQuery = $false,              # run /rag/query if present
+  [string]$QueryText = 'what did the fox do?'
 )
 
-# ---------------- helpers ----------------
-function Join-Url {
-  param([string]$a, [string]$b)
-  if (-not $a) { return $b }
-  if (-not $b) { return $a }
-  $aTrim = $a.TrimEnd('/')
-  $bTrim = $b.TrimStart('/')
-  return "$aTrim/$bTrim"
+# ---------- Helpers ----------
+function Normalize-Base([string]$b) {
+  $b = $b.Trim()
+  if ($b.EndsWith('/')) { $b = $b.TrimEnd('/') }
+  # Accept either root or /api, normalize to /api
+  if ($b -match '/api$') { return $b }
+  return "$b/api"
 }
 
+function Join-Url([string]$left, [string]$right) {
+  $left = $left.TrimEnd('/')
+  $right = $right.TrimStart('/')
+  return "$left/$right"
+}
+
+# Ensure TLS 1.2+
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+
+# A tiny retry wrapper (network flakes)
 function Invoke-WithRetry {
-  param([scriptblock]$Action, [int]$Retries = 5)
-  for ($i = 1; $i -le $Retries; $i++) {
+  param([scriptblock]$Action, [int]$Retries = 3)
+  for ($i=1; $i -le $Retries; $i++) {
     try { return & $Action }
     catch {
-      if ($i -lt $Retries) {
-        Write-Host ("Transient error, retrying in {0} ms... ({1}/{2})" -f ($i*1000), $i, $Retries) -ForegroundColor Yellow
-        Start-Sleep -Milliseconds ($i*1000)
-      } else { throw }
+      if ($i -lt $Retries) { Start-Sleep -Milliseconds 600 }
+      else { throw }
     }
   }
 }
 
-function Detect-ApiBase {
-  param([string]$root)
-  $candidates = @(
-    Join-Url $root "api",
-    $root
-  )
-  foreach ($cand in $candidates) {
-    $probe = Join-Url $cand "health"
-    try {
-      $resp = Invoke-RestMethod -Uri $probe -Method GET -TimeoutSec 10
-      Write-Host ("Health OK at {0}" -f $probe) -ForegroundColor Green
-      return $cand
-    } catch {
-      # some backends 404 the health page but still exist; try /docs as a hint
-      try {
-        $code = (Invoke-WebRequest -Uri (Join-Url $cand "docs") -UseBasicParsing -Method GET | Select-Object -ExpandProperty StatusCode) 2>$null
-        if ($code -ge 200 -and $code -lt 500) {
-          Write-Host ("Docs present at {0}, assuming base {1}" -f (Join-Url $cand "docs"), $cand) -ForegroundColor Yellow
-          return $cand
-        }
-      } catch {}
-    }
-  }
-  throw "Could not find a working API base under $root (tried '/api' and root)."
-}
+# ---------- Derive endpoints ----------
+$apiBase   = Normalize-Base $Base
+$healthUrl = Join-Url $apiBase 'health'
 
-# ---------- start ----------
+$uploadEP  = Join-Url $apiBase 'rag/upload_url'
+$putEP     = Join-Url $apiBase 'rag/upload_put/{token}'
+$confirmEP = Join-Url $apiBase 'rag/confirm_upload'
+$queryEP   = Join-Url $apiBase 'rag/query'
+
 Write-Host "`n== Friday client ==" -ForegroundColor Cyan
+Write-Host ("Using base: [{0}]" -f $apiBase) -ForegroundColor Gray
+Write-Host "Endpoints:" -ForegroundColor DarkGray
+Write-Host ("  health : {0}" -f $healthUrl)  -ForegroundColor DarkGray
+Write-Host ("  upload : {0}" -f $uploadEP)   -ForegroundColor DarkGray
+Write-Host ("  put    : {0}" -f $putEP)      -ForegroundColor DarkGray
+Write-Host ("  confirm: {0}" -f $confirmEP)  -ForegroundColor DarkGray
+Write-Host ("  query  : {0}" -f $queryEP)    -ForegroundColor DarkGray
 
-# 0) Normalize the root (strip trailing slash)
-$Base = $Base.TrimEnd('/')
+# Extra visibility if a stray space/newline sneaks in
+Write-Host ("Raw health URL (quoted): '{0}'" -f $healthUrl.Replace("`n","⏎").Replace("`r","␍")) -ForegroundColor DarkGray
 
-# 1) Detect whether routes are under /api or not
-Write-Host "`n[1] Detecting API base..." -ForegroundColor Cyan
-$ApiBase = Detect-ApiBase -root $Base
-Write-Host ("Using API base: {0}" -f $ApiBase) -ForegroundColor Green
-
-# 2) Show endpoints we’ll use
-$healthUrl  = Join-Url $ApiBase "health"
-$presignUrl = Join-Url $ApiBase "rag/upload_url"
-$confirmUrl = Join-Url $ApiBase "rag/confirm_upload"
-$queryUrl   = Join-Url $ApiBase "rag/query"
-Write-Host ("`nEndpoints:`n  health : {0}`n  upload : {1}`n  confirm: {2}`n  query  : {3}" -f $healthUrl,$presignUrl,$confirmUrl,$queryUrl) -ForegroundColor DarkGray
-
-# 3) Health
-Write-Host "`n[2] Health check..." -ForegroundColor Cyan
+# ---------- STEP 1: Health ----------
+Write-Host "`n[1] Health check..." -ForegroundColor Cyan
 try {
-  $health = Invoke-RestMethod -Uri $healthUrl -Method GET -TimeoutSec 10
-  Write-Host ("Health: {0}" -f ($health | ConvertTo-Json -Depth 3)) -ForegroundColor Green
-} catch {
-  $msg = $_.Exception.Message
-  Write-Host ("Health check failed: {0}. Continuing anyway..." -f $msg) -ForegroundColor Yellow
+  $headers = @{ 'Accept'='application/json'; 'User-Agent'='FridayPSClient/1.0' }
+  $health = Invoke-WithRetry { Invoke-RestMethod -Uri $healthUrl -Headers $headers -Method GET }
+  Write-Host ("OK -> {0}" -f ($health | ConvertTo-Json -Depth 3)) -ForegroundColor Green
+}
+catch {
+  Write-Host "Health check FAILED: $($_.Exception.Message)" -ForegroundColor Red
+  Write-Host "Tip: Copy this into your browser: $healthUrl" -ForegroundColor Yellow
+  return
 }
 
-# 4) Ask backend for S3 pre-signed URL
-Write-Host "`n[3] Requesting pre-signed URL..." -ForegroundColor Cyan
-$presignReq = @{
-  filename     = $FileName
-  content_type = $ContentType
-}
-$presign = Invoke-WithRetry { Invoke-RestMethod -Uri $presignUrl -Method POST -ContentType "application/json" -Body ($presignReq | ConvertTo-Json -Depth 5) }
-Write-Host ("Presign response:`n{0}" -f ($presign | ConvertTo-Json -Depth 5)) -ForegroundColor Green
-
-# Validate expected fields
-if (-not $presign.put_url -or -not $presign.s3_uri) {
-  throw "Presign response missing expected fields. Got: $($presign | ConvertTo-Json -Depth 5)"
-}
-$putUrl = [string]$presign.put_url
-$s3Uri  = [string]$presign.s3_uri
-
-# 5) PUT the content to S3
-Write-Host "`n[4] Uploading to S3 (PUT to presigned url)..." -ForegroundColor Cyan
-$bytes = [System.Text.Encoding]::UTF8.GetBytes($InlineText)
-Invoke-WebRequest -Uri $putUrl -Method PUT -Body $bytes -ContentType $ContentType | Out-Null
-Write-Host "Upload complete." -ForegroundColor Green
-
-# 6) Confirm / index
-Write-Host "`n[5] Confirm upload (index)..." -ForegroundColor Cyan
-$confirmReq = @{
-  s3_uri      = $s3Uri
-  title       = "demo_file"
-  external_id = "demo_1"
-  metadata    = @{ collection = $Collection; tags = @("test"); source = "cli" }
-  chunk       = @{ size = 1200; overlap = 150 }
-}
-$confirm = Invoke-WithRetry { Invoke-RestMethod -Uri $confirmUrl -Method POST -ContentType "application/json" -Body ($confirmReq | ConvertTo-Json -Depth 6) }
-Write-Host ("Confirm response:`n{0}" -f ($confirm | ConvertTo-Json -Depth 6)) -ForegroundColor Green
-
-# 7) Optional query (only if exposed and user asked)
-$hasQuery = $false
-try {
-  $probe = Invoke-WebRequest -Uri $queryUrl -Method OPTIONS -TimeoutSec 8 -UseBasicParsing
-  if ($probe.StatusCode -in 200,204,405,403) { $hasQuery = $true }
-} catch {}
-
-if ($DoQuery -and $hasQuery) {
-  Write-Host "`n[6] Querying the index..." -ForegroundColor Cyan
-  $q = @{ q = "what did the fox do?" }
+# ---------- STEP 2: (Optional) Query if route exists and user asked ----------
+if ($DoQuery) {
+  Write-Host "`n[2] Query probe..." -ForegroundColor Cyan
+  $hasQuery = $false
   try {
-    $resp = Invoke-WithRetry { Invoke-RestMethod -Uri $queryUrl -Method POST -ContentType "application/json" -Body ($q | ConvertTo-Json -Depth 5) }
-    Write-Host ("Query response:`n{0}" -f ($resp | ConvertTo-Json -Depth 5)) -ForegroundColor Green
-  } catch {
-    $code = $_.Exception.Response.StatusCode.value__ 2>$null
-    Write-Host "Query failed with HTTP $code" -ForegroundColor DarkYellow
-    throw
+    # An OPTIONS that returns either 200/204/405/403 proves the path exists
+    $probe = Invoke-WebRequest -Uri $queryEP -Method OPTIONS -TimeoutSec 8 -UseBasicParsing -Headers @{ 'User-Agent'='FridayPSClient/1.0' }
+    if ($probe.StatusCode -in 200,204,405,403) { $hasQuery = $true }
   }
-} elseif (-not $DoQuery) {
-  Write-Host "[6] Query step skipped (user disabled)." -ForegroundColor DarkYellow
-} else {
-  Write-Host "[6] Query step skipped (no /rag/query route exposed)." -ForegroundColor DarkYellow
+  catch {
+    $code = $_.Exception.Response.StatusCode.value__ 2>$null
+    if ($code -in 200,204,405,403) { $hasQuery = $true }
+  }
+
+  if ($hasQuery) {
+    Write-Host "[2] Querying the index..." -ForegroundColor Cyan
+    $q = @{ q = $QueryText }
+    try {
+      $resp = Invoke-WithRetry {
+        Invoke-RestMethod -Uri $queryEP -Method POST -ContentType "application/json" -Body ($q | ConvertTo-Json -Depth 5) -Headers $headers
+      }
+      Write-Host ("Query response: {0}" -f ($resp | ConvertTo-Json -Depth 5)) -ForegroundColor Green
+    }
+    catch {
+      $code = $_.Exception.Response.StatusCode.value__ 2>$null
+      Write-Host "Query failed with HTTP $code" -ForegroundColor DarkYellow
+      throw
+    }
+  }
+  else {
+    Write-Host "[2] Query step skipped (no /rag/query route exposed)." -ForegroundColor DarkYellow
+  }
+}
+else {
+  Write-Host "[2] Query step skipped (user disabled)." -ForegroundColor DarkYellow
 }
 
 Write-Host "`nDone." -ForegroundColor Green
+
 
 
 
