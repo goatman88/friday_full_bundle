@@ -1,19 +1,19 @@
 # src/app.py
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 from fastapi import FastAPI, APIRouter, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-# Main FastAPI app
+# ---- App ----
 app = FastAPI(
     title="Friday RAG API",
     version="0.1.0",
-    openapi_url="/openapi.json"
+    openapi_url="/openapi.json",
 )
 
-# CORS middleware
+# CORS (wide open for now; tighten later)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -22,23 +22,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# API router mounted under /api
+# Everything under /api
 api = APIRouter(prefix="/api")
 
-# -----------------------
-# Health route
-# -----------------------
+
 @api.get("/health")
 def health() -> Dict[str, Any]:
+    """Simple health endpoint used by your PowerShell client."""
     return {
         "status": "ok",
         "ts": int(datetime.now(timezone.utc).timestamp()),
-        "indexed": 0
+        "indexed": 0,
     }
 
-# -----------------------
-# Upload / RAG endpoints
-# -----------------------
+
+# ---------- RAG stubs (keep simple & predictable) ----------
 class UploadUrlResponse(BaseModel):
     token: str
     upload_url: str
@@ -61,10 +59,9 @@ class QueryBody(BaseModel):
 
 @api.post("/rag/upload_url", response_model=UploadUrlResponse)
 def get_upload_url() -> UploadUrlResponse:
-    # Stub: returns a fake presigned URL
     return UploadUrlResponse(
         token="demo-token",
-        upload_url="https://example.com/presigned-put-url"
+        upload_url="https://example.com/presigned-put-url",
     )
 
 
@@ -77,35 +74,27 @@ def upload_put(token: str):
 
 @api.post("/rag/confirm_upload")
 def confirm_upload(body: ConfirmUploadBody):
-    return {
-        "ok": True,
-        "indexed": 0,
-        "collection": body.collection
-    }
+    return {"ok": True, "indexed": 0, "collection": body.collection}
 
 
 @api.post("/rag/query")
-def rag_query(body: QueryBody):
-    return {
-        "answer": "No matches in index.",
-        "hits": []
-    }
+def rag_query(body: QueryBody) -> Dict[str, Any]:
+    return {"answer": "No matches in index.", "hits": []}  # type: ignore[reportUnknownArgumentType]
 
-# -----------------------
-# Root routes
-# -----------------------
+
+# ---------- Root helpers ----------
 @api.get("/")
-def api_root():
+def api_root() -> Dict[str, Any]:
     return {"ok": True, "routes": ["/api/health", "/api/rag/*"]}
 
 
-# Attach router
 app.include_router(api)
 
 
 @app.get("/")
 def root():
     return {"hello": "world", "docs": "/docs", "api": "/api"}
+
 
 
 
