@@ -1,29 +1,22 @@
-# Friday AI — Admin + OCR + Role Upload Limits + Qdrant
+# Friday API (Render)
 
-## Features
-- Chat UI `/chat`, Admin UI `/admin`
-- JWT auth: access + refresh, role-based (user/admin)
-- Uploads: PDF/TXT/MD/DOCX/HTML; optional OCR on DOCX images (Tesseract)
-- Vector store priority: **Qdrant** → **PGVector** → Redis fallback
-- RAG tools, JSON-mode, history export/clear
+## Deploy (Render)
+1. Create a **Web Service** from this repo.
+2. Environment:
+   - Runtime: Python 3.11+
+   - Build Command: `pip install -r requirements.txt`
+   - Start Command: *(leave blank to use Procfile)* or set  
+     `uvicorn src.app:app --host 0.0.0.0 --port $PORT`
+3. Deploy. When live, verify in browser:
+   - `https://<your-app>.onrender.com/api/health` → JSON `{"status":"ok",...}`
+   - `https://<your-app>.onrender.com/docs`
 
-## Quick Start (local)
-```bash
-python -m venv .venv && . .venv/bin/activate  # Windows: .venv\Scripts\Activate
-pip install -r requirements.txt
-# (optional) docker compose up -d pg qdrant
-# choose a vector backend:
-#   Qdrant:  export QDRANT_URL=http://localhost:6333
-#   PG:      export PG_URL=postgresql://friday:password@localhost:5432/fridaydb
-export OPENAI_API_KEY=sk-...
-python app.py
-## New Admin Goodies
-- **Vectors dashboard:** `/vectors` to browse/search/delete user chunks and view stats
-- **Maintenance:** `/maint` to run PG VACUUM/REINDEX or Qdrant optimize
-- **Tool streaming:** `/api/chat/stream_tools` — SSE emits:
-  - `{"type":"tool_event","tool":...,"args":...,"result":...}`
-  - `{"type":"delta","delta":"…"}` tokens
-  - `{"type":"usage",...}`, then `{"type":"done"}`
+## PowerShell client
+See `friday-client.ps1` in this folder. Example:
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\friday-client.ps1 -Base "https://<your-app>.onrender.com" -DoQuery:$true
+
 
 
 
