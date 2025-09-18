@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="Friday RAG API", version="0.1.0", openapi_url="/openapi.json")
 
-# --- CORS (safe wide-open for demo) ---
+# --- CORS ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -47,7 +47,6 @@ class QueryBody(BaseModel):
 # ---------- RAG Stubs ----------
 @api.post("/rag/upload_url", response_model=UploadUrlResponse)
 def get_upload_url() -> UploadUrlResponse:
-    # stubbed pre-signed URL flow
     return UploadUrlResponse(
         token="demo-token",
         upload_url="https://example.com/presigned-put-url"
@@ -61,12 +60,10 @@ def upload_put(token: str):
 
 @api.post("/rag/confirm_upload")
 def confirm_upload(body: ConfirmUploadBody):
-    # pretend to index
     return {"ok": True, "indexed": 0, "collection": body.collection}
 
 @api.post("/rag/query")
 def rag_query(body: QueryBody):
-    # Demo: always returns no hits (so your client shows “No matches in index.”)
     return {"answer": "No matches in index.", "hits": []}
 
 # root
@@ -80,6 +77,7 @@ app.include_router(api)
 @app.get("/")
 def root():
     return {"hello": "world", "docs": "/docs", "api": "/api"}
+
 
 
 
