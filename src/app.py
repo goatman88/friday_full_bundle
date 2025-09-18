@@ -2,11 +2,12 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import List, Optional
 
-api = FastAPI(title="Friday RAG API", version="0.1.0")
+app = FastAPI(title="Friday RAG API", version="0.1.0")
 
 # CORS (adjust origins as needed)
-api.add_middleware(
+app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
@@ -14,13 +15,12 @@ api.add_middleware(
     allow_headers=["*"],
 )
 
-@api.get("/health")
+# ---- Health ----
+@app.get("/api/health")
 async def health():
     return {"status": "ok"}
 
-# -------- Optional stubs you can fill later ----------
-from typing import List, Optional
-
+# ---- RAG stubs (safe placeholders; wire your real code later) ----
 class ConfirmUploadRequest(BaseModel):
     s3: str
     collection: str = "default"
@@ -28,7 +28,7 @@ class ConfirmUploadRequest(BaseModel):
     overlap: int = 150
     source: str = "cli"
 
-@api.post("/rag/confirm_upload")
+@app.post("/api/rag/confirm_upload")
 async def confirm_upload(req: ConfirmUploadRequest):
     # TODO: index your uploaded file(s)
     return {"ok": True, "indexed": 0}
@@ -37,10 +37,11 @@ class QueryRequest(BaseModel):
     q: str
     top_k: int = 5
 
-@api.post("/rag/query")
+@app.post("/api/rag/query")
 async def query(req: QueryRequest):
     # TODO: answer from your index
     return {"answer": "No matches in index.", "hits": []}
+
 
 
 
