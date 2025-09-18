@@ -1,9 +1,7 @@
-# Web stack (versions pinned to avoid the conflicts you saw)
 fastapi==0.111.1
-starlette>=0.37.2,<0.40      # fastapi 0.111.x needs starlette >=0.37.2
+starlette>=0.37.2,<0.40
 uvicorn[standard]==0.30.3
 
-# Data / utils
 pydantic==2.8.2
 pydantic-settings==2.3.4
 python-multipart==0.0.9
