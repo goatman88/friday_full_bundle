@@ -1,62 +1,37 @@
-<<<<<<< HEAD
-import { Link, Routes, Route, Navigate } from 'react-router-dom'
-import MultiUploader from './multi-uploader.jsx'
-import CrawlUploader from './crawl-uploader.jsx'
+import React, { useEffect, useState } from "react";
 
-const Nav = () => (
-  <nav style={{display:'flex', gap:12, padding:12, borderBottom:'1px solid #eee'}}>
-    <Link to="/multi-uploader">Multi Upload</Link>
-    <Link to="/crawl-uploader">Single + Crawl</Link>
-  </nav>
-)
+const API_BASE = import.meta.env.VITE_API_BASE || ""; // e.g. "" for same-origin, or "https://friday-099e.onrender.com"
 
 export default function App() {
-  return (
-    <div style={{maxWidth:920, margin:'0 auto', fontFamily:'system-ui, sans-serif'}}>
-      <Nav />
-      <Routes>
-        <Route path="/" element={<Navigate to="/crawl-uploader" replace />} />
-        <Route path="/multi-uploader" element={<MultiUploader />} />
-        <Route path="/crawl-uploader" element={<CrawlUploader />} />
-        <Route path="*" element={<div style={{padding:24}}>Not found</div>} />
-      </Routes>
-    </div>
-  )
-}
-=======
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
+  const [health, setHealth] = useState("checking…");
 
-function App() {
-  const [count, setCount] = useState(0)
+  useEffect(() => {
+    const url = `${API_BASE}/api/health`;
+    fetch(url)
+      .then(r => r.json())
+      .then(j => setHealth(JSON.stringify(j)))
+      .catch(e => setHealth(`error: ${e.message}`));
+  }, []);
 
   return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.jsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
+    <div style={{ padding: 24, fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif" }}>
+      <h1>Friday Frontend</h1>
+      <p><b>Health:</b> {health}</p>
+
+      <hr />
+
+      <p>
+        Try POSTing a RAG query from the console:
       </p>
-    </>
-  )
+      <pre style={{ background: "#f6f8fa", padding: 12, borderRadius: 6 }}>
+{`fetch("${API_BASE}/api/rag/query", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ q: "what did the fox do?", top_k: 5, index: "both" })
+}).then(r => r.json()).then(console.log);`}
+      </pre>
+    </div>
+  );
 }
 
-export default App
->>>>>>> ed49001 (Add Friday PowerShell client)
+
