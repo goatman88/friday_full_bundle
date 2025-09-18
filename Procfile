@@ -1,4 +1,5 @@
-web: PYTHONPATH=src python -m waitress --listen=0.0.0.0:$PORT src.wsgi:app
+web: uvicorn app:app --host 0.0.0.0 --port $PORT
+
 
 
 
