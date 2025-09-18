@@ -1,164 +1,87 @@
 <!doctype html>
-<html lang="en">
+<html>
 <head>
   <meta charset="utf-8" />
-  <title>Friday RAG Frontend</title>
+  <title>Friday RAG (Light)</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
-    :root { font-family: ui-sans-serif, system-ui, Segoe UI, Roboto, Helvetica, Arial, Apple Color Emoji, Segoe UI Emoji; }
-    body { margin: 0; padding: 24px; background: #0b1220; color: #e6edf3; }
-    .wrap { max-width: 880px; margin: 0 auto; }
-    h1 { margin: 0 0 8px; font-size: 28px; }
-    .sub { color: #8b93a1; margin-bottom: 24px; }
-    .panel { background: #0f1a2b; border: 1px solid #22304a; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
-    label { display:block; font-size: 14px; color:#9fb0cb; margin-bottom:6px; }
-    input[type=text] { width:100%; padding:10px 12px; border-radius:8px; border:1px solid #22304a; background:#0b1526; color:#e6edf3; }
-    button { appearance:none; background:#3b82f6; color:white; border:none; padding:10px 14px; border-radius:8px; cursor:pointer; font-weight:600; }
-    button.secondary { background:#1f2937; }
-    button:disabled { opacity:.5; cursor:not-allowed; }
-    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-    .row > * { flex: 0 0 auto; }
-    .code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space:pre-wrap; background:#0b1526; border:1px solid #22304a; border-radius:8px; padding:12px; color:#d1e7ff; }
-    .muted { color:#8b93a1; }
-    .ok { color:#34d399; font-weight:700; }
-    .err { color:#f87171; font-weight:700; }
-    .spacer { height: 8px; }
-    a { color:#93c5fd; text-decoration:none; }
-    a:hover { text-decoration:underline; }
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial;margin:24px;max-width:860px}
+    textarea,input,button{font:inherit}
+    textarea{width:100%;min-height:110px}
+    pre{background:#111;color:#eee;padding:12px;border-radius:8px;overflow:auto}
+    .row{display:flex;gap:12px;align-items:center;margin:8px 0}
+    .row > *{flex:1}
+    button{flex:0 0 auto;padding:10px 14px;border-radius:8px;border:1px solid #ccc;cursor:pointer}
+    code{background:#f5f5f5;padding:2px 6px;border-radius:6px}
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <h1>Friday RAG Frontend</h1>
-    <div class="sub">Tiny UI to hit your live API.</div>
+  <h1>Friday RAG (Light)</h1>
+  <p>API base: <code id="api"></code></p>
 
-    <div class="panel">
-      <label for="base">API Base</label>
-      <input id="base" type="text" placeholder="https://<your-app>.onrender.com/api" />
-      <div class="spacer"></div>
-      <div class="row">
-        <button id="useCurrent">Use current origin (/api)</button>
-        <button id="saveBase" class="secondary">Save</button>
-        <span class="muted" id="savedMsg"></span>
-      </div>
-    </div>
-
-    <div class="panel">
-      <div class="row">
-        <button id="healthBtn">Check health</button>
-        <span id="healthStatus" class="muted">—</span>
-      </div>
-      <div class="spacer"></div>
-      <div class="code" id="healthOut">{ }</div>
-    </div>
-
-    <div class="panel">
-      <label for="q">Ask the index</label>
-      <input id="q" type="text" placeholder="what did the fox do?" />
-      <div class="spacer"></div>
-      <button id="queryBtn">Query</button>
-      <div class="spacer"></div>
-      <div class="code" id="queryOut">{ }</div>
-      <div class="muted">Note: backend returns stubbed answer until you implement indexing.</div>
-    </div>
-
-    <div class="panel">
-      <strong>Upload/Confirm (stub)</strong>
-      <div class="spacer"></div>
-      <div class="row">
-        <button id="confirmBtn" class="secondary">Call /rag/confirm_upload</button>
-      </div>
-      <div class="spacer"></div>
-      <div class="code" id="confirmOut">{ }</div>
-      <div class="muted">Later you’ll replace this with real S3 upload + indexing.</div>
-    </div>
-
-    <div class="muted">
-      Backend routes defined in FastAPI (health, query, confirm stubs). :contentReference[oaicite:2]{index=2}
-    </div>
+  <h2>1) Health</h2>
+  <div class="row">
+    <button id="btnHealth">Check health</button>
+    <span id="healthOut"></span>
   </div>
 
-  <script>
-    // --- Simple state
-    const baseInput = document.getElementById('base');
-    const savedMsg = document.getElementById('savedMsg');
+  <h2>2) Upload / index documents</h2>
+  <p>One chunk per line: <em>id::text</em></p>
+  <textarea id="docs" placeholder="doc1::The quick brown fox...\ndoc2::FastAPI is a modern, fast web framework..."></textarea>
+  <div class="row">
+    <label><input type="checkbox" id="append"> Append to existing index (uncheck = replace)</label>
+    <button id="btnUpload">Confirm upload</button>
+  </div>
+  <pre id="uploadOut"></pre>
 
-    const loadBase = () => localStorage.getItem('apiBase') || '';
-    const saveBase = (v) => { localStorage.setItem('apiBase', v); savedMsg.textContent = 'Saved'; setTimeout(()=>savedMsg.textContent='', 1200); };
-    const apiBase = () => (baseInput.value || '').replace(/\/+$/,''); // no trailing slash
+  <h2>3) Query</h2>
+  <div class="row">
+    <input id="q" placeholder="What did the fox do?" />
+    <input id="k" type="number" min="1" max="20" value="5" style="flex:0 0 100px" />
+    <button id="btnQuery">Ask</button>
+  </div>
+  <pre id="queryOut"></pre>
 
-    const toJSON = async (resp) => {
-      const text = await resp.text();
-      try { return JSON.parse(text); } catch { return { raw: text, status: resp.status }; }
-    };
+<script>
+const API = (location.origin.includes("localhost") || location.origin.startsWith("http://192.168"))
+  ? "http://localhost:10000/api"
+  : location.origin + "/api";
+document.getElementById("api").textContent = API;
 
-    function setOut(id, data) {
-      document.getElementById(id).textContent = typeof data === 'string'
-        ? data
-        : JSON.stringify(data, null, 2);
-    }
+async function j(url, opts){ const r = await fetch(url,opts); if(!r.ok) throw new Error(await r.text()); return r.json(); }
 
-    // --- UI bindings
-    document.getElementById('useCurrent').onclick = () => {
-      baseInput.value = window.location.origin + '/api';
-    };
-    document.getElementById('saveBase').onclick = () => saveBase(baseInput.value);
+document.getElementById("btnHealth").onclick = async ()=>{
+  try {
+    const out = await j(`${API}/health`);
+    document.getElementById("healthOut").textContent = JSON.stringify(out);
+  } catch (e) { document.getElementById("healthOut").textContent = e; }
+};
 
-    document.getElementById('healthBtn').onclick = async () => {
-      const url = apiBase() + '/health';
-      const statusEl = document.getElementById('healthStatus');
-      statusEl.textContent = '…';
-      try {
-        const r = await fetch(url, { method: 'GET' });
-        const data = await toJSON(r);
-        setOut('healthOut', data);
-        statusEl.innerHTML = r.ok ? '<span class="ok">OK</span>' : '<span class="err">Error</span>';
-      } catch (e) {
-        setOut('healthOut', { error: String(e) });
-        statusEl.innerHTML = '<span class="err">Error</span>';
-      }
-    };
+document.getElementById("btnUpload").onclick = async ()=>{
+  const lines = document.getElementById("docs").value.split("\n").map(s=>s.trim()).filter(Boolean);
+  const docs = lines.map((ln,i)=>{
+    const ix = ln.indexOf("::");
+    return ix>0 ? {id: ln.slice(0,ix), text: ln.slice(ix+2)} : {id: `doc${i+1}`, text: ln};
+  });
+  const payload = { documents: docs, replace: !document.getElementById("append").checked };
+  try{
+    const out = await j(`${API}/rag/confirm_upload`, {
+      method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(payload)
+    });
+    document.getElementById("uploadOut").textContent = JSON.stringify(out, null, 2);
+  }catch(e){ document.getElementById("uploadOut").textContent = e; }
+};
 
-    document.getElementById('queryBtn').onclick = async () => {
-      const q = document.getElementById('q').value || 'what did the fox do?';
-      const url = apiBase() + '/rag/query';
-      try {
-        const r = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ q })
-        });
-        const data = await toJSON(r);
-        setOut('queryOut', data);
-      } catch (e) {
-        setOut('queryOut', { error: String(e) });
-      }
-    };
-
-    document.getElementById('confirmBtn').onclick = async () => {
-      const url = apiBase() + '/rag/confirm_upload';
-      const body = {
-        s3: 's3://demo',
-        collection: 'default',
-        chunk_size: 1200,
-        overlap: 150,
-        source: 'frontend'
-      };
-      try {
-        const r = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body)
-        });
-        const data = await toJSON(r);
-        setOut('confirmOut', data);
-      } catch (e) {
-        setOut('confirmOut', { error: String(e) });
-      }
-    };
-
-    // init
-    baseInput.value = loadBase() || 'https://friday-099e.onrender.com/api'; // you can overwrite & Save
-  </script>
+document.getElementById("btnQuery").onclick = async ()=>{
+  const payload = { q: document.getElementById("q").value, top_k: Number(document.getElementById("k").value || 5) };
+  try{
+    const out = await j(`${API}/rag/query`, {
+      method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(payload)
+    });
+    document.getElementById("queryOut").textContent = JSON.stringify(out, null, 2);
+  }catch(e){ document.getElementById("queryOut").textContent = e; }
+};
+</script>
 </body>
 </html>
+
