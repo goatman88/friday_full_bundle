@@ -1,87 +1,22 @@
 <!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>Friday RAG (Light)</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial;margin:24px;max-width:860px}
-    textarea,input,button{font:inherit}
-    textarea{width:100%;min-height:110px}
-    pre{background:#111;color:#eee;padding:12px;border-radius:8px;overflow:auto}
-    .row{display:flex;gap:12px;align-items:center;margin:8px 0}
-    .row > *{flex:1}
-    button{flex:0 0 auto;padding:10px 14px;border-radius:8px;border:1px solid #ccc;cursor:pointer}
-    code{background:#f5f5f5;padding:2px 6px;border-radius:6px}
-  </style>
-</head>
-<body>
-  <h1>Friday RAG (Light)</h1>
-  <p>API base: <code id="api"></code></p>
-
-  <h2>1) Health</h2>
-  <div class="row">
-    <button id="btnHealth">Check health</button>
-    <span id="healthOut"></span>
-  </div>
-
-  <h2>2) Upload / index documents</h2>
-  <p>One chunk per line: <em>id::text</em></p>
-  <textarea id="docs" placeholder="doc1::The quick brown fox...\ndoc2::FastAPI is a modern, fast web framework..."></textarea>
-  <div class="row">
-    <label><input type="checkbox" id="append"> Append to existing index (uncheck = replace)</label>
-    <button id="btnUpload">Confirm upload</button>
-  </div>
-  <pre id="uploadOut"></pre>
-
-  <h2>3) Query</h2>
-  <div class="row">
-    <input id="q" placeholder="What did the fox do?" />
-    <input id="k" type="number" min="1" max="20" value="5" style="flex:0 0 100px" />
-    <button id="btnQuery">Ask</button>
-  </div>
-  <pre id="queryOut"></pre>
-
-<script>
-const API = (location.origin.includes("localhost") || location.origin.startsWith("http://192.168"))
-  ? "http://localhost:10000/api"
-  : location.origin + "/api";
-document.getElementById("api").textContent = API;
-
-async function j(url, opts){ const r = await fetch(url,opts); if(!r.ok) throw new Error(await r.text()); return r.json(); }
-
-document.getElementById("btnHealth").onclick = async ()=>{
-  try {
-    const out = await j(`${API}/health`);
-    document.getElementById("healthOut").textContent = JSON.stringify(out);
-  } catch (e) { document.getElementById("healthOut").textContent = e; }
-};
-
-document.getElementById("btnUpload").onclick = async ()=>{
-  const lines = document.getElementById("docs").value.split("\n").map(s=>s.trim()).filter(Boolean);
-  const docs = lines.map((ln,i)=>{
-    const ix = ln.indexOf("::");
-    return ix>0 ? {id: ln.slice(0,ix), text: ln.slice(ix+2)} : {id: `doc${i+1}`, text: ln};
-  });
-  const payload = { documents: docs, replace: !document.getElementById("append").checked };
-  try{
-    const out = await j(`${API}/rag/confirm_upload`, {
-      method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(payload)
-    });
-    document.getElementById("uploadOut").textContent = JSON.stringify(out, null, 2);
-  }catch(e){ document.getElementById("uploadOut").textContent = e; }
-};
-
-document.getElementById("btnQuery").onclick = async ()=>{
-  const payload = { q: document.getElementById("q").value, top_k: Number(document.getElementById("k").value || 5) };
-  try{
-    const out = await j(`${API}/rag/query`, {
-      method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(payload)
-    });
-    document.getElementById("queryOut").textContent = JSON.stringify(out, null, 2);
-  }catch(e){ document.getElementById("queryOut").textContent = e; }
-};
-</script>
-</body>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="robots" content="noindex" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Friday Static</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 24px; }
+      code { background:#f3f3f3; padding:2px 6px; border-radius:4px; }
+    </style>
+  </head>
+  <body>
+    <h1>Friday Static Folder</h1>
+    <p>
+      This is a static fallback in <code>/public</code>. Your React app entry is
+      <code>/index.html</code> at the project root.
+    </p>
+  </body>
 </html>
+
 
