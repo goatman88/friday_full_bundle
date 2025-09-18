@@ -1,15 +1,19 @@
+# src/app.py
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
-from pydantic import BaseModel
+
 from fastapi import FastAPI, APIRouter, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-# app.py (root)
-# Expose the FastAPI instance even if Render insists on "app:app"
-from src.app import app
+from pydantic import BaseModel
 
-app = FastAPI(title="Friday RAG API", version="0.1.0", openapi_url="/openapi.json")
+# Main FastAPI app
+app = FastAPI(
+    title="Friday RAG API",
+    version="0.1.0",
+    openapi_url="/openapi.json"
+)
 
-# --- CORS ---
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,9 +22,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# API router mounted under /api
 api = APIRouter(prefix="/api")
 
-# ---------- Health ----------
+# -----------------------
+# Health route
+# -----------------------
 @api.get("/health")
 def health() -> Dict[str, Any]:
     return {
@@ -29,10 +36,13 @@ def health() -> Dict[str, Any]:
         "indexed": 0
     }
 
-# ---------- RAG Models ----------
+# -----------------------
+# Upload / RAG endpoints
+# -----------------------
 class UploadUrlResponse(BaseModel):
     token: str
     upload_url: str
+
 
 class ConfirmUploadBody(BaseModel):
     s3: Optional[str] = None
@@ -42,18 +52,21 @@ class ConfirmUploadBody(BaseModel):
     overlap: Optional[int] = 150
     source: Optional[str] = "cli"
 
+
 class QueryBody(BaseModel):
     q: str
     top_k: Optional[int] = 5
     collection: Optional[str] = "default"
 
-# ---------- RAG Stubs ----------
+
 @api.post("/rag/upload_url", response_model=UploadUrlResponse)
 def get_upload_url() -> UploadUrlResponse:
+    # Stub: returns a fake presigned URL
     return UploadUrlResponse(
         token="demo-token",
         upload_url="https://example.com/presigned-put-url"
     )
+
 
 @api.put("/rag/upload_put/{token}")
 def upload_put(token: str):
@@ -61,25 +74,39 @@ def upload_put(token: str):
         raise HTTPException(status_code=400, detail="Invalid token")
     return {"ok": True, "token": token}
 
+
 @api.post("/rag/confirm_upload")
 def confirm_upload(body: ConfirmUploadBody):
-    return {"ok": True, "indexed": 0, "collection": body.collection}
+    return {
+        "ok": True,
+        "indexed": 0,
+        "collection": body.collection
+    }
+
 
 @api.post("/rag/query")
 def rag_query(body: QueryBody):
-    return {"answer": "No matches in index.", "hits": []}
+    return {
+        "answer": "No matches in index.",
+        "hits": []
+    }
 
-# root
+# -----------------------
+# Root routes
+# -----------------------
 @api.get("/")
 def api_root():
     return {"ok": True, "routes": ["/api/health", "/api/rag/*"]}
 
-# mount
+
+# Attach router
 app.include_router(api)
+
 
 @app.get("/")
 def root():
     return {"hello": "world", "docs": "/docs", "api": "/api"}
+
 
 
 
