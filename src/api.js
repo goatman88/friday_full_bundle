@@ -1,51 +1,72 @@
-// src/api.js
-const DEFAULT_BASE =
-  (typeof window !== "undefined" ? window.location.origin : "") + "/api";
+// Simple client for Friday backend.
+// Figures out the API base from env, or falls back to same-origin /api.
 
-const API_BASE = import.meta?.env?.VITE_API_BASE?.replace(/\/+$/, "") || DEFAULT_BASE;
+const envBase = import.meta.env?.VITE_API_BASE?.trim();
+const defaultBase =
+  (typeof window !== "undefined" && `${window.location.origin}/api`) ||
+  "http://localhost:8000/api";
 
-async function json(res) {
-  const text = await res.text();
-  try { return JSON.parse(text || "{}"); } catch { return { raw: text }; }
+export const API_BASE = envBase || defaultBase;
+
+async function ok(res) {
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`${res.status} ${res.statusText} – ${text}`.trim());
+  }
+  return res;
 }
 
-export async function getHealth() {
-  const res = await fetch(`${API_BASE}/health`);
-  if (!res.ok) throw new Error(`Health failed: ${res.status}`);
-  return json(res);
+export async function health() {
+  const r = await ok(fetch(`${API_BASE}/health`));
+  return r.json();
 }
 
-export async function createUploadUrl() {
-  const res = await fetch(`${API_BASE}/rag/upload_url`, { method: "POST" });
-  if (!res.ok) throw new Error(`upload_url failed: ${res.status}`);
-  return json(res); // { token, put_url }
+// === RAG ingest/upload ===
+
+export async function requestUploadUrl() {
+  const r = await ok(fetch(`${API_BASE}/rag/upload_url`, { method: "POST" }));
+  return r.json(); // { token, put_url }
 }
 
-export async function putBytes(putUrl, bytes, contentType = "text/plain") {
-  const res = await fetch(putUrl, { method: "PUT", headers: { "Content-Type": contentType }, body: bytes });
-  if (!res.ok) throw new Error(`PUT failed: ${res.status}`);
-  return true;
+// PUT raw bytes to the pre-signed URL (or echo URL)
+export async function putToUrl(putUrl, bytes, contentType = "text/plain") {
+  const r = await ok(
+    fetch(putUrl, {
+      method: "PUT",
+      headers: { "Content-Type": contentType },
+      body: bytes,
+    })
+  );
+  return r.ok;
 }
 
-export async function confirmUpload({ token, collection = "default", chunk_size = 800, overlap = 120, index = "both" }) {
-  const payload = { token, collection, chunk_size, overlap, index };
-  const res = await fetch(`${API_BASE}/rag/confirm_upload`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) throw new Error(`confirm_upload failed: ${res.status}`);
-  return json(res); // { indexed, chunks, collection, index }
+// Confirm the upload and ask backend to chunk & index
+export async function confirmUpload({
+  token,
+  collection = "default",
+  chunk_size = 800,
+  overlap = 120,
+  index = "both", // "faiss" | "s3" | "both"
+}) {
+  const r = await ok(
+    fetch(`${API_BASE}/rag/confirm_upload`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, collection, chunk_size, overlap, index }),
+    })
+  );
+  return r.json(); // { indexed, chunks, collection, index }
 }
 
+// Query
 export async function queryRag({ q, top_k = 5, index = "both" }) {
-  const res = await fetch(`${API_BASE}/rag/query`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ q, top_k, index }),
-  });
-  if (!res.ok) throw new Error(`query failed: ${res.status}`);
-  return json(res); // { answer, hits }
+  const r = await ok(
+    fetch(`${API_BASE}/rag/query`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ q, top_k, index }),
+    })
+  );
+  return r.json(); // { answer, hits }
 }
 
-export { API_BASE };
