@@ -1,33 +1,55 @@
 ﻿import React, { useEffect, useState } from 'react'
-import { health, queryRag } from './api'
-import MultiUploader from './multi-uploader.jsx'
+import { health } from './api.js'
 
 export default function App() {
-  const [h, setH] = useState(null)
-  const [q, setQ] = useState('what did the fox do?')
-  const [ans, setAns] = useState(null)
+  const [status, setStatus] = useState('checking...')
+  const [answer, setAnswer] = useState('')
+  const [question, setQuestion] = useState('what did the fox do?')
 
-  useEffect(() => { health().then(setH).catch(e=>setH({error:String(e)})) }, [])
+  useEffect(() => {
+    health().then(
+      () => setStatus('OK'),
+      (e) => setStatus('ERROR: ' + e.message)
+    )
+  }, [])
+
+  async function ask() {
+    try {
+      const r = await fetch(`${import.meta.env.VITE_API_BASE}/rag/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ top_k: 5, index: 'both', q: question })
+      })
+      const data = await r.json()
+      setAnswer(data.answer ?? JSON.stringify(data))
+    } catch (e) {
+      setAnswer('Query failed: ' + e.message)
+    }
+  }
 
   return (
-    <div style={{maxWidth:900, margin:'32px auto', fontFamily:'system-ui, Arial'}}>
+    <div style={{ maxWidth: 820, margin: '40px auto', fontFamily: 'system-ui, Arial' }}>
       <h1>🚀 Friday Frontend</h1>
-      <p style={{opacity:.8, marginTop:-8}}>
-        API: {import.meta.env.VITE_API_BASE || '(unset)'} · Health: {h ? JSON.stringify(h) : '…'}
-      </p>
-
-      <MultiUploader />
-
-      <div style={{marginTop:24, padding:16, border:'1px solid #ddd', borderRadius:8}}>
-        <h3 style={{marginTop:0}}>Ask RAG</h3>
-        <div style={{display:'flex', gap:8}}>
-          <input style={{flex:1}} value={q} onChange={e=>setQ(e.target.value)} />
-          <button onClick={async()=> setAns(await queryRag(q, 5, 'both'))}>Ask</button>
-        </div>
-        {ans && <pre style={{background:'#f6f6f6', padding:12, borderRadius:6, overflow:'auto', marginTop:12}}>
-          {JSON.stringify(ans, null, 2)}
-        </pre>}
+      <div style={{ color: status.startsWith('OK') ? 'green' : 'crimson' }}>
+        API: {import.meta.env.VITE_API_BASE} — Health: {status}
       </div>
+
+      <hr />
+
+      <label>Ask RAG</label>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <input
+          style={{ flex: 1, padding: 8 }}
+          value={question}
+          onChange={(e) => setQuestion(e.target.value)}
+        />
+        <button onClick={ask}>Ask</button>
+      </div>
+
+      <pre style={{ background: '#f6f6f6', padding: 12, marginTop: 16 }}>
+        {answer}
+      </pre>
     </div>
   )
 }
+
