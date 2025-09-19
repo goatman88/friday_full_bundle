@@ -1,37 +1,107 @@
 import React, { useEffect, useState } from "react";
+import MultiUploader from "./multi-uploader";
+import { API_BASE, health, queryRag } from "./api";
 
-const API_BASE = import.meta.env.VITE_API_BASE || ""; // e.g. "" for same-origin, or "https://friday-099e.onrender.com"
+function QueryBox() {
+  const [q, setQ] = useState("what did the fox do?");
+  const [index, setIndex] = useState("both");
+  const [busy, setBusy] = useState(false);
+  const [answer, setAnswer] = useState("");
+  const [hits, setHits] = useState({});
+
+  async function onAsk(e) {
+    e.preventDefault();
+    setBusy(true);
+    setAnswer("");
+    setHits({});
+    try {
+      const data = await queryRag({ q, top_k: 5, index });
+      setAnswer(data.answer ?? "");
+      setHits(data.hits ?? {});
+    } catch (err) {
+      setAnswer(`Error: ${err.message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section style={{ marginTop: 24 }}>
+      <h2>🔎 Query</h2>
+      <form onSubmit={onAsk} style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <input
+          style={{ flex: "1 1 420px", minWidth: 260 }}
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Ask your indexed data…"
+        />
+        <select value={index} onChange={(e) => setIndex(e.target.value)}>
+          <option value="both">both</option>
+          <option value="faiss">faiss (local)</option>
+          <option value="s3">s3 (remote)</option>
+        </select>
+        <button type="submit" disabled={busy || !q.trim()}>
+          {busy ? "Asking…" : "Ask"}
+        </button>
+      </form>
+
+      {answer && (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontWeight: 600 }}>Answer</div>
+          <div style={{ padding: "8px 10px", background: "#f6f7fb", borderRadius: 8 }}>{answer}</div>
+        </div>
+      )}
+
+      {hits && Object.keys(hits).length > 0 && (
+        <details style={{ marginTop: 8 }}>
+          <summary style={{ cursor: "pointer" }}>Show hits</summary>
+          <pre
+            style={{
+              background: "#0b1020",
+              color: "#d7e6ff",
+              padding: 12,
+              borderRadius: 8,
+              overflowX: "auto",
+              marginTop: 8,
+            }}
+          >
+{JSON.stringify(hits, null, 2)}
+          </pre>
+        </details>
+      )}
+    </section>
+  );
+}
 
 export default function App() {
-  const [health, setHealth] = useState("checking…");
+  const [healthState, setHealthState] = useState("checking…");
 
   useEffect(() => {
-    const url = `${API_BASE}/api/health`;
-    fetch(url)
-      .then(r => r.json())
-      .then(j => setHealth(JSON.stringify(j)))
-      .catch(e => setHealth(`error: ${e.message}`));
+    let mounted = true;
+    (async () => {
+      try {
+        const h = await health();
+        mounted && setHealthState(h?.status || JSON.stringify(h));
+      } catch (e) {
+        mounted && setHealthState(`error: ${e.message}`);
+      }
+    })();
+    return () => (mounted = false);
   }, []);
 
   return (
-    <div style={{ padding: 24, fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif" }}>
-      <h1>Friday Frontend</h1>
-      <p><b>Health:</b> {health}</p>
-
-      <hr />
-
-      <p>
-        Try POSTing a RAG query from the console:
+    <main style={{ maxWidth: 960, margin: "32px auto", padding: "0 16px", lineHeight: 1.45 }}>
+      <h1 style={{ marginBottom: 0 }}>🚀 Friday Frontend is Live</h1>
+      <p style={{ color: "#666", marginTop: 8 }}>
+        API: <code>{API_BASE}</code> • Health: <strong>{healthState}</strong>
       </p>
-      <pre style={{ background: "#f6f8fa", padding: 12, borderRadius: 6 }}>
-{`fetch("${API_BASE}/api/rag/query", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ q: "what did the fox do?", top_k: 5, index: "both" })
-}).then(r => r.json()).then(console.log);`}
-      </pre>
-    </div>
+
+      <MultiUploader />
+      <QueryBox />
+    </main>
   );
 }
+
+
 
 
