@@ -1,34 +1,33 @@
 ﻿import React, { useEffect, useState } from 'react'
-import { getHealth, queryRag } from './api'
-import MultiUploader from './multi-uploader'
+import { health, queryRag } from './api'
+import MultiUploader from './multi-uploader.jsx'
 
 export default function App() {
-  const [health, setHealth] = useState('checking…')
+  const [h, setH] = useState(null)
   const [q, setQ] = useState('what did the fox do?')
-  const [answer, setAnswer] = useState('')
+  const [ans, setAns] = useState(null)
 
-  useEffect(() => {
-    getHealth().then((h) => setHealth(h.status || 'ok')).catch((e) => setHealth('error: ' + e.message))
-  }, [])
-
-  async function runQuery() {
-    const r = await queryRag({ q, top_k: 5, index: 'both' })
-    setAnswer(r.answer || JSON.stringify(r))
-  }
+  useEffect(() => { health().then(setH).catch(e=>setH({error:String(e)})) }, [])
 
   return (
-    <main style={{ maxWidth: 880, margin: '40px auto', padding: '0 16px', fontFamily:'system-ui,Segoe UI,Arial' }}>
-      <h1>🚀 Friday Frontend is Live</h1>
-      <p>API base: <code>{import.meta.env.VITE_API_BASE}</code> • Health: <strong>{health}</strong></p>
-
-      <section style={{ border:'1px solid #ddd', padding:16, borderRadius:8 }}>
-        <h2>🔎 Quick Query</h2>
-        <input value={q} onChange={(e)=>setQ(e.target.value)} style={{ width:'100%', marginBottom:8 }} />
-        <button onClick={runQuery}>Ask</button>
-        <pre style={{ background:'#fafafa', padding:8, marginTop:8, whiteSpace:'pre-wrap' }}>{answer}</pre>
-      </section>
+    <div style={{maxWidth:900, margin:'32px auto', fontFamily:'system-ui, Arial'}}>
+      <h1>🚀 Friday Frontend</h1>
+      <p style={{opacity:.8, marginTop:-8}}>
+        API: {import.meta.env.VITE_API_BASE || '(unset)'} · Health: {h ? JSON.stringify(h) : '…'}
+      </p>
 
       <MultiUploader />
-    </main>
+
+      <div style={{marginTop:24, padding:16, border:'1px solid #ddd', borderRadius:8}}>
+        <h3 style={{marginTop:0}}>Ask RAG</h3>
+        <div style={{display:'flex', gap:8}}>
+          <input style={{flex:1}} value={q} onChange={e=>setQ(e.target.value)} />
+          <button onClick={async()=> setAns(await queryRag(q, 5, 'both'))}>Ask</button>
+        </div>
+        {ans && <pre style={{background:'#f6f6f6', padding:12, borderRadius:6, overflow:'auto', marginTop:12}}>
+          {JSON.stringify(ans, null, 2)}
+        </pre>}
+      </div>
+    </div>
   )
 }
