@@ -1,21 +1,15 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="robots" content="noindex" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Friday Static</title>
-    <style>
-      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 24px; }
-      code { background:#f3f3f3; padding:2px 6px; border-radius:4px; }
-    </style>
-  </head>
-  <body>
-    <h1>Friday Static Folder</h1>
-    <p>
-      This is a static fallback in <code>/public</code>. Your React app entry is
-      <code>/index.html</code> at the project root.
-    </p>
-  </body>
-</html>
+import React from "react";
+import ReactDOM from "react-dom/client";
+import App from "./App";
+
+// Grab root element from public/index.html
+const root = ReactDOM.createRoot(document.getElementById("root"));
+
+// Render App into root
+root.render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+);
+
 
