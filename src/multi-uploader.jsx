@@ -1,147 +1,174 @@
-// src/multi-uploader.jsx
-import React, { useCallback, useMemo, useRef, useState } from "react";
-import { API_BASE, confirmUpload, createUploadUrl, putBytes } from "./api";
+import React, { useMemo, useRef, useState } from "react";
+import {
+  API_BASE,
+  requestUploadUrl,
+  putToUrl,
+  confirmUpload,
+} from "./api";
 
-// small helper
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-const readFileAsArrayBuffer = (file) =>
-  new Promise((resolve, reject) => {
-    const fr = new FileReader();
-    fr.onload = () => resolve(fr.result);
-    fr.onerror = reject;
-    fr.readAsArrayBuffer(file);
-  });
+const box = {
+  border: "1px dashed #bbb",
+  padding: "16px",
+  borderRadius: 8,
+  marginTop: 16,
+};
 
 export default function MultiUploader() {
-  const [indexTarget, setIndexTarget] = useState("both"); // 'faiss_local' | 's3_ingest' | 'both'
+  const fileRef = useRef(null);
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState("");
+  const [result, setResult] = useState(null);
+
+  // Controls
   const [collection, setCollection] = useState("default");
+  const [index, setIndex] = useState("both"); // "faiss" | "s3" | "both"
   const [chunkSize, setChunkSize] = useState(800);
   const [overlap, setOverlap] = useState(120);
-  const [status, setStatus] = useState("");
-  const [rows, setRows] = useState([]); // progress rows
-  const inputRef = useRef(null);
+  const [text, setText] = useState("");
 
-  const onPick = useCallback(() => inputRef.current?.click(), []);
-  const onDrop = useCallback(async (e) => {
-    e.preventDefault();
-    const files = [...e.dataTransfer.files];
-    if (files.length) await ingestFiles(files);
-  }, [indexTarget, collection, chunkSize, overlap]);
+  const canUpload = useMemo(
+    () => text.trim().length > 0 || (fileRef.current && fileRef.current.files?.length),
+    [text]
+  );
 
-  const onChoose = useCallback(async (e) => {
-    const files = [...e.target.files];
-    if (files.length) await ingestFiles(files);
-    e.target.value = ""; // reset
-  }, [indexTarget, collection, chunkSize, overlap]);
-
-  const borderColor = useMemo(() => ({
-    both: "#7c3aed",
-    faiss_local: "#059669",
-    s3_ingest: "#2563eb",
-  }[indexTarget] || "#6b7280"), [indexTarget]);
-
-  async function ingestFiles(files) {
-    setStatus(`Uploading ${files.length} item(s)…`);
-    const next = [];
-
-    for (const file of files) {
-      const row = { name: file.name, size: file.size, step: "requesting upload_url…" };
-      next.push(row);
-      setRows(r => [...r, row]);
-
-      try {
-        const { token, put_url } = await createUploadUrl();
-        row.step = "uploading…";
-        setRows(r => [...r]);
-
-        const buf = await readFileAsArrayBuffer(file);
-        await putBytes(put_url, buf, file.type || "application/octet-stream");
-
-        row.step = "confirming…";
-        setRows(r => [...r]);
-
-        const result = await confirmUpload({
-          token,
-          collection,
-          chunk_size: Number(chunkSize),
-          overlap: Number(overlap),
-          index: indexTarget,
-        });
-
-        row.step = `indexed ✓  chunks=${result.chunks}  index=${result.index}`;
-        row.ok = true;
-        setRows(r => [...r]);
-        await sleep(100);
-      } catch (err) {
-        row.step = `error: ${err?.message || err}`;
-        row.ok = false;
-        setRows(r => [...r]);
-      }
-    }
+  async function uploadBytes(bytes, contentType) {
+    setStatus("Requesting upload URL…");
+    const u = await requestUploadUrl(); // { token, put_url }
+    setStatus("Uploading bytes…");
+    await putToUrl(u.put_url, bytes, contentType);
+    setStatus("Confirming (chunk + index)…");
+    const summary = await confirmUpload({
+      token: u.token,
+      collection,
+      chunk_size: Number(chunkSize),
+      overlap: Number(overlap),
+      index,
+    });
+    setResult(summary);
     setStatus("Done.");
   }
 
+  async function onUploadText(e) {
+    e.preventDefault();
+    if (!text.trim()) return;
+    try {
+      setBusy(true);
+      const bytes = new TextEncoder().encode(text);
+      await uploadBytes(bytes, "text/plain");
+    } catch (err) {
+      console.error(err);
+      setStatus(`Error: ${err.message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onUploadFile(e) {
+    e.preventDefault();
+    const file = fileRef.current?.files?.[0];
+    if (!file) return;
+    try {
+      setBusy(true);
+      const bytes = await file.arrayBuffer();
+      await uploadBytes(bytes, file.type || "application/octet-stream");
+    } catch (err) {
+      console.error(err);
+      setStatus(`Error: ${err.message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
-    <div style={{ border: `2px dashed ${borderColor}`, borderRadius: 12, padding: 16, background: "#0b1220", color: "#e5e7eb" }}
-         onDragOver={(e) => e.preventDefault()}
-         onDrop={onDrop}>
-      <h3 style={{ margin: 0, marginBottom: 8 }}>Upload & index</h3>
-      <p style={{ marginTop: 0 }}>
-        Drag files here or <button onClick={onPick}>choose</button>. They’ll be chunked and added to <code>{indexTarget}</code>.
+    <section style={{ marginTop: 24 }}>
+      <h2>📤 Upload to Friday</h2>
+      <p style={{ color: "#666", marginTop: -8 }}>
+        API base: <code>{API_BASE}</code>
       </p>
 
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 8 }}>
-        <label>Index:
-          <select value={indexTarget} onChange={(e) => setIndexTarget(e.target.value)} style={{ marginLeft: 6 }}>
-            <option value="both">both (recommended)</option>
-            <option value="faiss_local">faiss_local</option>
-            <option value="s3_ingest">s3_ingest</option>
+      <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))" }}>
+        <label>
+          <div style={{ fontSize: 12, color: "#555" }}>Collection</div>
+          <input
+            value={collection}
+            onChange={(e) => setCollection(e.target.value)}
+            placeholder="default"
+          />
+        </label>
+        <label>
+          <div style={{ fontSize: 12, color: "#555" }}>Index</div>
+          <select value={index} onChange={(e) => setIndex(e.target.value)}>
+            <option value="both">both</option>
+            <option value="faiss">faiss (local)</option>
+            <option value="s3">s3 (remote)</option>
           </select>
         </label>
-
-        <label>Collection:
-          <input value={collection} onChange={(e) => setCollection(e.target.value)} style={{ marginLeft: 6 }} />
+        <label>
+          <div style={{ fontSize: 12, color: "#555" }}>Chunk size</div>
+          <input
+            type="number"
+            min={100}
+            max={4000}
+            value={chunkSize}
+            onChange={(e) => setChunkSize(e.target.value)}
+          />
         </label>
-
-        <label>Chunk size:
-          <input type="number" min={200} max={2000} step={50}
-                 value={chunkSize} onChange={(e) => setChunkSize(e.target.value)} style={{ width: 90, marginLeft: 6 }} />
-        </label>
-
-        <label>Overlap:
-          <input type="number" min={0} max={400} step={10}
-                 value={overlap} onChange={(e) => setOverlap(e.target.value)} style={{ width: 90, marginLeft: 6 }} />
+        <label>
+          <div style={{ fontSize: 12, color: "#555" }}>Overlap</div>
+          <input
+            type="number"
+            min={0}
+            max={1000}
+            value={overlap}
+            onChange={(e) => setOverlap(e.target.value)}
+          />
         </label>
       </div>
 
-      <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 12 }}>
-        API base: <code>{API_BASE}</code> • {status}
+      <div style={box}>
+        <h3 style={{ marginTop: 0 }}>Paste text</h3>
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          rows={6}
+          placeholder="Paste any text to index…"
+          style={{ width: "100%", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" }}
+        />
+        <button onClick={onUploadText} disabled={busy || !text.trim()} style={{ marginTop: 8 }}>
+          {busy ? "Uploading…" : "Upload text"}
+        </button>
       </div>
 
-      <input ref={inputRef} type="file" multiple style={{ display: "none" }} onChange={onChoose} />
+      <div style={box}>
+        <h3 style={{ marginTop: 0 }}>Upload a file</h3>
+        <input ref={fileRef} type="file" />
+        <button onClick={onUploadFile} disabled={busy || !fileRef.current?.files?.length} style={{ marginLeft: 8 }}>
+          {busy ? "Uploading…" : "Upload file"}
+        </button>
+      </div>
 
-      <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
-        <thead>
-          <tr style={{ textAlign: "left", borderBottom: "1px solid #1f2937" }}>
-            <th>Name</th><th>Size</th><th>Step</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r, i) => (
-            <tr key={i} style={{ borderBottom: "1px solid #111827" }}>
-              <td>{r.name}</td>
-              <td>{r.size?.toLocaleString?.() ?? ""}</td>
-              <td style={{ color: r.ok === true ? "#10b981" : r.ok === false ? "#ef4444" : "#e5e7eb" }}>{r.step}</td>
-            </tr>
-          ))}
-          {!rows.length && (
-            <tr><td colSpan={3} style={{ opacity: 0.6 }}>No uploads yet.</td></tr>
-          )}
-        </tbody>
-      </table>
-    </div>
+      <div style={{ marginTop: 12, minHeight: 24 }}>
+        {status && <div><strong>Status:</strong> {status}</div>}
+      </div>
+
+      {result && (
+        <pre
+          style={{
+            background: "#0b1020",
+            color: "#d7e6ff",
+            padding: 12,
+            borderRadius: 8,
+            overflowX: "auto",
+            marginTop: 12,
+          }}
+        >
+{JSON.stringify(result, null, 2)}
+        </pre>
+      )}
+    </section>
   );
 }
+
 
 
 
