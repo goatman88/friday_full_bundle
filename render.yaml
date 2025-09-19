@@ -1,26 +1,20 @@
 services:
-  # -------- Backend (FastAPI) ----------
   - type: web
-    name: friday_api             # must be unique in your Render account
+    name: friday-backend
     env: python
-    plan: free
-    buildCommand: pip install -r backend/requirements.txt
-    startCommand: uvicorn backend.app.app:app --host 0.0.0.0 --port $PORT
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.11
-      # optional, helps the frontend know where API lives if you ever serve both from same origin
-      - key: API_ROOT_PATH
-        value: /api
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.app:app --host 0.0.0.0 --port 10000
 
-  # -------- Frontend (Vite static site) ----------
-  - type: static
-    name: friday_frontend        # must be unique in your Render account
+  - type: web
+    name: friday-frontend
+    env: node
+    rootDir: friday-frontend
     buildCommand: |
-      npm ci --prefix friday-frontend
-      npm run build --prefix friday-frontend
-    staticPublishPath: friday-frontend/dist
+      npm install
+      npm run build
+    staticPublishPath: dist
     envVars:
-      # Set this *after* the backend first deploy shows its URL (see step 3)
       - key: VITE_API_BASE
-        value: https://replace-me-when-backend-deploys.onrender.com/api
+        value: https://friday-backend.onrender.com/api
+
