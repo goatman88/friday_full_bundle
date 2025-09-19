@@ -1,20 +1,32 @@
 services:
+  # 1) FastAPI backend
   - type: web
     name: friday-backend
     env: python
-    rootDir: backend
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.app:app --host 0.0.0.0 --port 10000
-
-  - type: web
-    name: friday-frontend
-    env: node
-    rootDir: friday-frontend
-    buildCommand: |
-      npm install
-      npm run build
-    staticPublishPath: dist
+    region: oregon
+    plan: free
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: uvicorn backend.app.app:app --host 0.0.0.0 --port $PORT
     envVars:
-      - key: VITE_API_BASE
-        value: https://friday-backend.onrender.com/api
+      - key: PYTHON_VERSION
+        value: 3.11
+
+  # 2) Vite static frontend
+  - type: static
+    name: friday-frontend
+    # Write .env.production with the backend URL + /api, then build
+    buildCommand: >
+      echo BACKEND_BASE=$BACKEND_BASE &&
+      echo VITE_API_BASE=$BACKEND_BASE/api > friday-frontend/.env.production &&
+      npm ci --prefix friday-frontend &&
+      npm run build --prefix friday-frontend
+    staticPublishPath: friday-frontend/dist
+    envVars:
+      # Resolve the running backend's public URL at build time
+      - key: BACKEND_BASE
+        fromService:
+          type: web
+          name: friday-backend
+          property: url
+
 
