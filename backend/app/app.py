@@ -3,11 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="Friday API", root_path="/api")
 
-# Allow frontend on Vite dev and Render
 origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
-    "https://friday-099e.onrender.com",  # your Render frontend
+    "https://friday-frontend.onrender.com",  # <-- replace with your actual static site URL after first deploy
 ]
 
 app.add_middleware(
@@ -21,6 +20,7 @@ app.add_middleware(
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
 
 
 # sample route you can call from UI later
