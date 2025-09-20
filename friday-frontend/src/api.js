@@ -1,16 +1,15 @@
+// DO NOT put stray backslashes or unmatched quotes in these strings.
+// Build uses VITE_API_BASE at deploy; local falls back to localhost:8000/api.
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000/api";
 
 export async function healthCheck() {
   const res = await fetch(`${API_BASE}/health`);
+  if (!res.ok) {
+    throw new Error(`Health check failed: ${res.status}`);
+  }
   return res.json();
 }
 
-
-export async function getUploadUrl() {
-  const r = await fetch(\\/rag/upload_url\, { method: 'POST' })
-  if (!r.ok) throw new Error('upload_url failed')
-  return r.json()
-}
 
 export async function confirmUpload(body) {
   const r = await fetch(\\/rag/confirm_upload\, {
