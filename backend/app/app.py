@@ -1,16 +1,20 @@
-from fastapi import FastAPI
-from .health import router as health_router
+from fastapi import FastAPI, APIRouter
 
-app = FastAPI()
+app = FastAPI(title="Friday API")
 
-# Mount all API routes under /api (only here; do NOT prefix again in the router)
-app.include_router(health_router, prefix="/api")
-
-
-# Optional root for quick sanity (not required)
+# simple root – optional
 @app.get("/")
 def root():
     return {"ok": True}
+
+# --- API router mounted at /api ---
+api = APIRouter()
+
+@api.get("/health")
+def health():
+    return {"status": "ok"}
+
+app.include_router(api, prefix="/api")
 
 
 
