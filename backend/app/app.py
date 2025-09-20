@@ -1,26 +1,33 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import os
 
 app = FastAPI(title="Friday API")
 
-# --- CORS (safe + simple) ---
-FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN")  # e.g. https://friday_full_bundle.onrender.com
-allow_origins = [FRONTEND_ORIGIN] if FRONTEND_ORIGIN else ["*"]
+# Allow the frontend (local dev & Render static site)
+origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    # you can add your Render static site URL here later if you want strict CORS
+    "*",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allow_origins,
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- Health (NOTE: under /api) ---
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
 
-# (You can add more API routes under /api/... later)
+# example endpoint the UI might call
+@app.get("/api/rag/query")
+def rag_query(q: str):
+    return {"answer": f"You asked: {q}"}
+
 
 
 
