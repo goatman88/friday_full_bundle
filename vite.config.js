@@ -1,8 +1,7 @@
-﻿import react from "@vitejs/plugin-react"
-import { defineConfig } from "vite"
-
+﻿import { defineConfig } from "vite";
+// Minimal, no "define", no external postcss files.
+// Vite reads VITE_* at build time; use import.meta.env in code.
 export default defineConfig({
-  plugins: [react()],
-  server: { host: "0.0.0.0", port: 5173 },
-  css: { postcss: { plugins: [] } },   // <- disable external PostCSS search
-})
+  build: { outDir: "dist" },
+  css: { postcss: { plugins: [] } }
+});
