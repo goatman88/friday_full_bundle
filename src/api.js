@@ -5,3 +5,6 @@ export async function health() {
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
 }
+
+// Alias for old imports
+export const getHealth = health;
