@@ -10,5 +10,7 @@ export async function health() {
   return r.json();
 }
 
+// at the bottom of src/api.js
+export const getHealth = health;
 
 
