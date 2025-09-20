@@ -1,9 +1,8 @@
-// friday-frontend/vite.config.js
 import { defineConfig } from "vite";
 
+// Minimal, no PostCSS, nothing fancy.
+// Render will inject VITE_* at build time.
 export default defineConfig({
-  build: { outDir: "dist" },
-  // Passing an object prevents Vite from searching for external PostCSS config
-  css: { postcss: { plugins: [] } },
+  build: { outDir: "dist" }
 });
 
