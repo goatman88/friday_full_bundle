@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="Friday API")
 
+# CORS - keep permissive for now; tighten later
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -11,10 +12,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Health at root
 @app.get("/health")
 def root_health():
     return {"status": "ok"}
 
+# Health under /api
 @app.get("/api/health")
 def api_health():
     return {"status": "ok"}
