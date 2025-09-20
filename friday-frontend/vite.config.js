@@ -1,7 +1,9 @@
-import { defineConfig } from 'vite'
+import { defineConfig } from "vite";
 
+// Lock PostCSS to nothing so Vite won't search for configs
 export default defineConfig({
-  preview: { host: '0.0.0.0', port: 5173 },
-})
+  build: { outDir: "dist" },
+  css: { postcss: { plugins: [] } },
+});
 
 
