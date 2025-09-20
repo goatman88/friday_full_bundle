@@ -1,7 +1,7 @@
 {
   "name": "friday-frontend",
-  "version": "0.0.1",
   "private": true,
+  "version": "0.0.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -13,8 +13,10 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
-    "vite": "^5.4.10"
+    "@vitejs/plugin-react": "^4.3.1",
+    "vite": "^5.4.0"
   }
 }
+
 
 
