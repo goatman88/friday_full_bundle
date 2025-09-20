@@ -1,6 +1,6 @@
 ﻿export const API_BASE = import.meta.env.VITE_API_BASE;
-export async function ping() {
-  const r = await fetch(`${API_BASE}/health`);
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return r.json();
+export async function getHealth() {
+  const res = await fetch(${API_BASE}/health, { cache: "no-store" });
+  if (!res.ok) throw new Error(HTTP );
+  return res.json();
 }
