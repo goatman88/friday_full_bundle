@@ -1,9 +1,20 @@
 ﻿from fastapi import FastAPI
-from .health import router as health_router
+from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI()
-app.include_router(health_router, prefix="/api")
+app = FastAPI(title="Friday API")
 
-@app.get("/")
-def root():
-    return {"ok": True}
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/health")
+def root_health():
+    return {"status": "ok"}
+
+@app.get("/api/health")
+def api_health():
+    return {"status": "ok"}
