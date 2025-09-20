@@ -7,8 +7,6 @@ app.include_router(health_router, prefix="/api")
 
 from fastapi import APIRouter
 
-router = APIRouter()  # no prefix here
-
 @router.get("/health")
 def health():
     return {"status": "ok"}
