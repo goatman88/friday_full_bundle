@@ -1,5 +1,4 @@
 services:
-  # ---------- Backend (FastAPI on Uvicorn) ----------
   - type: web
     name: friday
     env: python
@@ -13,18 +12,15 @@ services:
       - key: PYTHON_VERSION
         value: 3.11
 
-  # ---------- Frontend (Vite static site) ----------
   - type: static
     name: friday_full_bundle
     rootDir: friday-frontend
-    buildCommand: |
-      npm ci
-      npm run build
+    buildCommand: npm ci && npm run build
     staticPublishPath: dist
     envVars:
       - key: VITE_API_BASE
-        # set to your *backend* Render URL with /api suffix
         value: https://friday-099e.onrender.com/api
+
 
 
 
