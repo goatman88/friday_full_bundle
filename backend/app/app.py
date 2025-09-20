@@ -1,13 +1,11 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="Friday API", root_path="/api")
+app = FastAPI(title="Friday API")
 
-origins = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "https://friday-frontend.onrender.com",  # <-- replace with your actual static site URL after first deploy
-]
+# Allow your Vite dev server and your Render static-site origin.
+# You can keep "*" during bring-up and tighten later.
+origins = ["*"]
 
 app.add_middleware(
     CORSMiddleware,
@@ -17,14 +15,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/health")
+# Note: We put "/api" in the *route* so Render doesn't need root_path headers.
+@app.get("/api/health")
 def health():
     return {"status": "ok"}
-
-
-
-# sample route you can call from UI later
-@app.get("/rag/query")
-def rag_query(q: str):
-    return {"answer": f"You asked: {q}"}
 
