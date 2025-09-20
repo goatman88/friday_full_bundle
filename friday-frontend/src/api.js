@@ -1,9 +1,10 @@
-﻿const API_BASE = import.meta.env.VITE_API_BASE?.replace(/\/$/, '') || ''
+const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000/api";
 
-export async function health() {
-  const r = await fetch(\\/health\)
-  return r.ok ? await r.json() : { error: \HTTP \\ }
+export async function healthCheck() {
+  const res = await fetch(`${API_BASE}/health`);
+  return res.json();
 }
+
 
 export async function getUploadUrl() {
   const r = await fetch(\\/rag/upload_url\, { method: 'POST' })
