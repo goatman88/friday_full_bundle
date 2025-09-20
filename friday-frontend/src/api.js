@@ -1,11 +1,12 @@
 // friday-frontend/src/api.js
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000/api';
+export const API_BASE = import.meta.env.VITE_API_BASE;
 
-export async function healthCheck() {
-  const res = await fetch(`${API_BASE}/health`);
-  if (!res.ok) throw new Error(`Health check failed: ${res.status}`);
-  return res.json();
+export async function getHealth() {
+  const r = await fetch(`${API_BASE}/health`, { method: 'GET' });
+  if (!r.ok) throw new Error(`health ${r.status}`);
+  return r.json();
 }
+
 
 export async function ragQuery(q) {
   const url = new URL(`${API_BASE}/rag/query`);
