@@ -3,6 +3,9 @@
 export const API_BASE = import.meta.env.VITE_API_BASE;
 
 export async function health() {
-  const r = await fetch(`${import.meta.env.VITE_API_BASE}/health`)
+  const r = await j('/api/health');
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
 }
+
 
