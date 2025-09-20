@@ -1,11 +1,14 @@
-// Backend base URL comes from Render env var VITE_API_BASE
-// Example: https://friday-099e.onrender.com/api
-export const API_BASE = import.meta.env.VITE_API_BASE;
+// Minimal API client used by the homepage health check
+
+// Ensure no trailing slash so `${API_BASE}/health` is correct
+export const API_BASE = String(import.meta?.env?.VITE_API_BASE ?? '').replace(/\/$/, '');
 
 export async function health() {
-  const r = await j('/api/health');
+  if (!API_BASE) throw new Error('VITE_API_BASE is not set');
+  const r = await fetch(`${API_BASE}/health`, { headers: { Accept: 'application/json' } });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
 }
+
 
 
