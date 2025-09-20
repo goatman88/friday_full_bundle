@@ -1,7 +1,17 @@
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from .health import router as health_router
 
-app = FastAPI(title="Friday API")
+app = FastAPI()
+# mount the /api prefix here (and only here)
+app.include_router(health_router, prefix="/api")
+
+from fastapi import APIRouter
+
+router = APIRouter()  # no prefix here
+
+@router.get("/health")
+def health():
+    return {"status": "ok"}
 
 # Allow the frontend (local dev & Render static site)
 origins = [
