@@ -1,5 +1,9 @@
-﻿import React from 'react'
-import { createRoot } from 'react-dom/client'
-import App from './App.jsx'
+// friday-frontend/src/main.jsx (or App.jsx)
+import { getHealth, API_BASE } from './api';
 
-createRoot(document.getElementById('root')).render(<App />)
+getHealth()
+  .then(() => (document.getElementById('health').textContent = 'ok'))
+  .catch(() => (document.getElementById('health').textContent = 'error'));
+
+document.getElementById('api').textContent = API_BASE;
+
