@@ -1,25 +1,26 @@
-import React, { useEffect, useState } from "react";
-import ReactDOM from "react-dom/client";
-import { API_BASE, getHealth } from "./api";
+import React from "react";
+import { createRoot } from "react-dom/client";
+import { getHealth } from "./api";
 
 function App() {
-  const [status, setStatus] = useState("…");
+  const [status, setStatus] = React.useState("…");
+  const api = import.meta.env.VITE_API_BASE;
 
-  useEffect(() => {
-    getHealth().then(
-      () => setStatus("ok"),
-      () => setStatus("error")
-    );
+  React.useEffect(() => {
+    getHealth()
+      .then(() => setStatus("ok"))
+      .catch(() => setStatus("error"));
   }, []);
 
   return (
-    <div style={{ maxWidth: 720, margin: "2rem auto", fontFamily: "system-ui, sans-serif" }}>
+    <div style={{ padding: 24, font: "16px/1.4 system-ui, sans-serif" }}>
       <h1>🚀 Friday Frontend</h1>
-      <p id="api">API: {API_BASE} — Health: {status}</p>
+      <div>API: <code>{api}</code> — Health: <b>{status}</b></div>
     </div>
   );
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+createRoot(document.getElementById("root")).render(<App />);
+
 
 
