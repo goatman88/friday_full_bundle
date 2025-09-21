@@ -1,36 +1,28 @@
-﻿from fastapi import FastAPI, UploadFile, File, HTTPException
+﻿from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter
 
-app = FastAPI()
+app = FastAPI(title="Friday API")
 
-# Allow Vite dev + your Render domain later
+# CORS (permits all while you debug; tighten later)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "https://*.onrender.com"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# All API routes live under /api
-@app.get("/api/health")
-def health():
-    return {"ok": True}
+# /health at root
+@app.get("/health")
+def root_health():
+    return {"status": "ok"}
 
-# --- Demo endpoints (you can replace with your real ones later) ---
+# /api/health via sub-router
+api = APIRouter(prefix="/api")
 
-@app.post("/api/rag/upload_url")
-def get_upload_url():
-    # Normally you'd mint a presigned URL; for now just say "ok"
-    return {"upload_url": "/api/rag/upload"}  # dummy local endpoint
+@api.get("/health")
+def api_health():
+    return {"status": "ok"}
 
-@app.put("/api/rag/confirm_upload")
-def confirm_upload():
-    return {"ok": True}
-
-@app.post("/api/rag/query")
-def rag_query(top_k: int = 5, index: str = "both"):
-    # Replace with your retrieval logic later
-    return {"answer": f"Demo answer (top_k={top_k}, index={index})"}
-
+app.include_router(api)
