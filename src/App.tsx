@@ -1,5 +1,6 @@
-import { useState } from "react";
-import { Routes, Route, Link } from "react-router-dom";
+import { useState } from 'react';
+import { pingBoth } from './api';
+
 import MultiUploader from "./pages/MultiUploader.jsx";
 
 function Home() {
@@ -16,6 +17,27 @@ function Home() {
         <li><Link to="/multi-uploader">Multi Uploader</Link></li>
       </ul>
     </div>
+  );
+}
+function App() {
+  const [result, setResult] = useState<string>('(click to test)');
+
+  async function testBackend() {
+    try {
+      const data = await pingBoth();
+      setResult(JSON.stringify(data));
+    } catch (e: any) {
+      setResult(`Error: ${e.message || e}`);
+    }
+  }
+
+  return (
+    <>
+      <button onClick={testBackend}>Test backend /health + /api/health</button>
+      <pre>{result}</pre>
+
+      {/* ...rest of your UI... */}
+    </>
   );
 }
 
