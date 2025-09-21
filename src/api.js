@@ -70,3 +70,16 @@ export async function queryRag({ q, top_k = 5, index = "both" }) {
   return r.json(); // { answer, hits }
 }
 
+const API = import.meta.env.VITE_API_URL?.replace(/\/+$/,'') || '';
+
+export async function getHealth() {
+  const res = await fetch(`${API}/health`, { credentials: 'omit' });
+  if (!res.ok) throw new Error(`Health failed: ${res.status}`);
+  return res.json();
+}
+
+export async function getApiHealth() {
+  const res = await fetch(`${API}/api/health`, { credentials: 'omit' });
+  if (!res.ok) throw new Error(`API health failed: ${res.status}`);
+  return res.json();
+}
