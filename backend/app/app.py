@@ -1,10 +1,8 @@
-﻿# backend/app/app.py
-from fastapi import FastAPI, APIRouter
+﻿from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="Friday API")
 
-# Allow your static site to call the API (tighten later)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -13,12 +11,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Health at root
 @app.get("/health")
 def root_health():
     return {"status": "ok"}
 
-# Health under /api
 api = APIRouter(prefix="/api")
 
 @api.get("/health")
