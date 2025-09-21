@@ -1,145 +1,227 @@
-import React, { useEffect, useState } from "react";
-import MultiUploader from "./multi-uploader";
-import { API_BASE, health, queryRag } from "./api";
+// src/App.jsx
+import React, { useEffect, useRef, useState } from "react";
 
-function QueryBox() {
-  const [q, setQ] = useState("what did the fox do?");
-  const [index, setIndex] = useState("both");
-  const [busy, setBusy] = useState(false);
-  const [answer, setAnswer] = useState("");
-  const [hits, setHits] = useState({});
-
-  async function onAsk(e) {
-    e.preventDefault();
-    setBusy(true);
-    setAnswer("");
-    setHits({});
-    try {
-      const data = await queryRag({ q, top_k: 5, index });
-      setAnswer(data.answer ?? "");
-      setHits(data.hits ?? {});
-    } catch (err) {
-      setAnswer(`Error: ${err.message}`);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <section style={{ marginTop: 24 }}>
-      <h2>🔎 Query</h2>
-      <form onSubmit={onAsk} style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <input
-          style={{ flex: "1 1 420px", minWidth: 260 }}
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Ask your indexed data…"
-        />
-        <select value={index} onChange={(e) => setIndex(e.target.value)}>
-          <option value="both">both</option>
-          <option value="faiss">faiss (local)</option>
-          <option value="s3">s3 (remote)</option>
-        </select>
-        <button type="submit" disabled={busy || !q.trim()}>
-          {busy ? "Asking…" : "Ask"}
-        </button>
-      </form>
-
-      {answer && (
-        <div style={{ marginTop: 12 }}>
-          <div style={{ fontWeight: 600 }}>Answer</div>
-          <div style={{ padding: "8px 10px", background: "#f6f7fb", borderRadius: 8 }}>{answer}</div>
-        </div>
-      )}
-
-      {hits && Object.keys(hits).length > 0 && (
-        <details style={{ marginTop: 8 }}>
-          <summary style={{ cursor: "pointer" }}>Show hits</summary>
-          <pre
-            style={{
-              background: "#0b1020",
-              color: "#d7e6ff",
-              padding: 12,
-              borderRadius: 8,
-              overflowX: "auto",
-              marginTop: 8,
-            }}
-          >
-{JSON.stringify(hits, null, 2)}
-          </pre>
-        </details>
-      )}
-    </section>
-  );
-}
-
-async function startListening() {
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  const recorder = new MediaRecorder(stream);
-  let chunks = [];
-
-  recorder.ondataavailable = e => chunks.push(e.data);
-  recorder.onstop = async () => {
-    const blob = new Blob(chunks, { type: "audio/wav" });
-    const formData = new FormData();
-    formData.append("file", blob, "input.wav");
-
-    const res = await fetch("/api/stt", { method: "POST", body: formData });
-    const data = await res.json();
-    console.log("Heard:", data.text);
-
-    // Call TTS for response
-    const ttsRes = await fetch("/api/tts", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: "Hello, I heard you say: " + data.text })
-    });
-
-    const audio = new Audio(URL.createObjectURL(await ttsRes.blob()));
-    audio.play();
-  };
-
-  recorder.start();
-  setTimeout(() => recorder.stop(), 5000); // record 5s
-}
-async function handleImageUpload(e) {
-  const file = e.target.files[0];
-  const formData = new FormData();
-  formData.append("file", file);
-
-  const res = await fetch("/api/vision", { method: "POST", body: formData });
-  const data = await res.json();
-  alert("Friday says: " + data.description);
-}
+const BACKEND_BASE =
+  import.meta.env.VITE_BACKEND_URL || ""; // leave empty when frontend is proxied to same origin
 
 export default function App() {
-  const [healthState, setHealthState] = useState("checking…");
+  // ---------------- State ----------------
+  const [recording, setRecording] = useState(false);
+  const [transcript, setTranscript] = useState("");
+  const [answer, setAnswer] = useState("");
+  const [wakeWordArmed, setWakeWordArmed] = useState(true);
+  const [voice, setVoice] = useState("alloy");
+  const [speed, setSpeed] = useState(1.0);
+  const [imagePreview, setImagePreview] = useState(null);
+  const [visionResult, setVisionResult] = useState("");
 
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        const h = await health();
-        mounted && setHealthState(h?.status || JSON.stringify(h));
-      } catch (e) {
-        mounted && setHealthState(`error: ${e.message}`);
+  // Media stuff
+  const mediaRecorderRef = useRef(null);
+  const chunksRef = useRef([]);
+  const audioCtxRef = useRef(null);
+  const analyserRef = useRef(null);
+  const silenceMsRef = useRef(0);
+  const silenceThreshold = 0.01; // 0→1 amplitude
+  const maxSilenceMs = 1200;     // stop after ~1.2s of silence
+
+  // ------------- Helpers -----------------
+  function api(path) {
+    return `${BACKEND_BASE}${path}`;
+  }
+
+  async function playMp3Blob(blob) {
+    const audio = new Audio(URL.createObjectURL(blob));
+    await audio.play();
+  }
+
+  // ----------- Recording/VAD -------------
+  async function startListening() {
+    if (recording) return;
+    setRecording(true);
+    setTranscript("");
+    setAnswer("");
+
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaRecorderRef.current = new MediaRecorder(stream, { mimeType: "audio/webm" });
+    chunksRef.current = [];
+
+    // WebAudio graph for live silence detection
+    audioCtxRef.current = new AudioContext();
+    const src = audioCtxRef.current.createMediaStreamSource(stream);
+    analyserRef.current = audioCtxRef.current.createAnalyser();
+    analyserRef.current.fftSize = 2048;
+    src.connect(analyserRef.current);
+
+    let lastTick = performance.now();
+    const pcm = new Float32Array(analyserRef.current.fftSize);
+
+    function tick() {
+      if (!recording) return;
+      analyserRef.current.getFloatTimeDomainData(pcm);
+      // Root-mean-square energy
+      let sum = 0;
+      for (let i = 0; i < pcm.length; i++) sum += pcm[i] * pcm[i];
+      const rms = Math.sqrt(sum / pcm.length);
+
+      const now = performance.now();
+      const delta = now - lastTick;
+      lastTick = now;
+
+      if (rms < silenceThreshold) {
+        silenceMsRef.current += delta;
+        if (silenceMsRef.current >= maxSilenceMs) {
+          stopListening(); // auto-stop on silence
+          return;
+        }
+      } else {
+        silenceMsRef.current = 0;
       }
-    })();
-    return () => (mounted = false);
-  }, []);
+      requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
 
+    mediaRecorderRef.current.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
+    };
+    mediaRecorderRef.current.onstop = () => handleRecordingComplete();
+
+    mediaRecorderRef.current.start(250); // gather chunks every 250ms
+  }
+
+  function stopListening() {
+    if (!recording) return;
+    setRecording(false);
+    silenceMsRef.current = 0;
+    mediaRecorderRef.current?.stop();
+    // Close inputs
+    mediaRecorderRef.current?.stream.getTracks().forEach((t) => t.stop());
+    mediaRecorderRef.current = null;
+    audioCtxRef.current?.close();
+    audioCtxRef.current = null;
+    analyserRef.current = null;
+  }
+
+  async function handleRecordingComplete() {
+    const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+    chunksRef.current = [];
+
+    // --- STT ---
+    const fd = new FormData();
+    fd.append("file", blob, "input.webm");
+    const sttRes = await fetch(api("/api/stt"), { method: "POST", body: fd });
+    const sttJson = await sttRes.json();
+    const heard = (sttJson.text || "").trim();
+    setTranscript(heard);
+
+    // Optional wake word
+    const isWake = wakeWordArmed && /(^|\s)hey\s+friday\b/i.test(heard);
+    const userPrompt = isWake ? heard.replace(/(^|\s)hey\s+friday\b/i, "").trim() : heard;
+
+    if (!userPrompt) return;
+
+    // --- Ask LLM ---
+    const askFd = new FormData();
+    askFd.append("prompt", userPrompt);
+    const askRes = await fetch(api("/api/ask"), { method: "POST", body: askFd });
+    const askJson = await askRes.json();
+    const reply = (askJson.text || "").trim();
+    setAnswer(reply);
+
+    // --- TTS ---
+    const ttsFd = new FormData();
+    ttsFd.append("text", reply);
+    ttsFd.append("voice", voice);
+    ttsFd.append("speed", String(speed));
+    const ttsRes = await fetch(api("/api/tts"), { method: "POST", body: ttsFd });
+    await playMp3Blob(await ttsRes.blob());
+  }
+
+  // --------------- Vision ----------------
+  async function handleImageUpload(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    setImagePreview(url);
+    setVisionResult("");
+
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append(
+      "prompt",
+      "You are Friday. Give a 2-sentence overview of the image, then list 3 specific observations. Be concise."
+    );
+
+    const res = await fetch(api("/api/vision"), { method: "POST", body: fd });
+    const json = await res.json();
+    setVisionResult(json.description || "(no description)");
+  }
+
+  // --------------- UI --------------------
   return (
-    <main style={{ maxWidth: 960, margin: "32px auto", padding: "0 16px", lineHeight: 1.45 }}>
-      <h1 style={{ marginBottom: 0 }}>🚀 Friday Frontend is Live</h1>
-      <p style={{ color: "#666", marginTop: 8 }}>
-        API: <code>{API_BASE}</code> • Health: <strong>{healthState}</strong>
-      </p>
+    <div style={{ fontFamily: "system-ui, sans-serif", padding: 24, maxWidth: 820 }}>
+      <h1>Friday — Voice & Vision</h1>
 
-      <MultiUploader />
-      <QueryBox />
-    </main>
+      <section style={{ marginBottom: 28 }}>
+        <h2>🎤 Voice</h2>
+        <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <button onClick={recording ? stopListening : startListening}
+                  style={{ padding: "10px 16px", fontSize: 16 }}>
+            {recording ? "■ Stop" : "▶︎ Push-to-talk"}
+          </button>
+
+          <label>
+            Voice:&nbsp;
+            <select value={voice} onChange={(e) => setVoice(e.target.value)}>
+              <option>alloy</option>
+              <option>verse</option>
+              <option>breeze</option>
+              <option>amber</option>
+            </select>
+          </label>
+
+          <label>
+            Speed:&nbsp;
+            <input
+              type="number"
+              step="0.1"
+              min="0.5"
+              max="1.5"
+              value={speed}
+              onChange={(e) => setSpeed(Number(e.target.value))}
+              style={{ width: 70 }}
+            />
+          </label>
+
+          <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <input
+              type="checkbox"
+              checked={wakeWordArmed}
+              onChange={(e) => setWakeWordArmed(e.target.checked)}
+            />
+            Enable “Hey Friday” wake-word
+          </label>
+        </div>
+
+        <div style={{ marginTop: 14, fontSize: 14, lineHeight: 1.5 }}>
+          <div><b>Heard:</b> {transcript || <i>(…)</i>}</div>
+          <div><b>Friday:</b> {answer || <i>(…)</i>}</div>
+        </div>
+      </section>
+
+      <section>
+        <h2>👀 Vision</h2>
+        <input type="file" accept="image/*" onChange={handleImageUpload} />
+        {imagePreview && (
+          <div style={{ marginTop: 12, display: "flex", gap: 16 }}>
+            <img src={imagePreview} alt="preview" style={{ maxWidth: 280, borderRadius: 8 }} />
+            <div style={{ whiteSpace: "pre-wrap" }}>{visionResult}</div>
+          </div>
+        )}
+      </section>
+    </div>
   );
 }
+
 
 
 
