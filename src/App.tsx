@@ -2,6 +2,18 @@ import { useState } from 'react';
 import { pingBoth } from './api';
 
 import MultiUploader from "./pages/MultiUploader.jsx";
+import BackendCheck from './BackendCheck';
+
+function App() {
+  return (
+    <>
+      <BackendCheck />
+      {/* your existing UI... */}
+    </>
+  );
+}
+
+export default App;
 
 function Home() {
   const [count, setCount] = useState(0);
