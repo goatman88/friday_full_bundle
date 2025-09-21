@@ -45,4 +45,15 @@ async def text_to_speech(text: str):
     )
     return StreamingResponse(io.BytesIO(response.read()), media_type="audio/mpeg")
 
+@app.post("/api/vision")
+async def vision(file: UploadFile = File(...)):
+    image_bytes = await file.read()
+    response = openai.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": [
+            {"type": "text", "text": "Describe this image"},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64.b64encode(image_bytes).decode()}"}}
+        ]}]
+    )
+    return {"description": response.choices[0].message["content"]}
 
