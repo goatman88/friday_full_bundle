@@ -73,6 +73,36 @@ function QueryBox() {
   );
 }
 
+async function startListening() {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const recorder = new MediaRecorder(stream);
+  let chunks = [];
+
+  recorder.ondataavailable = e => chunks.push(e.data);
+  recorder.onstop = async () => {
+    const blob = new Blob(chunks, { type: "audio/wav" });
+    const formData = new FormData();
+    formData.append("file", blob, "input.wav");
+
+    const res = await fetch("/api/stt", { method: "POST", body: formData });
+    const data = await res.json();
+    console.log("Heard:", data.text);
+
+    // Call TTS for response
+    const ttsRes = await fetch("/api/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: "Hello, I heard you say: " + data.text })
+    });
+
+    const audio = new Audio(URL.createObjectURL(await ttsRes.blob()));
+    audio.play();
+  };
+
+  recorder.start();
+  setTimeout(() => recorder.stop(), 5000); // record 5s
+}
+
 export default function App() {
   const [healthState, setHealthState] = useState("checking…");
 
