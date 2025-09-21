@@ -102,6 +102,15 @@ async function startListening() {
   recorder.start();
   setTimeout(() => recorder.stop(), 5000); // record 5s
 }
+async function handleImageUpload(e) {
+  const file = e.target.files[0];
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const res = await fetch("/api/vision", { method: "POST", body: formData });
+  const data = await res.json();
+  alert("Friday says: " + data.description);
+}
 
 export default function App() {
   const [healthState, setHealthState] = useState("checking…");
