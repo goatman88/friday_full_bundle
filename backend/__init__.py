@@ -1,2 +1,3 @@
-# makes backend.app importable
+# empty on purpose to make backend a package
+
 
