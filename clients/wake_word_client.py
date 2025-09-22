@@ -7,9 +7,20 @@ BACKEND = os.getenv("BACKEND", "https://friday-099e.onrender.com")
 HOTWORD = os.getenv("HOTWORD", "porcupine")  # the built-in demo hotword
 PV_KEY  = os.getenv("PICOVOICE_ACCESS_KEY")  # set your Picovoice key
 
-# --- deps: pip install pvporcupine sounddevice pydub httpx ---
-import pvporcupine
-import sounddevice as sd
+import pvporcupine, sounddevice as sd, numpy as np, os, sys
+access_key = os.getenv("PICOVOICE_ACCESS_KEY")
+if not access_key: sys.exit("Set PICOVOICE_ACCESS_KEY first")
+porcupine = pvporcupine.create(access_key=access_key, keywords=["jarvis","computer"])
+def callback(indata, frames, time, status):
+    pcm = (indata[:,0] * 32767).astype(np.int16)
+    r = porcupine.process(pcm)
+    if r >= 0:
+        print("Wake word detected!")
+with sd.InputStream(channels=1, samplerate=porcupine.sample_rate, blocksize=porcupine.frame_length, callback=callback):
+    print("Listening… Ctrl+C to exit")
+    import time
+    while True: time.sleep(0.25)
+
 
 def record_seconds(seconds=4, samplerate=16000, channels=1):
     print(f"Recording {seconds}s…")
