@@ -1,23 +1,40 @@
-# backend/app/app.py
-import io, os, base64, asyncio
-from typing import List, Optional
+import base64
+import io
+import os
+from typing import Optional, List
 
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
-
+from pydantic import BaseModel
 from dotenv import load_dotenv
-from openai import OpenAI
+import httpx
+import redis
+from pydub import AudioSegment
 
 load_dotenv()
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-client = OpenAI(api_key=OPENAI_API_KEY)
 
-app = FastAPI(title="Friday Backend (Voice + Vision, Streaming TTS)")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_BASE = os.getenv("OPENAI_BASE", "https://api.openai.com/v1")
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+
+rds: Optional[redis.Redis] = None
+try:
+    rds = redis.from_url(REDIS_URL, decode_responses=True)
+except Exception:
+    rds = None  # allow backend to run without Redis
+
+app = FastAPI()
+
+origins = [
+    "http://localhost:5173",
+    os.getenv("FRONTEND_URL", "").strip(),  # allow your deployed FE if set
+    "https://friday-099e.onrender.com",     # your Render backend (safe for CORS)
+]
+origins = [o for o in origins if o]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # tighten in prod
+    allow_origins=origins + ["*"],  # dev-friendly; tighten later
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -25,102 +42,140 @@ app.add_middleware(
 
 # ---------- health ----------
 @app.get("/health")
-def health(): return {"status": "ok"}
+def health_root():
+    return {"status": "ok"}
 
 @app.get("/api/health")
-def api_health(): return {"status": "ok"}
+def health_api():
+    return {"status": "ok"}
 
-def _require_key():
+# ---------- memory (Redis) ----------
+class MemoryItem(BaseModel):
+    key: str
+    value: str
+
+@app.post("/api/memory/set")
+def memory_set(item: MemoryItem):
+    if not rds:
+        return {"ok": False, "error": "redis not configured"}
+    rds.set(item.key, item.value)
+    return {"ok": True}
+
+@app.get("/api/memory/get")
+def memory_get(key: str):
+    if not rds:
+        return {"ok": False, "error": "redis not configured"}
+    val = rds.get(key)
+    return {"ok": True, "value": val}
+
+# ---------- LLM (stream-friendly, but also works non-stream) ----------
+class AskIn(BaseModel):
+    q: str
+    system: Optional[str] = "You are a helpful assistant."
+
+@app.post("/api/ask")
+async def ask(in_: AskIn):
     if not OPENAI_API_KEY:
-        return JSONResponse({"error": "Missing OPENAI_API_KEY"}, status_code=500)
+        return {"error": "OPENAI_API_KEY not set"}
+    payload = {
+        "model": os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini"),
+        "messages": [
+            {"role": "system", "content": in_.system},
+            {"role": "user", "content": in_.q},
+        ],
+        "temperature": float(os.getenv("OPENAI_TEMP", "0.2")),
+        "stream": False
+    }
+    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
+    async with httpx.AsyncClient(timeout=60) as client:
+        resp = await client.post(f"{OPENAI_BASE}/chat/completions", json=payload, headers=headers)
+        resp.raise_for_status()
+        data = resp.json()
+    answer = data["choices"][0]["message"]["content"]
+    return {"answer": answer}
+
+# ---------- Vision (URL or upload) ----------
+class VisionIn(BaseModel):
+    prompt: str
+    image_url: Optional[str] = None  # if not provided, use file upload
+
+@app.post("/api/vision")
+async def vision(prompt: str = Form(...), file: UploadFile = File(None), image_url: str = Form(None)):
+    if not OPENAI_API_KEY:
+        return {"error": "OPENAI_API_KEY not set"}
+
+    content: List = [{"type": "text", "text": prompt}]
+
+    if image_url:
+        content.append({"type": "image_url", "image_url": {"url": image_url}})
+    elif file is not None:
+        bytes_ = await file.read()
+        b64 = base64.b64encode(bytes_).decode("utf-8")
+        # send as data URL (png assumed; OpenAI supports base64 for vision)
+        content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}})
+    else:
+        return {"error": "Provide image_url or file"}
+
+    payload = {
+        "model": os.getenv("OPENAI_VISION_MODEL", "gpt-4o-mini"),
+        "messages": [{"role": "user", "content": content}],
+    }
+    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(f"{OPENAI_BASE}/chat/completions", json=payload, headers=headers)
+        resp.raise_for_status()
+        data = resp.json()
+    answer = data["choices"][0]["message"]["content"]
+    return {"answer": answer}
 
 # ---------- STT (speech -> text) ----------
 @app.post("/api/stt")
-async def stt(file: UploadFile = File(...)):
-    err = _require_key()
-    if err: return err
-    audio_bytes = await file.read()
-    tr = client.audio.transcriptions.create(
-        model="gpt-4o-mini-transcribe",  # or "whisper-1"
-        file=("input.webm", audio_bytes, file.content_type or "audio/webm"),
-    )
-    return {"text": tr.text}
+async def stt(audio: UploadFile = File(...)):
+    if not OPENAI_API_KEY:
+        return {"error": "OPENAI_API_KEY not set"}
 
-# ---------- LLM text answer ----------
-@app.post("/api/ask")
-async def ask(
-    prompt: str = Form(...),
-    system: str = Form("You are Friday, a concise, helpful assistant.")
-):
-    err = _require_key()
-    if err: return err
-    r = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role":"system","content":system},{"role":"user","content":prompt}],
-        temperature=0.4,
-    )
-    return {"text": r.choices[0].message.content}
+    # OpenAI's Whisper endpoint expects multipart form
+    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
+    form = {
+        "model": "whisper-1",
+    }
+    files = {"file": (audio.filename, await audio.read(), audio.content_type or "audio/wav")}
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(f"{OPENAI_BASE}/audio/transcriptions", headers=headers, data=form, files=files)
+        resp.raise_for_status()
+        data = resp.json()
+    return {"text": data.get("text", "")}
 
-# ---------- TTS (text -> speech, non-stream) ----------
+# ---------- TTS (text -> audio) ----------
+class TTSIn(BaseModel):
+    text: str
+    voice: Optional[str] = "alloy"  # depends on model support
+
 @app.post("/api/tts")
-async def tts(
-    text: str = Form(...),
-    voice: str = Form("alloy"),
-    speed: Optional[float] = Form(1.0),
-):
-    err = _require_key()
-    if err: return err
-    speech = client.audio.speech.create(
-        model="gpt-4o-mini-tts", voice=voice, input=text, speed=speed, format="mp3"
-    )
-    return StreamingResponse(io.BytesIO(speech.read()), media_type="audio/mpeg")
+async def tts(in_: TTSIn):
+    if not OPENAI_API_KEY:
+        return {"error": "OPENAI_API_KEY not set"}
 
-# ---------- TTS (text -> speech, STREAMING) ----------
-@app.post("/api/tts/stream")
-async def tts_stream(
-    text: str = Form(...),
-    voice: str = Form("alloy"),
-    speed: Optional[float] = Form(1.0),
-):
-    err = _require_key()
-    if err: return err
+    # OpenAI speech synthesis returns bytes; we’ll return wav in base64
+    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
+    payload = {
+        "model": os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts"),
+        "voice": in_.voice,
+        "input": in_.text,
+        "format": "wav"
+    }
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(f"{OPENAI_BASE}/audio/speech", json=payload, headers=headers)
+        resp.raise_for_status()
+        audio_bytes = resp.content
 
-    stream = client.audio.speech.with_streaming_response.create(
-        model="gpt-4o-mini-tts", voice=voice, input=text, speed=speed, format="mp3"
-    )
+    # Ensure WAV container
+    seg = AudioSegment.from_file(io.BytesIO(audio_bytes))
+    buf = io.BytesIO()
+    seg.export(buf, format="wav")
+    wav_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+    return {"audio_wav_b64": wav_b64}
 
-    async def gen():
-        with stream as s:
-            for chunk in s.iter_bytes(chunk_size=4096):
-                yield chunk
-                await asyncio.sleep(0)  # cooperate with loop
-
-    return StreamingResponse(gen(), media_type="audio/mpeg")
-
-# ---------- Vision (single or multi-image) ----------
-@app.post("/api/vision")
-async def vision(
-    files: List[UploadFile] = File(...),
-    prompt: str = Form("Describe the image(s) succinctly, then list notable details.")
-):
-    err = _require_key()
-    if err: return err
-
-    parts = [{"type":"text","text":prompt}]
-    for f in files:
-        b = await f.read()
-        b64 = base64.b64encode(b).decode("utf-8")
-        parts.append({
-            "type":"image_url",
-            "image_url":{"url": f"data:{f.content_type or 'image/jpeg'};base64,{b64}"}
-        })
-
-    r = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role":"user","content":parts}],
-        temperature=0.3,
-    )
-    return {"description": r.choices[0].message.content}
 
 
 
