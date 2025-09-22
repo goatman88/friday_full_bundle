@@ -11,6 +11,22 @@
   </body>
 </html>
 
+<div style="margin-top:1rem;">
+  <button id="startCam">Start Camera</button>
+  <video id="cam" playsinline style="width:320px;height:auto;border:1px solid #ccc;"></video>
+  <canvas id="canvas" style="display:none;"></canvas>
+  <button id="snap">Snap</button>
+</div>
+
+<div style="margin-top:1rem;">
+  <input id="ask" placeholder="Say something..." style="width:70%"/>
+  <button id="send">Ask (one-shot)</button>
+  <button id="sendSSE">Stream (SSE)</button>
+  <button id="sendWS">Stream (WS)</button>
+  <button id="loadHist">Load history (console)</button>
+</div>
+<pre id="out" style="min-height:120px;background:#111;color:#8f8;padding:8px;"></pre>
+<div id="status"></div>
 
 
 
