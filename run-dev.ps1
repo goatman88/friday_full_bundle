@@ -1,42 +1,9 @@
-$ErrorActionPreference = 'Stop'
-$repo = "C:\Users\mtw27\friday-frontend\friday-frontend"
-if (-not (Test-Path $repo)) { throw "Repo path not found: $repo" }
+# run-dev.ps1
+Write-Host ">>> Launching Backend + Frontend..." -ForegroundColor Yellow
 
-Set-Location $repo
-Write-Host "Repo root: $(Get-Location)" -ForegroundColor Green
+# Start backend
+Start-Process powershell -ArgumentList "-NoExit", "-Command", ".\.venv\Scripts\Activate.ps1; uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload"
 
-# quick port sanity
-function Test-Port($port){ (Test-NetConnection 127.0.0.1 -Port $port).TcpTestSucceeded }
-if (Test-Port 8000) { Write-Host "Warning: port 8000 already in use." -ForegroundColor Yellow }
-if (Test-Port 5173) { Write-Host "Warning: port 5173 already in use." -ForegroundColor Yellow }
+# Start frontend
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "npm run dev"
 
-# Try Windows Terminal panes
-$wt = (Get-Command wt.exe -ErrorAction SilentlyContinue)
-if ($wt) {
-  # Left pane: backend
-  $cmdBackend  = "powershell -NoExit -Command `"cd `"$repo`"; ./run-backend-dev.ps1`""
-  # Right pane: frontend
-  $cmdFrontend = "powershell -NoExit -Command `"cd `"$repo`"; ./run-frontend-dev.ps1`""
-
-  & wt.exe new-tab $cmdBackend `
-      ; split-pane -H $cmdFrontend `
-      ; focus-tab -t 1 | Out-Null
-
-} else {
-  # Fallback: two separate windows
-  Start-Process powershell -ArgumentList "-NoExit","-Command","cd `"$repo`"; ./run-backend-dev.ps1"
-  Start-Sleep 2
-  Start-Process powershell -ArgumentList "-NoExit","-Command","cd `"$repo`"; ./run-frontend-dev.ps1"
-}
-
-# Auto-open browser **after** vite becomes reachable
-$viteUrl = "http://localhost:5173"
-for ($i=0; $i -lt 40; $i++) {
-  try {
-    $r = Invoke-WebRequest -UseBasicParsing -Uri $viteUrl -TimeoutSec 2
-    if ($r.StatusCode -ge 200 -and $r.StatusCode -lt 500) { 
-      Start-Process $viteUrl
-      break
-    }
-  } catch { Start-Sleep -Milliseconds 500 }
-}
