@@ -1,85 +1,49 @@
-// Simple client for Friday backend.
-// Figures out the API base from env, or falls back to same-origin /api.
+const API_BASE = (typeof window !== 'undefined' && window.location.port === '5173')
+  ? '' // dev proxy
+  : import.meta.env.VITE_API_BASE || ''
 
-const envBase = import.meta.env?.VITE_API_BASE?.trim();
-const defaultBase =
-  (typeof window !== "undefined" && `${window.location.origin}/api`) ||
-  "http://localhost:8000/api";
-
-export const API_BASE = envBase || defaultBase;
-
-async function ok(res) {
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`${res.status} ${res.statusText} – ${text}`.trim());
-  }
-  return res;
+async function go(path, opts = {}) {
+  const url = API_BASE + path
+  const res = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...opts })
+  const txt = await res.text()
+  let body
+  try { body = JSON.parse(txt) } catch { body = txt }
+  if (!res.ok) throw new Error(typeof body === 'string' ? body : JSON.stringify(body))
+  return body
 }
 
-export async function health() {
-  const r = await ok(fetch(`${API_BASE}/health`));
-  return r.json();
+export const health = () => go('/health')
+export const apiHealth = () => go('/api/health')
+
+export const ask = (q) => go('/api/ask', { method: 'POST', body: JSON.stringify({ q }) })
+
+// Vision: send URL or file
+export async function vision({ prompt, imageUrl, file }) {
+  const form = new FormData()
+  form.append('prompt', prompt)
+  if (imageUrl) form.append('image_url', imageUrl)
+  if (file) form.append('file', file)
+  const res = await fetch(API_BASE + '/api/vision', { method: 'POST', body: form })
+  const data = await res.json()
+  if (!res.ok) throw new Error(JSON.stringify(data))
+  return data
 }
 
-// === RAG ingest/upload ===
-
-export async function requestUploadUrl() {
-  const r = await ok(fetch(`${API_BASE}/rag/upload_url`, { method: "POST" }));
-  return r.json(); // { token, put_url }
+// STT: send audio blob
+export async function stt(audioBlob) {
+  const form = new FormData()
+  form.append('audio', audioBlob, 'speech.webm')
+  const res = await fetch(API_BASE + '/api/stt', { method: 'POST', body: form })
+  const data = await res.json()
+  if (!res.ok) throw new Error(JSON.stringify(data))
+  return data
 }
 
-// PUT raw bytes to the pre-signed URL (or echo URL)
-export async function putToUrl(putUrl, bytes, contentType = "text/plain") {
-  const r = await ok(
-    fetch(putUrl, {
-      method: "PUT",
-      headers: { "Content-Type": contentType },
-      body: bytes,
-    })
-  );
-  return r.ok;
+// TTS: get wav b64 and return AudioBufferSource
+export async function tts(text) {
+  const res = await fetch(API_BASE + '/api/tts', { method: 'POST', body: JSON.stringify({ text }), headers: { 'Content-Type': 'application/json' } })
+  const data = await res.json()
+  if (!res.ok) throw new Error(JSON.stringify(data))
+  return data.audio_wav_b64
 }
 
-// Confirm the upload and ask backend to chunk & index
-export async function confirmUpload({
-  token,
-  collection = "default",
-  chunk_size = 800,
-  overlap = 120,
-  index = "both", // "faiss" | "s3" | "both"
-}) {
-  const r = await ok(
-    fetch(`${API_BASE}/rag/confirm_upload`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token, collection, chunk_size, overlap, index }),
-    })
-  );
-  return r.json(); // { indexed, chunks, collection, index }
-}
-
-// Query
-export async function queryRag({ q, top_k = 5, index = "both" }) {
-  const r = await ok(
-    fetch(`${API_BASE}/rag/query`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ q, top_k, index }),
-    })
-  );
-  return r.json(); // { answer, hits }
-}
-
-const API = import.meta.env.VITE_API_URL?.replace(/\/+$/,'') || '';
-
-export async function getHealth() {
-  const res = await fetch(`${API}/health`, { credentials: 'omit' });
-  if (!res.ok) throw new Error(`Health failed: ${res.status}`);
-  return res.json();
-}
-
-export async function getApiHealth() {
-  const res = await fetch(`${API}/api/health`, { credentials: 'omit' });
-  if (!res.ok) throw new Error(`API health failed: ${res.status}`);
-  return res.json();
-}
