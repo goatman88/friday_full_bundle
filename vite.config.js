@@ -11,8 +11,7 @@ export default defineConfig(({ mode }) => {
       strictPort: true,
       proxy: {
         '/health': { target, changeOrigin: true },
-        '/api': { target, changeOrigin: true },
-        '/ws': { target, changeOrigin: true, ws: true },
+        '/api':   { target, changeOrigin: true }
       }
     }
   }
