@@ -1,42 +1,72 @@
-from fastapi import FastAPI, UploadFile, File, Form, WebSocket, WebSocketDisconnect, Request
+# backend/app/app.py
+import os
+import json
+import asyncio
+from contextlib import asynccontextmanager
+from typing import AsyncIterator, Optional
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Depends
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
-from sse_starlette.sse import EventSourceResponse
 from pydantic import BaseModel
-from typing import AsyncGenerator, List, Dict, Any
-import asyncio, os, io, base64
-from PIL import Image
-import redis.asyncio as redis
-from dotenv import load_dotenv
-from openai import AsyncOpenAI
 
-load_dotenv()
+# --- Redis (optional but recommended) ---
+_redis = None
+REDIS_URL = os.getenv("REDIS_URL")
 
-app = FastAPI(title="Friday Backend")
+try:
+    if REDIS_URL:
+        import redis.asyncio as aioredis
+        _redis = aioredis.from_url(REDIS_URL, decode_responses=True)
+except Exception as e:
+    _redis = None
 
-# --- CORS (local dev + your Render domain allowed) ---
-FRONTEND = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
-origins = [FRONTEND, "http://localhost:5173", "https://localhost:5173"]
+# --- OpenAI (optional streaming demo) ---
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+try:
+    if OPENAI_API_KEY:
+        from openai import AsyncOpenAI
+        oai = AsyncOpenAI(api_key=OPENAI_API_KEY)
+    else:
+        oai = None
+except Exception:
+    oai = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # warmup, ping redis if configured
+    if _redis:
+        try:
+            await _redis.ping()
+        except Exception:
+            pass
+    yield
+    # teardown
+    try:
+        if _redis:
+            await _redis.close()
+    except Exception:
+        pass
+
+app = FastAPI(lifespan=lifespan)
+
+# CORS for local dev + render
+origins = [
+    "http://localhost:5173",
+    "https://localhost:5173",
+]
+if os.getenv("PUBLIC_FRONTEND_ORIGIN"):
+    origins.append(os.getenv("PUBLIC_FRONTEND_ORIGIN"))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=origins + ["*"],  # relax for dev
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- Redis connection (optional) ---
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-redis_client: redis.Redis | None = None
-try:
-    redis_client = redis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
-except Exception:
-    redis_client = None
-
-# --- OpenAI client (streaming) ---
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
+# -------- Health --------
 @app.get("/health")
 def health_root():
     return {"status": "ok"}
@@ -45,149 +75,87 @@ def health_root():
 def health_api():
     return {"status": "ok"}
 
-# -------- Conversation store helpers (Redis) ----------
-async def save_message(session_id: str, role: str, content: str) -> None:
-    if not redis_client: return
-    await redis_client.rpush(f"chat:{session_id}", f"{role}:{content}")
+# -------- Memory (Redis) helpers --------
+async def append_history(session_id: str, role: str, content: str):
+    if not _redis:
+        return
+    key = f"chat:{session_id}"
+    await _redis.rpush(key, json.dumps({"role": role, "content": content}))
+    # Keep last 100 msgs
+    await _redis.ltrim(key, -100, -1)
 
-async def load_messages(session_id: str, limit: int = 50) -> List[Dict[str, str]]:
-    if not redis_client: return []
-    items = await redis_client.lrange(f"chat:{session_id}", -limit, -1)
-    msgs = []
-    for it in items:
-        role, content = it.split(":", 1)
-        msgs.append({"role": role, "content": content})
-    return msgs
+async def get_history(session_id: str):
+    if not _redis:
+        return []
+    key = f"chat:{session_id}"
+    items = await _redis.lrange(key, 0, -1)
+    return [json.loads(x) for x in items]
 
-# -------- Basic ask (non-stream) ----------
+# -------- SSE streaming --------
 class AskIn(BaseModel):
     q: str
-    session_id: str | None = None
+    session_id: Optional[str] = "default"
 
 @app.post("/api/ask")
-async def ask(in_: AskIn):
-    session = in_.session_id or "default"
-    await save_message(session, "user", in_.q)
+async def ask(body: AskIn):
+    # non-streaming basic echo until you wire OpenAI RAG
+    await append_history(body.session_id, "user", body.q)
+    text = f"You asked: {body.q}"
+    await append_history(body.session_id, "assistant", text)
+    return {"answer": text}
 
-    msgs = [{"role": "system", "content": "You are Friday."}]
-    msgs += await load_messages(session)
-    msgs.append({"role": "user", "content": in_.q})
+@app.post("/api/stream")
+async def stream_answer(body: AskIn):
+    async def gen():
+        # Real model streaming (OpenAI) if configured; else fake chunks
+        if oai:
+            # lightweight streaming completion
+            prompt = f"Answer briefly: {body.q}"
+            stream = await oai.chat.completions.create(
+                model="gpt-4o-mini",
+                stream=True,
+                messages=[{"role":"user","content":prompt}],
+            )
+            collected = []
+            async for ev in stream:
+                delta = ev.choices[0].delta.content or ""
+                if delta:
+                    collected.append(delta)
+                    yield f"data: {delta}\n\n"
+            final = "".join(collected)
+            await append_history(body.session_id, "user", body.q)
+            await append_history(body.session_id, "assistant", final)
+            yield "event: done\ndata: [DONE]\n\n"
+        else:
+            # demo chunks
+            for chunk in ["Thinking", " … ", "done."]:
+                yield f"data: {chunk}\n\n"
+                await asyncio.sleep(0.3)
+            yield "event: done\ndata: [DONE]\n\n"
 
-    resp = await client.chat.completions.create(
-        model=OPENAI_MODEL,
-        messages=msgs,
-        stream=False,
-    )
-    answer = resp.choices[0].message.content
-    await save_message(session, "assistant", answer)
-    return {"answer": answer}
+    return StreamingResponse(gen(), media_type="text/event-stream")
 
-# -------- SSE streaming ----------
-@app.get("/api/stream")
-async def stream(q: str, session_id: str | None = None):
-    session = session_id or "default"
-
-    async def event_gen() -> AsyncGenerator[str, None]:
-        await save_message(session, "user", q)
-        msgs = [{"role": "system", "content": "You are Friday."}]
-        msgs += await load_messages(session)
-        msgs.append({"role": "user", "content": q})
-
-        stream = await client.chat.completions.create(
-            model=OPENAI_MODEL, messages=msgs, stream=True
-        )
-
-        chunks = []
-        async for part in stream:
-            delta = part.choices[0].delta.content or ""
-            if delta:
-                chunks.append(delta)
-                yield f"data: {delta}\n\n"
-                await asyncio.sleep(0)  # keep loop cooperative
-
-        full = "".join(chunks)
-        await save_message(session, "assistant", full)
-        yield "event: done\ndata: [DONE]\n\n"
-
-    return EventSourceResponse(event_gen())
-
-# -------- WebSocket streaming ----------
+# -------- WebSocket streaming --------
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
     await ws.accept()
     try:
         while True:
-            data = await ws.receive_json()
-            q = data.get("q", "")
-            session = data.get("session_id", "default")
-            await save_message(session, "user", q)
-
-            msgs = [{"role": "system", "content": "You are Friday."}]
-            msgs += await load_messages(session)
-            msgs.append({"role": "user", "content": q})
-
-            stream = await client.chat.completions.create(
-                model=OPENAI_MODEL, messages=msgs, stream=True
-            )
-            chunks = []
-            async for part in stream:
-                delta = part.choices[0].delta.content or ""
-                if delta:
-                    chunks.append(delta)
-                    await ws.send_text(delta)
-            full = "".join(chunks)
-            await save_message(session, "assistant", full)
-            await ws.send_json({"done": True})
+            msg = await ws.receive_text()
+            # Echo server; upgrade to model stream if desired
+            await ws.send_text(f"server received: {msg}")
     except WebSocketDisconnect:
-        return
+        pass
 
-# -------- Vision (image + prompt) ----------
-@app.post("/api/vision")
-async def vision(
-    prompt: str = Form(...),
-    image: UploadFile = File(...),
-    session_id: str = Form("default"),
-):
-    img_bytes = await image.read()
-    b64 = base64.b64encode(img_bytes).decode("utf-8")
-    content = [
-        {"type": "text", "text": prompt},
-        {"type": "image_url", "image_url": {"url": f"data:{image.content_type};base64,{b64}"}}
-    ]
+# -------- Simple vision stub (HTTP image upload) --------
+from fastapi import UploadFile, File
 
-    msgs = [{"role": "user", "content": content}]
-    resp = await client.chat.completions.create(
-        model="gpt-4o-mini", messages=msgs
-    )
-    ans = resp.choices[0].message.content
-    await save_message(session_id, "assistant", ans)
-    return {"answer": ans}
+@app.post("/api/vision/analyze")
+async def analyze(file: UploadFile = File(...)):
+    # replace with OpenAI vision call later
+    content = await file.read()
+    return {"ok": True, "bytes": len(content)}
 
-# -------- STT (upload audio -> text) ----------
-@app.post("/api/stt")
-async def stt(file: UploadFile = File(...)):
-    # passthrough to Whisper via OpenAI API (using "audio.transcriptions")
-    audio_bytes = await file.read()
-    resp = await client.audio.transcriptions.create(
-        model="gpt-4o-transcribe",
-        file=("speech.wav", audio_bytes, file.content_type or "audio/wav"),
-    )
-    return {"text": resp.text}
-
-# -------- TTS (text -> wav) ----------
-class TTSIn(BaseModel):
-    text: str
-
-@app.post("/api/tts")
-async def tts(in_: TTSIn):
-    # text to speech via OpenAI (audio.speech)
-    audio = await client.audio.speech.create(
-        model="gpt-4o-mini-tts",
-        voice="alloy",
-        input=in_.text,
-        format="wav",
-    )
-    return StreamingResponse(io.BytesIO(audio.read()), media_type="audio/wav")
 
 
 
