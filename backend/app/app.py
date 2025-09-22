@@ -1,160 +1,142 @@
-# backend/app/app.py
-import os
-import json
-import asyncio
-from contextlib import asynccontextmanager
-from typing import AsyncIterator, Optional
-
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Depends
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
+from typing import AsyncGenerator, Dict, List
+import os, json, asyncio
+import redis.asyncio as redis
+from dotenv import load_dotenv
+from openai import AsyncOpenAI
 
-# --- Redis (optional but recommended) ---
-_redis = None
-REDIS_URL = os.getenv("REDIS_URL")
+load_dotenv()
 
-try:
-    if REDIS_URL:
-        import redis.asyncio as aioredis
-        _redis = aioredis.from_url(REDIS_URL, decode_responses=True)
-except Exception as e:
-    _redis = None
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
-# --- OpenAI (optional streaming demo) ---
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-try:
-    if OPENAI_API_KEY:
-        from openai import AsyncOpenAI
-        oai = AsyncOpenAI(api_key=OPENAI_API_KEY)
-    else:
-        oai = None
-except Exception:
-    oai = None
+rdb = redis.from_url(REDIS_URL, decode_responses=True)
+app = FastAPI()
 
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    # warmup, ping redis if configured
-    if _redis:
-        try:
-            await _redis.ping()
-        except Exception:
-            pass
-    yield
-    # teardown
-    try:
-        if _redis:
-            await _redis.close()
-    except Exception:
-        pass
-
-app = FastAPI(lifespan=lifespan)
-
-# CORS for local dev + render
+# CORS
 origins = [
     "http://localhost:5173",
     "https://localhost:5173",
+    os.getenv("CORS_ORIGIN", "")
 ]
-if os.getenv("PUBLIC_FRONTEND_ORIGIN"):
-    origins.append(os.getenv("PUBLIC_FRONTEND_ORIGIN"))
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins + ["*"],  # relax for dev
+    allow_origins=[o for o in origins if o],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# -------- Health --------
+client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+
+# ---------- Health ----------
 @app.get("/health")
-def health_root():
-    return {"status": "ok"}
+async def health_root():
+    return {"status":"ok"}
 
 @app.get("/api/health")
-def health_api():
-    return {"status": "ok"}
+async def health_api():
+    return {"status":"ok"}
 
-# -------- Memory (Redis) helpers --------
-async def append_history(session_id: str, role: str, content: str):
-    if not _redis:
-        return
-    key = f"chat:{session_id}"
-    await _redis.rpush(key, json.dumps({"role": role, "content": content}))
-    # Keep last 100 msgs
-    await _redis.ltrim(key, -100, -1)
+# ---------- History in Redis ----------
+def _k(session_id:str): return f"session:{session_id}:messages"
 
-async def get_history(session_id: str):
-    if not _redis:
-        return []
-    key = f"chat:{session_id}"
-    items = await _redis.lrange(key, 0, -1)
+@app.get("/api/history/{session_id}")
+async def get_history(session_id:str):
+    items = await rdb.lrange(_k(session_id), 0, -1)
     return [json.loads(x) for x in items]
 
-# -------- SSE streaming --------
+class MessageIn(BaseModel):
+    role: str
+    content: str
+
+@app.post("/api/history/{session_id}")
+async def push_message(session_id:str, msg:MessageIn):
+    await rdb.rpush(_k(session_id), json.dumps(msg.model_dump()))
+    return {"ok": True}
+
+# ---------- SSE Streaming (server -> browser) ----------
 class AskIn(BaseModel):
     q: str
-    session_id: Optional[str] = "default"
+    session: str | None = None
 
-@app.post("/api/ask")
-async def ask(body: AskIn):
-    # non-streaming basic echo until you wire OpenAI RAG
-    await append_history(body.session_id, "user", body.q)
-    text = f"You asked: {body.q}"
-    await append_history(body.session_id, "assistant", text)
-    return {"answer": text}
+async def _sse_stream(question:str, session:str|None) -> AsyncGenerator[bytes, None]:
+    # pull history from redis (optional)
+    history = []
+    if session:
+        items = await rdb.lrange(_k(session), 0, -1)
+        history = [json.loads(x) for x in items]
 
-@app.post("/api/stream")
-async def stream_answer(body: AskIn):
-    async def gen():
-        # Real model streaming (OpenAI) if configured; else fake chunks
-        if oai:
-            # lightweight streaming completion
-            prompt = f"Answer briefly: {body.q}"
-            stream = await oai.chat.completions.create(
-                model="gpt-4o-mini",
-                stream=True,
-                messages=[{"role":"user","content":prompt}],
-            )
-            collected = []
-            async for ev in stream:
-                delta = ev.choices[0].delta.content or ""
-                if delta:
-                    collected.append(delta)
-                    yield f"data: {delta}\n\n"
-            final = "".join(collected)
-            await append_history(body.session_id, "user", body.q)
-            await append_history(body.session_id, "assistant", final)
-            yield "event: done\ndata: [DONE]\n\n"
-        else:
-            # demo chunks
-            for chunk in ["Thinking", " … ", "done."]:
-                yield f"data: {chunk}\n\n"
-                await asyncio.sleep(0.3)
-            yield "event: done\ndata: [DONE]\n\n"
+    msgs: List[Dict] = [{"role":"system","content":"You are Friday, concise and helpful."}]
+    msgs += history
+    msgs.append({"role":"user","content":question})
 
-    return StreamingResponse(gen(), media_type="text/event-stream")
+    # store the new user message
+    if session:
+        await rdb.rpush(_k(session), json.dumps({"role":"user","content":question}))
 
-# -------- WebSocket streaming --------
-@app.websocket("/ws")
-async def ws_endpoint(ws: WebSocket):
+    # stream tokens
+    stream = await client.chat.completions.create(
+        model=MODEL,
+        messages=msgs,
+        stream=True,
+    )
+    full_text = ""
+    yield b"retry: 1000\n"  # SSE hint
+    async for chunk in stream:
+        delta = chunk.choices[0].delta.content or ""
+        if delta:
+            full_text += delta
+            payload = f"data: {json.dumps({'delta': delta})}\n\n"
+            yield payload.encode("utf-8")
+
+    # store assistant message
+    if session:
+        await rdb.rpush(_k(session), json.dumps({"role":"assistant","content":full_text}))
+    yield b"data: [DONE]\n\n"
+
+@app.post("/api/ask/stream")
+async def ask_stream(body: AskIn):
+    return StreamingResponse(_sse_stream(body.q, body.session), media_type="text/event-stream")
+
+# ---------- WebSocket Chat (bi-directional) ----------
+@app.websocket("/ws/chat")
+async def ws_chat(ws: WebSocket):
     await ws.accept()
     try:
         while True:
-            msg = await ws.receive_text()
-            # Echo server; upgrade to model stream if desired
-            await ws.send_text(f"server received: {msg}")
+            raw = await ws.receive_text()
+            data = json.loads(raw)
+            question = data.get("q","")
+            session = data.get("session")
+
+            # stream via OpenAI; aggregate and forward chunks
+            msgs = [{"role":"system","content":"You are Friday, concise and helpful."}]
+            if session:
+                items = await rdb.lrange(_k(session), 0, -1)
+                msgs += [json.loads(x) for x in items]
+                await rdb.rpush(_k(session), json.dumps({"role":"user","content":question}))
+            msgs.append({"role":"user","content":question})
+
+            stream = await client.chat.completions.create(
+                model=MODEL, messages=msgs, stream=True
+            )
+            full=""
+            async for chunk in stream:
+                delta = chunk.choices[0].delta.content or ""
+                if delta:
+                    full += delta
+                    await ws.send_text(json.dumps({"delta": delta}))
+            if session:
+                await rdb.rpush(_k(session), json.dumps({"role":"assistant","content":full}))
+            await ws.send_text(json.dumps({"done": True}))
     except WebSocketDisconnect:
-        pass
+        return
 
-# -------- Simple vision stub (HTTP image upload) --------
-from fastapi import UploadFile, File
-
-@app.post("/api/vision/analyze")
-async def analyze(file: UploadFile = File(...)):
-    # replace with OpenAI vision call later
-    content = await file.read()
-    return {"ok": True, "bytes": len(content)}
 
 
 
