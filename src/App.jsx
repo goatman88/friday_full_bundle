@@ -1,81 +1,45 @@
-import React, { useEffect, useRef, useState } from 'react'
-import { rootHealth, apiHealth, ask, stream, wsStream, vision, stt, tts } from './api'
+// src/App.jsx
+import React, { useEffect, useState } from 'react';
+import { health, apiHealth, ask, streamAnswer, openWS } from './api';
+import CameraCapture from './CameraCapture.jsx';
 
 export default function App() {
-  const [status, setStatus] = useState('checking…')
-  const [h1, setH1] = useState(''); const [h2, setH2] = useState('')
-  const [q, setQ] = useState('what did the fox do?')
-  const [answer, setAnswer] = useState('')
-  const [streaming, setStreaming] = useState(false)
-
-  const [imgFile, setImgFile] = useState(null)
-  const [imgPrompt, setImgPrompt] = useState('Describe this image')
-
-  const [recording, setRecording] = useState(false)
-  const mediaRecRef = useRef(null)
-  const chunksRef = useRef([])
+  const [status, setStatus] = useState('checking…');
+  const [h1, setH1] = useState('');
+  const [h2, setH2] = useState('');
+  const [q, setQ] = useState('What did the fox do?');
+  const [answer, setAnswer] = useState('');
+  const [wsMsg, setWsMsg] = useState('');
 
   useEffect(() => {
-    Promise.all([rootHealth(), apiHealth()])
-      .then(([a,b]) => { setH1(a.status); setH2(b.status); setStatus('OK') })
-      .catch(() => setStatus('ERROR'))
-  }, [])
+    health().then(r => setH1(r.status)).catch(()=>setH1('ERR'));
+    apiHealth().then(r => setH2(r.status)).catch(()=>setH2('ERR'));
+    Promise.allSettled([health(), apiHealth()])
+      .then(([a,b]) => setStatus(a.status==='fulfilled' && b.status==='fulfilled' ? 'OK' : 'ERROR'));
+  }, []);
 
-  async function onAsk() {
-    const { answer } = await ask(q)
-    setAnswer(answer)
+  // WebSocket demo
+  function connectWS() {
+    const ws = openWS((msg) => setWsMsg(msg));
+    ws.onopen = () => ws.send('hello from client');
   }
 
-  function onSSE() {
-    setAnswer(''); setStreaming(true)
-    const stop = stream(q, (tok) => setAnswer(a => a + tok))
-    // store stop if you want to cancel
+  function onAsk() {
+    setAnswer('');
+    streamAnswer(q, {
+      onToken: (t) => setAnswer((s) => s + t),
+      onDone: () => setAnswer((s) => s + '\n[done]')
+    });
   }
 
-  function onWS() {
-    setAnswer(''); setStreaming(true)
-    wsStream(q, (tok) => setAnswer(a => a + tok))
-  }
-
-  async function onVision() {
-    if (!imgFile) return
-    const { answer } = await vision(imgPrompt, imgFile)
-    setAnswer(answer)
-  }
-
-  async function startMic() {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-    const rec = new MediaRecorder(stream)
-    mediaRecRef.current = rec
-    chunksRef.current = []
-    rec.ondataavailable = e => chunksRef.current.push(e.data)
-    rec.onstop = async () => {
-      const blob = new Blob(chunksRef.current, { type: 'audio/webm' })
-      const wav = await blob.arrayBuffer() // backend accepts webm as file; adjust if needed
-      const file = new File([wav], 'speech.webm', { type: 'audio/webm' })
-      const { text } = await stt(file)
-      setQ(text)
-    }
-    rec.start()
-    setRecording(true)
-  }
-
-  function stopMic() {
-    const rec = mediaRecRef.current
-    if (!rec) return
-    rec.stop()
-    setRecording(false)
-  }
-
-  async function speak() {
-    const audioBlob = await tts(answer || 'Hello from Friday!')
-    const url = URL.createObjectURL(audioBlob)
-    const a = new Audio(url)
-    a.play()
+  async function onSnap(blob) {
+    const res = await fetch('/api/vision/analyze', { method: 'POST', body: (f => { const fd=new FormData(); fd.append('file', f, 'snap.jpg'); return fd; })(new File([blob],'snap.jpg',{type:'image/jpeg'})) });
+    console.log(await res.json());
+    alert('Uploaded snapshot!');
   }
 
   return (
-    <div style={{ fontFamily: 'system-ui, sans-serif', padding: 24, lineHeight: 1.35 }}>
+    <div style={{ fontFamily:'system-ui, sans-serif', padding:24, lineHeight:1.35 }}>
       <h1>Friday Frontend</h1>
       <p>Status: <b>{status}</b></p>
 
@@ -85,32 +49,28 @@ export default function App() {
       <h3>/api/health</h3>
       <pre style={{ background:'#111', color:'#0f0', padding:12, overflow:'auto' }}>{String(h2)}</pre>
 
-      <h3>Ask (non-stream)</h3>
+      <h3>SSE Streaming (/api/stream)</h3>
       <div style={{ display:'flex', gap:8 }}>
         <input style={{ flex:1, padding:8 }} value={q} onChange={e=>setQ(e.target.value)} />
-        <button onClick={onAsk}>Ask</button>
-        <button onClick={onSSE}>SSE</button>
-        <button onClick={onWS}>WebSocket</button>
+        <button onClick={onAsk}>Stream</button>
       </div>
+      {answer && (
+        <>
+          <h4>Answer (live)</h4>
+          <pre style={{ background:'#111', color:'#0f0', padding:12, overflow:'auto' }}>{answer}</pre>
+        </>
+      )}
 
-      {answer && (<>
-        <h4>Answer</h4>
-        <pre style={{ background:'#111', color:'#0f0', padding:12, overflow:'auto' }}>{answer}</pre>
-        <button onClick={speak}>🔊 Speak</button>
-      </>)}
+      <h3>WebSocket (/ws)</h3>
+      <button onClick={connectWS}>Open WS</button>
+      <pre style={{ background:'#111', color:'#0f0', padding:12, overflow:'auto' }}>{wsMsg}</pre>
 
-      <h3>Vision</h3>
-      <input type="file" accept="image/*" onChange={e=>setImgFile(e.target.files[0])} />
-      <input style={{ marginLeft:8, padding:8, width:'60%' }} value={imgPrompt} onChange={e=>setImgPrompt(e.target.value)} />
-      <button onClick={onVision}>Analyze</button>
-
-      <h3>Mic</h3>
-      {!recording
-        ? <button onClick={startMic}>🎙️ Start</button>
-        : <button onClick={stopMic}>⏹ Stop</button>}
+      <h3>Camera capture</h3>
+      <CameraCapture onSnap={onSnap} />
     </div>
-  )
+  );
 }
+
 
 
 
