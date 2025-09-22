@@ -1,250 +1,124 @@
-// src/App.jsx
-import React, { useEffect, useRef, useState } from "react";
-
-const BACKEND_BASE = import.meta.env.VITE_BACKEND_URL || "";
+import React, { useEffect, useRef, useState } from 'react'
+import { health, apiHealth, ask, vision, stt, tts } from './api.js'
 
 export default function App() {
-  // ---------- state ----------
-  const [recording, setRecording] = useState(false);
-  const [transcript, setTranscript] = useState("");
-  const [answer, setAnswer] = useState("");
-  const [wakeWordArmed, setWakeWordArmed] = useState(true);
-  const [voice, setVoice] = useState("alloy");
-  const [speed, setSpeed] = useState(1.0);
+  const [status, setStatus] = useState('checking...')
+  const [h1, setH1] = useState('')
+  const [h2, setH2] = useState('')
 
-  const [images, setImages] = useState([]);
-  const [visionText, setVisionText] = useState("");
+  const [question, setQuestion] = useState('what did the fox do?')
+  const [answer, setAnswer] = useState('')
 
-  // media/stream refs
-  const mediaRecorderRef = useRef(null);
-  const chunksRef = useRef([]);
-  const audioCtxRef = useRef(null);
-  const analyserRef = useRef(null);
-  const silenceMsRef = useRef(0);
-  const audioElRef = useRef(null); // for TTS playback
-  const mediaSourceRef = useRef(null);
-  const sourceBufferRef = useRef(null);
-  const abortCurrentTTS = useRef(() => {});
+  const [prompt, setPrompt] = useState('Describe this image')
+  const [imageUrl, setImageUrl] = useState('')
+  const [file, setFile] = useState(null)
+  const fileRef = useRef(null)
 
-  // VAD settings
-  const silenceThreshold = 0.01;
-  const maxSilenceMs = 1100;
+  const [sttText, setSttText] = useState('')
+  const [rec, setRec] = useState(null)
+  const [recording, setRecording] = useState(false)
 
-  function api(p) { return `${BACKEND_BASE}${p}` }
+  useEffect(() => {
+    Promise.all([health(), apiHealth()])
+      .then(([a, b]) => {
+        setH1(JSON.stringify(a))
+        setH2(JSON.stringify(b))
+        setStatus('OK')
+      })
+      .catch(() => setStatus('ERROR'))
+  }, [])
 
-  // ---------- barge-in: stop any playing audio ----------
-  function stopTTS() {
-    try { abortCurrentTTS.current?.(); } catch {}
-    const el = audioElRef.current;
-    if (el) {
-      el.pause();
-      el.removeAttribute("src");
-      el.load();
-    }
-  }
-
-  // ---------- voice capture ----------
-  async function startListening() {
-    if (recording) return;
-    stopTTS(); // barge-in
-    setRecording(true);
-    setTranscript(""); setAnswer("");
-
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    mediaRecorderRef.current = new MediaRecorder(stream, { mimeType: "audio/webm" });
-    chunksRef.current = [];
-
-    // VAD
-    audioCtxRef.current = new AudioContext();
-    const src = audioCtxRef.current.createMediaStreamSource(stream);
-    analyserRef.current = audioCtxRef.current.createAnalyser();
-    analyserRef.current.fftSize = 2048;
-    src.connect(analyserRef.current);
-
-    const pcm = new Float32Array(analyserRef.current.fftSize);
-    let last = performance.now();
-    const tick = () => {
-      if (!recording) return;
-      analyserRef.current.getFloatTimeDomainData(pcm);
-      let sum = 0; for (let i=0;i<pcm.length;i++) sum += pcm[i]*pcm[i];
-      const rms = Math.sqrt(sum/pcm.length);
-      const now = performance.now(); const dt = now - last; last = now;
-      if (rms < silenceThreshold) {
-        silenceMsRef.current += dt;
-        if (silenceMsRef.current >= maxSilenceMs) return stopListening();
-      } else { silenceMsRef.current = 0; }
-      requestAnimationFrame(tick);
-    };
-    requestAnimationFrame(tick);
-
-    mediaRecorderRef.current.ondataavailable = (e) => {
-      if (e.data && e.data.size) chunksRef.current.push(e.data);
-    };
-    mediaRecorderRef.current.onstop = () => handleCompleteRecording();
-
-    mediaRecorderRef.current.start(250);
-  }
-
-  function stopListening() {
-    if (!recording) return;
-    setRecording(false);
-    silenceMsRef.current = 0;
-    mediaRecorderRef.current?.stop();
-    mediaRecorderRef.current?.stream.getTracks().forEach(t => t.stop());
-    audioCtxRef.current?.close();
-    analyserRef.current = null; audioCtxRef.current = null;
-  }
-
-  async function handleCompleteRecording() {
-    const blob = new Blob(chunksRef.current, { type: "audio/webm" });
-    chunksRef.current = [];
-
-    // STT
-    const fd = new FormData(); fd.append("file", blob, "input.webm");
-    const stt = await (await fetch(api("/api/stt"), { method:"POST", body:fd })).json();
-    const heard = (stt.text || "").trim();
-    setTranscript(heard);
-
-    let prompt = heard;
-    if (wakeWordArmed && /(^|\s)hey\s+friday\b/i.test(heard)) {
-      prompt = heard.replace(/(^|\s)hey\s+friday\b/i,"").trim();
-    }
-    if (!prompt) return;
-
-    // Ask
-    const askFd = new FormData(); askFd.append("prompt", prompt);
-    const ans = await (await fetch(api("/api/ask"), { method:"POST", body: askFd })).json();
-    const text = (ans.text || "").trim(); setAnswer(text);
-
-    // Streaming TTS (fallback to non-stream)
+  async function onAsk() {
     try {
-      await playTTSStream(text, voice, speed);
-    } catch {
-      await playTTSBlob(text, voice, speed);
+      const data = await ask(question)
+      setAnswer(data.answer)
+      const wav = await tts(data.answer)
+      playWav(wav)
+    } catch (e) {
+      setAnswer(String(e.message || e))
     }
   }
 
-  // ---------- TTS helpers ----------
-  async function playTTSBlob(text, voice, speed) {
-    const fd = new FormData();
-    fd.append("text", text); fd.append("voice", voice); fd.append("speed", String(speed));
-    const res = await fetch(api("/api/tts"), { method:"POST", body:fd });
-    const blob = await res.blob();
-    const el = audioElRef.current || (audioElRef.current = new Audio());
-    el.src = URL.createObjectURL(blob);
-    await el.play();
+  async function onVision() {
+    try {
+      const data = await vision({ prompt, imageUrl, file })
+      setAnswer(data.answer)
+    } catch (e) {
+      setAnswer(String(e.message || e))
+    }
   }
 
-  async function playTTSStream(text, voice, speed) {
-    // Prepare MediaSource
-    const el = audioElRef.current || (audioElRef.current = new Audio());
-    stopTTS();
-    mediaSourceRef.current = new MediaSource();
-    const url = URL.createObjectURL(mediaSourceRef.current);
-    el.src = url;
-
-    let cancel = false;
-    abortCurrentTTS.current = () => { cancel = true; };
-
-    mediaSourceRef.current.addEventListener("sourceopen", async () => {
-      try {
-        sourceBufferRef.current = mediaSourceRef.current.addSourceBuffer("audio/mpeg");
-        const fd = new FormData();
-        fd.append("text", text); fd.append("voice", voice); fd.append("speed", String(speed));
-        const res = await fetch(api("/api/tts/stream"), { method:"POST", body:fd });
-        if (!res.ok) throw new Error("stream http error");
-
-        const reader = res.body.getReader();
-        async function pump() {
-          if (cancel) return mediaSourceRef.current.endOfStream();
-          const { done, value } = await reader.read();
-          if (done) { mediaSourceRef.current.endOfStream(); return; }
-          await new Promise((resolve, reject) => {
-            sourceBufferRef.current.addEventListener("updateend", resolve, { once: true });
-            try { sourceBufferRef.current.appendBuffer(value); }
-            catch (e) { reject(e); }
-          });
-          await pump();
-        }
-        await el.play();
-        await pump();
-      } catch (e) {
-        try { mediaSourceRef.current.endOfStream(); } catch {}
-        throw e;
-      }
-    });
+  async function startRec() {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' })
+    const chunks = []
+    mediaRecorder.ondataavailable = e => chunks.push(e.data)
+    mediaRecorder.onstop = async () => {
+      const blob = new Blob(chunks, { type: 'audio/webm' })
+      const data = await stt(blob)
+      setSttText(data.text || '')
+    }
+    mediaRecorder.start()
+    setRec(mediaRecorder)
+    setRecording(true)
   }
 
-  // ---------- Vision ----------
-  function onPickImages(e) {
-    const files = Array.from(e.target.files || []);
-    setImages(files.map(f => ({ file: f, preview: URL.createObjectURL(f) })));
-    setVisionText("");
+  function stopRec() {
+    if (rec) {
+      rec.stop()
+      setRecording(false)
+    }
   }
 
-  async function runVision() {
-    if (!images.length) return;
-    const fd = new FormData();
-    images.forEach((it) => fd.append("files", it.file));
-    fd.append(
-      "prompt",
-      "You are Friday. For all images: give a 2-sentence overview, then 3 bullet observations. Be specific."
-    );
-    const res = await fetch(api("/api/vision"), { method:"POST", body: fd });
-    const js = await res.json();
-    setVisionText(js.description || "(no description)");
+  function playWav(b64) {
+    const audio = new Audio('data:audio/wav;base64,' + b64)
+    audio.play().catch(() => {})
   }
 
   return (
-    <div style={{ fontFamily:"system-ui, sans-serif", padding:24, maxWidth:900 }}>
-      <h1>Friday — Max Voice & Vision</h1>
+    <div style={{ fontFamily: 'system-ui, sans-serif', padding: 24, lineHeight: 1.35 }}>
+      <h1>Friday Frontend</h1>
+      <p>Status: <b>{status}</b></p>
 
-      <section style={{marginBottom:28}}>
-        <h2>🎤 Voice</h2>
-        <div style={{display:"flex", gap:12, flexWrap:"wrap", alignItems:"center"}}>
-          <button onClick={recording?stopListening:startListening} style={{padding:"10px 16px"}}>
-            {recording ? "■ Stop" : "▶︎ Push-to-talk"}
-          </button>
-          <label>Voice:&nbsp;
-            <select value={voice} onChange={e=>setVoice(e.target.value)}>
-              <option>alloy</option><option>verse</option><option>breeze</option><option>amber</option>
-            </select>
-          </label>
-          <label>Speed:&nbsp;
-            <input type="number" step="0.1" min="0.5" max="1.5" value={speed}
-                   onChange={e=>setSpeed(Number(e.target.value))} style={{width:70}}/>
-          </label>
-          <label style={{display:"flex",alignItems:"center",gap:6}}>
-            <input type="checkbox" checked={wakeWordArmed} onChange={e=>setWakeWordArmed(e.target.checked)}/>
-            Enable “Hey Friday”
-          </label>
-        </div>
-        <div style={{marginTop:12, fontSize:14, lineHeight:1.5}}>
-          <div><b>Heard:</b> {transcript || <i>…</i>}</div>
-          <div><b>Friday:</b> {answer || <i>…</i>}</div>
-        </div>
-      </section>
+      <h3>/health</h3>
+      <pre style={{ background:'#111', color:'#0f0', padding:12, overflow:'auto' }}>{String(h1)}</pre>
 
-      <section>
-        <h2>👀 Vision (multi-image)</h2>
-        <div style={{display:"flex", gap:12, alignItems:"center"}}>
-          <input type="file" accept="image/*" multiple onChange={onPickImages}/>
-          <button onClick={runVision} disabled={!images.length}>Describe</button>
+      <h3>/api/health</h3>
+      <pre style={{ background:'#111', color:'#0f0', padding:12, overflow:'auto' }}>{String(h2)}</pre>
+
+      <h3 style={{margin:'24px 0'}}>Ask (LLM + optional TTS)</h3>
+      <div style={{ display:'flex', gap:8 }}>
+        <input style={{ flex:1, padding:8 }} value={question} onChange={e => setQuestion(e.target.value)} />
+        <button onClick={onAsk}>Ask</button>
+      </div>
+
+      <h3 style={{margin:'24px 0'}}>Vision</h3>
+      <div style={{ display:'grid', gap:8, gridTemplateColumns: '1fr auto' }}>
+        <input placeholder="Prompt" value={prompt} onChange={e => setPrompt(e.target.value)} />
+        <div />
+        <input placeholder="Image URL" value={imageUrl} onChange={e => setImageUrl(e.target.value)} />
+        <button onClick={() => fileRef.current?.click()}>Upload</button>
+        <input ref={fileRef} type="file" accept="image/*" style={{ display:'none' }} onChange={e => setFile(e.target.files?.[0] || null)} />
+        <button onClick={onVision}>Describe</button>
+      </div>
+
+      <h3 style={{margin:'24px 0'}}>Speech</h3>
+      <div style={{ display:'flex', gap:8 }}>
+        {!recording ? <button onClick={startRec}>🎙️ Record</button> : <button onClick={stopRec}>⏹ Stop</button>}
+        <input style={{ flex:1, padding:8 }} value={sttText} onChange={e => setSttText(e.target.value)} />
+        <button onClick={async () => playWav(await tts(sttText || 'Hello!'))}>🔊 Speak</button>
+      </div>
+
+      {answer && (
+        <div style={{marginTop:24}}>
+          <h4>Answer</h4>
+          <pre style={{ background:'#111', color:'#0f0', padding:12, overflow:'auto' }}>{String(answer)}</pre>
         </div>
-        {!!images.length && (
-          <div style={{display:"flex", gap:12, marginTop:12, flexWrap:"wrap"}}>
-            {images.map((it, i)=>(
-              <img key={i} src={it.preview} alt={"img"+i} style={{width:180, borderRadius:8}}/>
-            ))}
-          </div>
-        )}
-        {visionText && (
-          <pre style={{whiteSpace:"pre-wrap", marginTop:12}}>{visionText}</pre>
-        )}
-      </section>
+      )}
     </div>
-  );
+  )
 }
+
 
 
 
