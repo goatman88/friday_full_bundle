@@ -1,2 +1,1 @@
-
-# makes 'backend' a package
+# empty, but required so 'backend.app.app:app' is importable
