@@ -1,114 +1,184 @@
-# backend/main.py
-# FastAPI backend: health checks, /api/ask (OpenAI), and a secure
-# WebRTC SDP proxy for OpenAI Realtime.
-
-from fastapi import FastAPI, Request, Response, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, PlainTextResponse
 import os
-import httpx
+import json
+import asyncio
+import logging
+from typing import Any, Dict
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+
+# ── OpenAI SDK (Responses API) ──────────────────────────────
 from openai import OpenAI
+import httpx
+import websockets
 
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
+# ────────────────────────────────────────────────────────────
+# ENV / Config
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+REALTIME_MODEL = os.getenv("REALTIME_MODEL", "gpt-4o-realtime-preview-2024-12-17")
+TEXT_MODEL = os.getenv("TEXT_MODEL", "gpt-4o-mini")
+
 if not OPENAI_API_KEY:
-    # We don't crash the app, but we will 500 on calls that need it.
-    pass
+    print("WARN: OPENAI_API_KEY is not set. /api/ask, /session, /realtime will fail.")
 
-# You can change this to the Realtime model you want to target
-REALTIME_MODEL = os.environ.get("OPENAI_REALTIME_MODEL", "gpt-4o-realtime-preview")
+client = OpenAI(api_key=OPENAI_API_KEY)
 
+# ────────────────────────────────────────────────────────────
+# FastAPI app
 app = FastAPI(title="Friday Backend")
 
-# CORS for your Vite dev server and Render preview
+# CORS (dev-friendly; tighten for prod)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "*"],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ---------- Health ----------
+# ────────────────────────────────────────────────────────────
+# Health
+
 @app.get("/health")
-def health_root():
+def root_health():
     return {"status": "ok"}
 
 @app.get("/api/health")
-def health_api():
+def api_health():
     return {"status": "ok"}
 
-# ---------- /api/ask (Chat) ----------
-# Expects JSON: { "q": "your question" }
-# Returns: { "answer": "..." }
+# ────────────────────────────────────────────────────────────
+# Ask (Responses API)
+
+class AskBody(BaseModel):
+    question: str
+
 @app.post("/api/ask")
-async def api_ask(req: Request):
+async def api_ask(body: AskBody):
     if not OPENAI_API_KEY:
-        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not set")
+        return JSONResponse({"error": "OPENAI_API_KEY missing"}, status_code=500)
+    try:
+        # Minimal Responses call
+        resp = client.responses.create(
+            model=TEXT_MODEL,
+            input=f"Answer concisely: {body.question}"
+        )
+        # Pull the text safely
+        answer = ""
+        if resp.output and len(resp.output) > 0:
+            # The first output item typically contains the text
+            first = resp.output[0]
+            if getattr(first, "content", None) and len(first.content) > 0:
+                answer = first.content[0].text
+        if not answer:
+            answer = "No answer returned."
+        return {"answer": answer}
+    except Exception as e:
+        logging.exception("ask failed")
+        return JSONResponse({"error": str(e)}, status_code=500)
 
-    body = await req.json()
-    user_msg = (body.get("q") or "").strip()
-    if not user_msg:
-        return {"answer": ""}
+# ────────────────────────────────────────────────────────────
+# Ephemeral key for Direct WebRTC (browser will call this)
 
-    client = OpenAI(api_key=OPENAI_API_KEY)
-    # Use a fast, low-cost model — adjust as you like
-    resp = client.chat.completions.create(
-        model=os.environ.get("OPENAI_CHAT_MODEL", "gpt-4o-mini"),
-        messages=[{"role": "user", "content": user_msg}],
-    )
-    answer = resp.choices[0].message.content
-    return {"answer": answer}
+SESSION_URL = "https://api.openai.com/v1/realtime/sessions"
 
-# ---------- /api/session (optional helper) ----------
-# Creates a short-lived Realtime session metadata.
-# The browser can use this JSON for client-side flows that need it.
-@app.post("/api/session")
-async def api_session():
+@app.get("/session")
+async def get_ephemeral_session():
+    """
+    Mint a short-lived client_secret for WebRTC browser usage.
+    Returns shape: { "client_secret": { "value": "..." }, ... }
+    """
     if not OPENAI_API_KEY:
-        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not set")
+        return JSONResponse({"error": "OPENAI_API_KEY missing"}, status_code=500)
 
-    url = "https://api.openai.com/v1/realtime/sessions"
-    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
-    payload = {"model": REALTIME_MODEL, "voice": "verse"}  # voice is optional
-
-    async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.post(url, headers=headers, json=payload)
-        try:
-            data = r.json()
-        except Exception:
-            raise HTTPException(status_code=502, detail="Invalid response from OpenAI")
-    return JSONResponse(content=data, status_code=r.status_code)
-
-# ---------- /api/realtime/sdp (SDP Proxy) ----------
-# Secure server-side SDP exchange so your API key never touches the browser.
-#
-# Browser POSTs the local offer SDP (plain text). We forward it to OpenAI’s
-# Realtime REST endpoint and return the answer SDP (also plain text).
-#
-# Frontend usage:
-#   const answer = await fetch("/api/realtime/sdp", { method: "POST", body: offer.sdp }).then(r => r.text());
-#   await pc.setRemoteDescription({ type: "answer", sdp: answer });
-@app.post("/api/realtime/sdp")
-async def api_realtime_sdp(request: Request):
-    if not OPENAI_API_KEY:
-        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not set")
-
-    offer_sdp = await request.body()
-    if not offer_sdp:
-        raise HTTPException(status_code=400, detail="Missing SDP offer")
-
-    url = f"https://api.openai.com/v1/realtime?model={REALTIME_MODEL}"
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/sdp",
-        # Some deployments still expect this header (kept for compatibility)
-        "OpenAI-Beta": "realtime=v1",
+    payload = {
+        "model": REALTIME_MODEL,
+        # Optional voice; browser can ignore if you're text-only:
+        "voice": os.getenv("REALTIME_VOICE", "verse"),
+        # TTL is controlled by OpenAI; you can add metadata if you want
     }
 
-    async with httpx.AsyncClient(timeout=60) as client:
-        r = await client.post(url, headers=headers, content=offer_sdp)
-        # The Realtime REST returns the SDP answer as text/plain
-        answer_sdp = r.text
-        if r.status_code >= 400:
-            raise HTTPException(status_code=r.status_code, detail=answer_sdp)
-        return PlainTextResponse(answer_sdp, status_code=200)
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json",
+        "OpenAI-Beta": "realtime=v1"
+    }
+
+    async with httpx.AsyncClient(timeout=15) as http:
+        r = await http.post(SESSION_URL, headers=headers, json=payload)
+        if r.status_code != 200:
+            return JSONResponse({"error": r.text}, status_code=r.status_code)
+        return JSONResponse(r.json())
+
+# ────────────────────────────────────────────────────────────
+# WebSocket proxy to OpenAI Realtime (server-bridge)
+
+async def pipe_ws(client_ws: WebSocket, oai_ws):
+    """
+    Bi-directional piping: browser WS <-> OpenAI WS
+    - For text frames: we pass raw strings.
+    - For binary frames (if any): we pass bytes.
+    """
+    async def from_client():
+        try:
+            while True:
+                msg = await client_ws.receive()
+                if "text" in msg and msg["text"] is not None:
+                    await oai_ws.send(msg["text"])
+                elif "bytes" in msg and msg["bytes"] is not None:
+                    await oai_ws.send(msg["bytes"])
+        except Exception:
+            pass  # handled by caller
+
+    async def from_openai():
+        try:
+            async for message in oai_ws:
+                # message can be str or bytes
+                if isinstance(message, (bytes, bytearray)):
+                    await client_ws.send_bytes(message)
+                else:
+                    await client_ws.send_text(message)
+        except Exception:
+            pass  # handled by caller
+
+    await asyncio.gather(from_client(), from_openai())
+
+@app.websocket("/realtime")
+async def realtime_proxy(ws: WebSocket):
+    """
+    Browser connects here: ws://localhost:8000/realtime
+    We connect server-side to OpenAI Realtime over secure WS and relay messages.
+    """
+    await ws.accept()
+    if not OPENAI_API_KEY:
+        await ws.send_text(json.dumps({"error": "OPENAI_API_KEY missing"}))
+        await ws.close()
+        return
+
+    # Build OpenAI Realtime WS URL
+    oai_url = f"wss://api.openai.com/v1/realtime?model={REALTIME_MODEL}"
+    headers = [
+        ("Authorization", f"Bearer {OPENAI_API_KEY}"),
+        ("OpenAI-Beta", "realtime=v1"),
+    ]
+
+    try:
+        async with websockets.connect(oai_url, extra_headers=headers, max_size=None) as oai_ws:
+            await pipe_ws(ws, oai_ws)
+    except WebSocketDisconnect:
+        # client closed
+        pass
+    except Exception as e:
+        logging.exception("realtime proxy error")
+        try:
+            await ws.send_text(json.dumps({"error": str(e)}))
+        except Exception:
+            pass
+        finally:
+            try:
+                await ws.close()
+            except Exception:
+                pass
+
