@@ -1,67 +1,82 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1.0"
-    />
-    <title>Friday Frontend</title>
-  </head>
-  <body>
-    <div id="app" style="max-width: 960px; margin: 24px auto; font-family: system-ui, sans-serif;">
-      <h1>Friday Frontend</h1>
-      <div> Status: <span id="status">checking…</span> </div>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Friday — Frontend</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; }
+    fieldset { margin-bottom: 16px; }
+    .ok { color: #0a0; font-weight: 600; }
+    .bad { color: #a00; font-weight: 600; }
+    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    pre { background: #fafafa; }
+    input, button, select, textarea { font: inherit; padding: 6px 8px; }
+    label { font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>Friday</h1>
 
-      <h3>/health</h3>
-      <pre id="healthBox">loading…</pre>
-
-      <h3>/api/health</h3>
-      <pre id="apiHealthBox">loading…</pre>
-
-      <h3>Ask (wired to POST /api/ask)</h3>
-      <div style="display:flex; gap:8px;">
-        <input id="q" placeholder="what did the fox do?" style="flex:1;padding:8px;">
-        <button id="askBtn">Ask</button>
-        <select id="latencySel" title="Latency mode">
-          <option value="">Studio (default)</option>
-          <option value="balanced">Live Chat</option>
-          <option value="ultra">Ultra-fast</option>
-        </select>
-      </div>
-      <h4>Answer</h4>
-      <pre id="answer"></pre>
-
-      <hr>
-
-      <h3>Camera</h3>
-      <div style="display:flex; gap:12px; align-items:center;">
-        <button id="startCamBtn">Start Camera</button>
-        <button id="snapBtn">Snap</button>
-        <canvas id="snapCanvas" width="320" height="240" style="border:1px solid #ddd"></canvas>
-      </div>
-      <video id="cam" playsinline autoplay muted style="width:320px; display:block; margin-top:8px; background:#000;"></video>
-
-      <hr>
-
-      <h3>Realtime</h3>
-      <div style="display:flex; gap:12px; align-items:center;">
-        <button id="rtServerBtn">Start via Server (secure)</button>
-        <button id="rtDirectBtn">Start Direct (dev)</button>
-        <select id="rtLatencySel">
-          <option value="">Studio</option>
-          <option value="balanced">Live Chat</option>
-          <option value="ultra">Ultra-fast</option>
-        </select>
-      </div>
-
-      <pre id="rtLog" style="margin-top:12px; height:140px; overflow:auto; background:#f7f7f7; padding:8px;"></pre>
-      <audio id="rtAudio" autoplay></audio>
+  <fieldset>
+    <legend>Backend Health</legend>
+    <div class="row">
+      <button id="pingHealth" type="button">Ping /health</button>
+      <span id="healthStatus">unknown</span>
+      <button id="pingApiHealth" type="button">Ping /api/health</button>
+      <span id="apiHealthStatus">unknown</span>
     </div>
+  </fieldset>
 
-    <script type="module" src="/src/main.js"></script>
-  </body>
+  <fieldset>
+    <legend>Ask</legend>
+    <div class="row">
+      <input id="askInput" type="text" placeholder="Ask something…" style="min-width:340px" />
+      <select id="latency">
+        <option value="">quality</option>
+        <option value="balanced">balanced</option>
+        <option value="ultra">ultra-fast</option>
+      </select>
+      <button id="askBtn" type="button">/api/ask</button>
+    </div>
+    <pre id="askOut"></pre>
+  </fieldset>
+
+  <fieldset>
+    <legend>Session</legend>
+    <div class="row">
+      <button id="newSessionBtn" type="button">New Session</button>
+      <span>session_id:</span>
+      <code id="sessionId">(none)</code>
+      <button id="resetSessionBtn" type="button">Reset Session</button>
+    </div>
+  </fieldset>
+
+  <!-- ✅ Live Transcript controls -->
+  <fieldset>
+    <legend>Realtime Transcript (live SSE)</legend>
+    <div class="row">
+      <button id="startSseBtn" type="button">Start Live Transcript</button>
+      <button id="clearLogBtn" type="button" title="Deletes /session/{sid}/log on server">Clear Transcript</button>
+      <a id="downloadLogJson" href="#" target="_blank" rel="noopener">Download JSON</a>
+      <a id="downloadLogTxt" href="#" target="_blank" rel="noopener">Download TXT</a>
+    </div>
+    <pre id="sseBox" style="max-height:220px;overflow:auto;border:1px solid #ccc;padding:8px"></pre>
+  </fieldset>
+
+  <!-- ✅ Metrics stream -->
+  <fieldset>
+    <legend>Backend Metrics (live)</legend>
+    <div class="row">
+      <button id="startMetricsBtn" type="button">Start Metrics Stream</button>
+    </div>
+    <pre id="metricsBox" style="max-height:160px;overflow:auto;border:1px solid #ccc;padding:8px"></pre>
+  </fieldset>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
 </html>
+
 
 
 
