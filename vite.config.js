@@ -1,24 +1,24 @@
-import react from '@vitejs/plugin-react';
-import { defineConfig, loadEnv } from 'vite';
+// vite.config.js
+import { defineConfig } from "vite";
 
-export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), '');
-  const target = env.VITE_API_BASE || 'http://localhost:8000';
-
-  return {
-    plugins: [react()],
-    server: {
-      port: 5173,
-      strictPort: true,
-      proxy: {
-        // convenience for local dev
-        '/health': { target, changeOrigin: true },
-        '/api':   { target, changeOrigin: true },
-        '/ws':    { target, changeOrigin: true, ws: true }
-      }
-    }
-  }
+export default defineConfig({
+  server: {
+    port: 5173,
+    strictPort: true,
+    proxy: {
+      // forward both health roots and all API routes to the FastAPI backend
+      "/health": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+      },
+      "/api": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+      },
+    },
+  },
 });
+
 
 
 
