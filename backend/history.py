@@ -1,7 +1,9 @@
-import os, json, aioredis
+import os, json, asyncio
 from fastapi import APIRouter, HTTPException
+import aioredis
 
 router = APIRouter()
+
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 _pool = None
 
@@ -14,12 +16,13 @@ async def get_redis():
 @router.get("/api/history/{session_id}")
 async def get_history(session_id: str):
     r = await get_redis()
-    items = await r.lrange(f"hist:{session_id}", 0, -1)
-    return [json.loads(x) for x in items]
+    vals = await r.lrange(f"hist:{session_id}", 0, -1)
+    return [json.loads(v) for v in vals]
 
 @router.post("/api/history/{session_id}")
-async def add_history(session_id: str, item: dict):
+async def append_history(session_id: str, item: dict):
     r = await get_redis()
     await r.rpush(f"hist:{session_id}", json.dumps(item))
-    await r.ltrim(f"hist:{session_id}", -200, -1)  # cap at last 200
+    await r.ltrim(f"hist:{session_id}", -200, -1)  # keep last 200
     return {"ok": True}
+
