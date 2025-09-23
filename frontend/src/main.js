@@ -142,6 +142,26 @@ $("rtDirectBtn").onclick = async () => {
     logRT("Realtime direct error: " + e.message);
   }
 };
+// Live SSE transcript
+$("startSseBtn").onclick = async () => {
+  const sid = await ensureSession();
+  const base = BACKEND_BASE;
+  const es = new EventSource(`${base}/session/${sid}/log/stream`);
+  const box = $("sseBox");
+  es.onmessage = (e) => {
+    try {
+      const j = JSON.parse(e.data);
+      box.textContent += `[${j.kind}] ${j.text}\n`;
+      box.scrollTop = box.scrollHeight;
+    } catch {
+      box.textContent += e.data + "\n";
+    }
+  };
+  es.onerror = () => {
+    box.textContent += "[stream error]\n";
+    es.close();
+  };
+};
 
 // ---- Wake: keyboard fallback (Shift+Space) ----
 let hotPressed = false;
