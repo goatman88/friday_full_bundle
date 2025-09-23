@@ -1,99 +1,74 @@
+<!-- frontend/index.html -->
 <!doctype html>
-<html>
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0"
+    />
     <title>Friday Frontend</title>
     <style>
       body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
-      .bar { background:#111; color:#9f9; padding:8px 12px; border-radius:6px; white-space:pre-wrap; }
-      .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
-      .card { border:1px solid #ddd; padding:12px; border-radius:8px; margin:10px 0; }
-      button { padding:6px 12px; }
-      textarea { width: 100%; height: 52px; }
-      video, canvas { background:#000; border-radius:6px; }
-      .cols { display:grid; grid-template-columns: repeat(auto-fit,minmax(280px,1fr)); gap:14px; }
-      #log { max-height:180px; overflow:auto; background:#f7f7f7; padding:8px; font-family:ui-monospace, SFMono-Regular, Menlo, monospace }
+      .card { border: 1px solid #e1e1e1; border-radius: 8px; padding: 16px; margin: 12px 0; }
+      pre { margin: 8px 0; padding: 8px; background: #111827; color: #c9f2c7; border-radius: 6px; overflow: auto; }
+      .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      .row > * { margin: 4px 0; }
+      input[type="text"] { flex: 1; padding: 10px 12px; border: 1px solid #ccc; border-radius: 6px; }
+      button { padding: 10px 12px; border: 0; border-radius: 6px; background: #2563eb; color: white; cursor: pointer; }
+      button.secondary { background: #6b7280; }
+      h1 { margin-top: 0; }
+      video { width: 320px; height: 180px; background: #000; border-radius: 8px; }
+      audio { display: block; margin-top: 8px; }
+      .ok { color: #10b981; font-weight: 600; }
+      .err { color: #ef4444; font-weight: 600; }
     </style>
   </head>
   <body>
     <h1>Friday Frontend</h1>
-
-    <div class="card">
-      <p>Status: <strong id="status">…</strong></p>
-      <div>/health</div>
-      <div id="health" class="bar">…</div>
-      <div style="margin-top:10px">/api/health</div>
-      <div id="apihealth" class="bar">…</div>
+    <div class="row">
+      <div>Status: <span id="status-label" class="ok">…</span></div>
     </div>
 
     <div class="card">
+      <h3>/health</h3>
+      <pre id="pre-health-root">{}</pre>
+    </div>
+
+    <div class="card">
+      <h3>/api/health</h3>
+      <pre id="pre-health-api">{}</pre>
+    </div>
+
+    <div class="card">
+      <h3>Ask (wired to POST /api/ask)</h3>
+      <form id="ask-form" class="row">
+        <input id="ask-input" type="text" placeholder="what did the fox do?" />
+        <button type="submit">Ask</button>
+      </form>
+      <h4>Answer</h4>
+      <pre id="answer-pre"> </pre>
+    </div>
+
+    <div class="card">
+      <h3>Camera</h3>
       <div class="row">
-        <label>Ask (wired to POST /api/ask):</label>
+        <button id="btnStartCam">Start Camera</button>
+        <button id="btnStopCam" class="secondary">Stop Camera</button>
       </div>
-      <div class="row">
-        <input id="q" placeholder="what did the fox do?" style="flex:1" />
-        <button id="ask">Ask</button>
-      </div>
-      <div style="margin-top:10px">Answer</div>
-      <div id="answer" class="bar"></div>
-    </div>
-
-    <h2>Labs</h2>
-    <div class="cols">
-      <div class="card">
-        <h3>SSE stream</h3>
-        <div class="row">
-          <input id="ssePrompt" placeholder="type a prompt" style="flex:1">
-          <button id="sseBtn">Stream</button>
-        </div>
-        <div id="sseOut" class="bar" style="margin-top:8px"></div>
-      </div>
-
-      <div class="card">
-        <h3>WebSocket chat</h3>
-        <div class="row">
-          <button id="wsOpen">Open</button>
-          <button id="wsSend">Send “hello”</button>
-          <button id="wsClose">Close</button>
-        </div>
-        <div id="wsOut" class="bar" style="margin-top:8px"></div>
-      </div>
-
-      <div class="card">
-        <h3>Camera</h3>
-        <div class="row">
-          <button id="camStart">Start</button>
-          <button id="camSnap">Snap</button>
-          <button id="camStop">Stop</button>
-        </div>
-        <video id="cam" autoplay playsinline width="320" height="240"></video>
-        <canvas id="snap" width="320" height="240" style="display:block;margin-top:8px"></canvas>
-      </div>
-
-      <div class="card">
-        <h3>Press-to-talk (STT ➜ Ask ➜ TTS)</h3>
-        <div class="row">
-          <button id="pttStart">Hold to talk</button>
-          <button id="pttStop">Stop</button>
-        </div>
-        <div id="pttText" class="bar" style="margin-top:8px"></div>
-      </div>
-
-      <div class="card">
-        <h3>OpenAI Realtime (WebRTC)</h3>
-        <div class="row">
-          <button id="rtConnect">Connect</button>
-        </div>
-        <div id="rtLog" class="bar" style="margin-top:8px"></div>
-      </div>
+      <video id="localVideo" autoplay playsinline muted></video>
     </div>
 
     <div class="card">
-      <h3>Log</h3>
-      <pre id="log"></pre>
+      <h3>OpenAI Realtime</h3>
+      <p>Starts a WebRTC call to the OpenAI Realtime model through the secure SDP proxy.</p>
+      <div class="row">
+        <button id="btnStartRealtime">Start Realtime</button>
+      </div>
+      <audio id="remoteAudio" autoplay></audio>
     </div>
 
-    <script type="module" src="/src/nextlevel.js"></script>
+    <script type="module" src="/src/main.js"></script>
   </body>
 </html>
+
