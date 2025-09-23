@@ -2,19 +2,22 @@ import os
 import json
 import uuid
 import asyncio
+import time
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 
-from fastapi import FastAPI, Request, Response, HTTPException, Path
+from fastapi import FastAPI, Request, Response, HTTPException, Path, Query
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
 
 from .redis_store import (
     create_session, append_message, get_messages,
-    rt_append, rt_get_all, session_reset,
+    rt_append, rt_get_all, rt_clear, session_reset,
     push_wake, pop_wake, get_client
 )
+
+APP_STARTED = time.time()
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 TEXT_MODEL      = os.environ.get("TEXT_MODEL", "gpt-4o")
@@ -84,7 +87,6 @@ async def ask(request: Request):
         {"role": "user", "content": q},
     ]
 
-    # Log user question into transcript as a note
     if session_id:
         await rt_append(session_id, {"kind": "note", "text": f"USER: {q}", "ts": _now_ts()})
         await append_message(session_id, "user", q)
@@ -100,7 +102,6 @@ async def ask(request: Request):
         data = r.json()
         answer = data["choices"][0]["message"]["content"]
 
-        # Log assistant answer into transcript as final
         if session_id:
             await append_message(session_id, "assistant", answer)
             await rt_append(session_id, {"kind": "final", "text": f"ASSISTANT: {answer}", "ts": _now_ts()})
@@ -184,9 +185,6 @@ async def wake_next():
 # ---------------- Realtime transcript log API ----------------
 @app.post("/session/{sid}/log/append")
 async def append_rt_log(request: Request, sid: str = Path(...)):
-    """
-    body: { text: string, kind?: "partial"|"final"|"note", ts?: number }
-    """
     body = await request.json()
     text = (body.get("text") or "").strip()
     if not text:
@@ -209,7 +207,6 @@ async def get_rt_log(sid: str = Path(...), download: Optional[int] = None):
         )
     return {"items": data}
 
-# -------- NEW: Plain-text transcript --------
 @app.get("/session/{sid}/log.txt", response_class=PlainTextResponse)
 async def get_rt_log_txt(sid: str = Path(...)):
     items = await rt_get_all(sid)
@@ -220,33 +217,95 @@ async def get_rt_log_txt(sid: str = Path(...)):
         lines.append(f"[{dt}] {it.get('kind','note').upper()}: {it.get('text','')}")
     return "\n".join(lines) + ("\n" if lines else "")
 
-# -------- NEW: Live SSE stream of transcript --------
+# NEW: delete/clear transcript
+@app.delete("/session/{sid}/log")
+async def delete_rt_log(sid: str = Path(...)):
+    await rt_clear(sid)
+    return {"ok": True}
+
+# NEW: Live SSE stream of transcript with event typing and filtering
 @app.get("/session/{sid}/log/stream")
-async def sse_stream(sid: str = Path(...)):
+async def sse_stream(
+    sid: str = Path(...),
+    kinds: Optional[str] = Query(None, description="csv of kinds: partial,final,note")
+):
     """
-    Server-Sent Events: sends lines as they appear in Redis.
+    SSE with event names matching payload.kind (partial|final|note).
+    Use ?kinds=final to only receive final lines, or omit for all.
     """
+    filter_set = None
+    if kinds:
+        filter_set = {k.strip().lower() for k in kinds.split(",") if k.strip()}
+
     async def event_generator():
         r = await get_client()
         key = f"sess:{sid}:rtlog"
-        # send existing
-        last = await r.llen(key)
-        if last:
-            chunk = await r.lrange(key, 0, last - 1)
+        idx = await r.llen(key) or 0
+
+        # send existing first
+        if idx:
+            chunk = await r.lrange(key, 0, idx - 1)
             for raw in chunk:
-                yield f"data: {raw}\n\n"
+                try:
+                    j = json.loads(raw)
+                except Exception:
+                    j = {"kind": "note", "text": raw}
+                if (filter_set is None) or (j.get("kind") in filter_set):
+                    yield f"event: {j.get('kind','note')}\n"
+                    yield f"data: {json.dumps(j, ensure_ascii=False)}\n\n"
+
         # tail loop
-        idx = last
         while True:
             now_len = await r.llen(key)
             if now_len > idx:
                 chunk = await r.lrange(key, idx, now_len - 1)
                 idx = now_len
                 for raw in chunk:
-                    yield f"data: {raw}\n\n"
+                    try:
+                        j = json.loads(raw)
+                    except Exception:
+                        j = {"kind": "note", "text": raw}
+                    if (filter_set is None) or (j.get("kind") in filter_set):
+                        yield f"event: {j.get('kind','note')}\n"
+                        yield f"data: {json.dumps(j, ensure_ascii=False)}\n\n"
             await asyncio.sleep(1)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+# NEW: metrics snapshot + SSE metrics stream
+@app.get("/metrics")
+async def metrics_once():
+    r = await get_client()
+    try:
+        pong = await r.ping()
+    except Exception:
+        pong = False
+    return {
+        "uptime_sec": int(time.time() - APP_STARTED),
+        "redis_ok": bool(pong),
+        "text_model": TEXT_MODEL,
+        "realtime_model": REALTIME_MODEL,
+        "voice": REALTIME_VOICE,
+    }
+
+@app.get("/metrics/stream")
+async def metrics_stream():
+    async def gen():
+        r = await get_client()
+        while True:
+            try:
+                pong = await r.ping()
+            except Exception:
+                pong = False
+            snap = {
+                "ts": _now_ts(),
+                "uptime_sec": int(time.time() - APP_STARTED),
+                "redis_ok": bool(pong),
+            }
+            yield f"data: {json.dumps(snap)}\n\n"
+            await asyncio.sleep(2)
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
 
 
 
