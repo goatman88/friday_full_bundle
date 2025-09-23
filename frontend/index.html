@@ -1,74 +1,21 @@
-<!-- frontend/index.html -->
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1.0"
-    />
-    <title>Friday Frontend</title>
-    <style>
-      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
-      .card { border: 1px solid #e1e1e1; border-radius: 8px; padding: 16px; margin: 12px 0; }
-      pre { margin: 8px 0; padding: 8px; background: #111827; color: #c9f2c7; border-radius: 6px; overflow: auto; }
-      .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-      .row > * { margin: 4px 0; }
-      input[type="text"] { flex: 1; padding: 10px 12px; border: 1px solid #ccc; border-radius: 6px; }
-      button { padding: 10px 12px; border: 0; border-radius: 6px; background: #2563eb; color: white; cursor: pointer; }
-      button.secondary { background: #6b7280; }
-      h1 { margin-top: 0; }
-      video { width: 320px; height: 180px; background: #000; border-radius: 8px; }
-      audio { display: block; margin-top: 8px; }
-      .ok { color: #10b981; font-weight: 600; }
-      .err { color: #ef4444; font-weight: 600; }
-    </style>
-  </head>
-  <body>
-    <h1>Friday Frontend</h1>
-    <div class="row">
-      <div>Status: <span id="status-label" class="ok">…</span></div>
-    </div>
+<div class="card">
+  <h3>Camera</h3>
+  <div class="row">
+    <button id="btnStartCam">Start Camera</button>
+    <button id="btnStopCam" class="secondary">Stop Camera</button>
+  </div>
+  <video id="localVideo" autoplay playsinline muted></video>
+</div>
 
-    <div class="card">
-      <h3>/health</h3>
-      <pre id="pre-health-root">{}</pre>
-    </div>
+<div class="card">
+  <h3>OpenAI Realtime</h3>
+  <p>Starts a WebRTC call to the OpenAI Realtime model through the secure SDP proxy.</p>
+  <div class="row">
+    <button id="btnStartRealtime">Start Realtime</button>
+  </div>
+  <audio id="remoteAudio" autoplay></audio>
+</div>
 
-    <div class="card">
-      <h3>/api/health</h3>
-      <pre id="pre-health-api">{}</pre>
-    </div>
+<script type="module" src="/src/main.js"></script>
 
-    <div class="card">
-      <h3>Ask (wired to POST /api/ask)</h3>
-      <form id="ask-form" class="row">
-        <input id="ask-input" type="text" placeholder="what did the fox do?" />
-        <button type="submit">Ask</button>
-      </form>
-      <h4>Answer</h4>
-      <pre id="answer-pre"> </pre>
-    </div>
-
-    <div class="card">
-      <h3>Camera</h3>
-      <div class="row">
-        <button id="btnStartCam">Start Camera</button>
-        <button id="btnStopCam" class="secondary">Stop Camera</button>
-      </div>
-      <video id="localVideo" autoplay playsinline muted></video>
-    </div>
-
-    <div class="card">
-      <h3>OpenAI Realtime</h3>
-      <p>Starts a WebRTC call to the OpenAI Realtime model through the secure SDP proxy.</p>
-      <div class="row">
-        <button id="btnStartRealtime">Start Realtime</button>
-      </div>
-      <audio id="remoteAudio" autoplay></audio>
-    </div>
-
-    <script type="module" src="/src/main.js"></script>
-  </body>
-</html>
 
