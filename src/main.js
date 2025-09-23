@@ -25,6 +25,117 @@ const rtProxySendBtn = $('#rtProxySendBtn');
 const rtDirectLog = $('#rtDirectLog');
 const rtDirectConnectBtn = $('#rtDirectConnectBtn');
 const rtDirectDisconnectBtn = $('#rtDirectDisconnectBtn');
+// helper
+const $ = (id) => document.getElementById(id);
+const BACKEND_BASE = (window.BACKEND_BASE || "http://localhost:8000");
+let CURRENT_SESSION_ID = null;
+
+async function ensureSession() {
+  if (CURRENT_SESSION_ID) return CURRENT_SESSION_ID;
+  const res = await fetch(`${BACKEND_BASE}/session`);
+  const j = await res.json();
+  CURRENT_SESSION_ID = j.session_id;
+  $("sessionId").textContent = CURRENT_SESSION_ID;
+  // prepare download links
+  $("downloadLogJson").href = `${BACKEND_BASE}/session/${CURRENT_SESSION_ID}/log?download=1`;
+  $("downloadLogTxt").href  = `${BACKEND_BASE}/session/${CURRENT_SESSION_ID}/log.txt`;
+  return CURRENT_SESSION_ID;
+}
+
+// Health buttons (if present)
+$("pingHealth")?.addEventListener("click", async () => {
+  const r = await fetch(`${BACKEND_BASE}/health`);
+  $("healthStatus").textContent = r.ok ? "ok" : "error";
+  $("healthStatus").className = r.ok ? "ok" : "bad";
+});
+$("pingApiHealth")?.addEventListener("click", async () => {
+  const r = await fetch(`${BACKEND_BASE}/api/health`);
+  $("apiHealthStatus").textContent = r.ok ? "ok" : "error";
+  $("apiHealthStatus").className = r.ok ? "ok" : "bad";
+});
+
+// Session controls
+$("newSessionBtn")?.addEventListener("click", async () => {
+  CURRENT_SESSION_ID = null;
+  await ensureSession();
+});
+$("resetSessionBtn")?.addEventListener("click", async () => {
+  const sid = await ensureSession();
+  await fetch(`${BACKEND_BASE}/session/${sid}/reset`, { method: "POST" });
+});
+
+// Ask
+$("askBtn")?.addEventListener("click", async () => {
+  const q = $("askInput").value.trim();
+  if (!q) return;
+  const sid = await ensureSession();
+  const latency = $("latency")?.value || "";
+  const r = await fetch(`${BACKEND_BASE}/api/ask`, {
+    method: "POST",
+    headers: {"content-type":"application/json"},
+    body: JSON.stringify({ q, session_id: sid, latency })
+  });
+  const j = await r.json();
+  $("askOut").textContent = j.answer ? j.answer : JSON.stringify(j, null, 2);
+});
+
+// Live SSE transcript
+$("startSseBtn")?.addEventListener("click", async () => {
+  const sid = await ensureSession();
+  const es = new EventSource(`${BACKEND_BASE}/session/${sid}/log/stream`);
+  const box = $("sseBox");
+  box.textContent += "[stream opened]\n";
+  es.onmessage = (e) => {
+    try {
+      const j = JSON.parse(e.data);
+      box.textContent += `[${j.kind}] ${j.text}\n`;
+    } catch {
+      box.textContent += e.data + "\n";
+    }
+    box.scrollTop = box.scrollHeight;
+  };
+  es.addEventListener("final", (e) => {
+    try {
+      const j = JSON.parse(e.data);
+      box.textContent += `[FINAL] ${j.text}\n`;
+      box.scrollTop = box.scrollHeight;
+    } catch {}
+  });
+  es.onerror = () => {
+    box.textContent += "[stream error]\n";
+    es.close();
+  };
+});
+
+// Clear transcript
+$("clearLogBtn")?.addEventListener("click", async () => {
+  const sid = await ensureSession();
+  await fetch(`${BACKEND_BASE}/session/${sid}/log`, { method: "DELETE" });
+  $("sseBox").textContent = "";
+});
+
+// Metrics SSE
+$("startMetricsBtn")?.addEventListener("click", async () => {
+  const es = new EventSource(`${BACKEND_BASE}/metrics/stream`);
+  const box = $("metricsBox");
+  box.textContent += "[metrics stream opened]\n";
+  es.onmessage = (e) => {
+    try {
+      const j = JSON.parse(e.data);
+      box.textContent += JSON.stringify(j) + "\n";
+      box.scrollTop = box.scrollHeight;
+    } catch {
+      box.textContent += e.data + "\n";
+    }
+  };
+  es.onerror = () => {
+    box.textContent += "[metrics stream error]\n";
+    es.close();
+  };
+});
+
+// Auto-create a session on page load
+ensureSession().catch(console.error);
 
 // ────────────────────────────────────────────────────────────
 // Health checks
