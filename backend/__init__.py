@@ -1,3 +1,3 @@
-# empty on purpose to make backend a package
+# backend/__init__.py
 
 
