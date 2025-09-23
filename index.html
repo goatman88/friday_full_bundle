@@ -1,102 +1,82 @@
 <!doctype html>
-<html>
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-    <title>Friday Frontend</title>
-    <style>
-      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
-      .bar { background:#111; color:#9f9; padding:8px 12px; border-radius:6px; white-space:pre-wrap; }
-      .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
-      .card { border:1px solid #ddd; padding:12px; border-radius:8px; margin:10px 0; }
-      button { padding:6px 12px; }
-      textarea { width: 100%; height: 52px; }
-      video, canvas { background:#000; border-radius:6px; }
-      .cols { display:grid; grid-template-columns: repeat(auto-fit,minmax(280px,1fr)); gap:14px; }
-      #log { max-height:180px; overflow:auto; background:#f7f7f7; padding:8px; font-family:ui-monospace, SFMono-Regular, Menlo, monospace }
-    </style>
-  </head>
-  <body>
-    <h1>Friday Frontend</h1>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Friday — Frontend</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; }
+    fieldset { margin-bottom: 16px; }
+    .ok { color: #0a0; font-weight: 600; }
+    .bad { color: #a00; font-weight: 600; }
+    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    pre { background: #fafafa; }
+    input, button, select, textarea { font: inherit; padding: 6px 8px; }
+    label { font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>Friday</h1>
 
-    <div class="card">
-      <p>Status: <strong id="status">…</strong></p>
-      <div>/health</div>
-      <div id="health" class="bar">…</div>
-      <div style="margin-top:10px">/api/health</div>
-      <div id="apihealth" class="bar">…</div>
+  <fieldset>
+    <legend>Backend Health</legend>
+    <div class="row">
+      <button id="pingHealth" type="button">Ping /health</button>
+      <span id="healthStatus">unknown</span>
+      <button id="pingApiHealth" type="button">Ping /api/health</button>
+      <span id="apiHealthStatus">unknown</span>
     </div>
+  </fieldset>
 
-    <div class="card">
-      <div class="row">
-        <label>Ask (wired to POST /api/ask):</label>
-      </div>
-      <div class="row">
-        <input id="q" placeholder="what did the fox do?" style="flex:1" />
-        <button id="ask">Ask</button>
-      </div>
-      <div style="margin-top:10px">Answer</div>
-      <div id="answer" class="bar"></div>
+  <fieldset>
+    <legend>Ask</legend>
+    <div class="row">
+      <input id="askInput" type="text" placeholder="Ask something…" style="min-width:340px" />
+      <select id="latency">
+        <option value="">quality</option>
+        <option value="balanced">balanced</option>
+        <option value="ultra">ultra-fast</option>
+      </select>
+      <button id="askBtn" type="button">/api/ask</button>
     </div>
+    <pre id="askOut"></pre>
+  </fieldset>
 
-    <h2>Labs</h2>
-    <div class="cols">
-      <div class="card">
-        <h3>SSE stream</h3>
-        <div class="row">
-          <input id="ssePrompt" placeholder="type a prompt" style="flex:1">
-          <button id="sseBtn">Stream</button>
-        </div>
-        <div id="sseOut" class="bar" style="margin-top:8px"></div>
-      </div>
-
-      <div class="card">
-        <h3>WebSocket chat</h3>
-        <div class="row">
-          <button id="wsOpen">Open</button>
-          <button id="wsSend">Send “hello”</button>
-          <button id="wsClose">Close</button>
-        </div>
-        <div id="wsOut" class="bar" style="margin-top:8px"></div>
-      </div>
-
-      <div class="card">
-        <h3>Camera</h3>
-        <div class="row">
-          <button id="camStart">Start</button>
-          <button id="camSnap">Snap</button>
-          <button id="camStop">Stop</button>
-        </div>
-        <video id="cam" autoplay playsinline width="320" height="240"></video>
-        <canvas id="snap" width="320" height="240" style="display:block;margin-top:8px"></canvas>
-      </div>
-
-      <div class="card">
-        <h3>Press-to-talk (STT ➜ Ask ➜ TTS)</h3>
-        <div class="row">
-          <button id="pttStart">Hold to talk</button>
-          <button id="pttStop">Stop</button>
-        </div>
-        <div id="pttText" class="bar" style="margin-top:8px"></div>
-      </div>
-
-      <div class="card">
-        <h3>OpenAI Realtime (WebRTC)</h3>
-        <div class="row">
-          <button id="rtConnect">Connect</button>
-        </div>
-        <div id="rtLog" class="bar" style="margin-top:8px"></div>
-      </div>
+  <fieldset>
+    <legend>Session</legend>
+    <div class="row">
+      <button id="newSessionBtn" type="button">New Session</button>
+      <span>session_id:</span>
+      <code id="sessionId">(none)</code>
+      <button id="resetSessionBtn" type="button">Reset Session</button>
     </div>
+  </fieldset>
 
-    <div class="card">
-      <h3>Log</h3>
-      <pre id="log"></pre>
+  <!-- ✅ Live Transcript controls -->
+  <fieldset>
+    <legend>Realtime Transcript (live SSE)</legend>
+    <div class="row">
+      <button id="startSseBtn" type="button">Start Live Transcript</button>
+      <button id="clearLogBtn" type="button" title="Deletes /session/{sid}/log on server">Clear Transcript</button>
+      <a id="downloadLogJson" href="#" target="_blank" rel="noopener">Download JSON</a>
+      <a id="downloadLogTxt" href="#" target="_blank" rel="noopener">Download TXT</a>
     </div>
+    <pre id="sseBox" style="max-height:220px;overflow:auto;border:1px solid #ccc;padding:8px"></pre>
+  </fieldset>
 
-    <script type="module" src="/src/nextlevel.js"></script>
-  </body>
+  <!-- ✅ Metrics stream -->
+  <fieldset>
+    <legend>Backend Metrics (live)</legend>
+    <div class="row">
+      <button id="startMetricsBtn" type="button">Start Metrics Stream</button>
+    </div>
+    <pre id="metricsBox" style="max-height:160px;overflow:auto;border:1px solid #ccc;padding:8px"></pre>
+  </fieldset>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
 </html>
+
 
 
 
