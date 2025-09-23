@@ -1,38 +1,21 @@
 # scripts/env.ps1
-Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
+Param(
+  [string]$ApiBase = "http://localhost:8000",
+  [string]$FrontendBase = "http://localhost:5173"
+)
 
-function Set-Var([string]$name, [string]$value) {
-  if ([string]::IsNullOrWhiteSpace($value)) { return }
-  [System.Environment]::SetEnvironmentVariable($name, $value, "Process")
-  Write-Host "set $name=$value" -ForegroundColor Cyan
-}
+Write-Host "Setting dev environment variables..." -ForegroundColor Cyan
 
-# Load .env.local if it exists (KEY=VALUE per line)
-$envFile = Join-Path (Get-Location) ".env.local"
-if (Test-Path $envFile) {
-  Get-Content $envFile | ForEach-Object {
-    if ($_ -match '^\s*#') { return }
-    if ($_ -match '^\s*$') { return }
-    $k, $v = $_ -split '=', 2
-    if ($k -and $v) { Set-Var $k.Trim() $v.Trim() }
-  }
-  Write-Host "Loaded .env.local" -ForegroundColor Green
-}
+$env:VITE_API_BASE      = $ApiBase
+$env:VITE_BACKEND_BASE  = $ApiBase
+$env:VITE_SESSION_ID    = "local-dev"
 
-# Ask (once) for your deployed Render URLs (or keep existing)
-if (-not $env:FRI_BACKEND_URL) {
-  $b = Read-Host "Paste your Render BACKEND base URL (e.g. https://friday-xxxx.onrender.com). Leave blank for local http://localhost:8000"
-  if ([string]::IsNullOrWhiteSpace($b)) { $b = "http://localhost:8000" }
-  Set-Var "FRI_BACKEND_URL" $b
-}
-if (-not $env:FRI_FRONTEND_URL) {
-  $f = Read-Host "Paste your Render FRONTEND URL (optional). Leave blank to skip"
-  if (-not [string]::IsNullOrWhiteSpace($f)) { Set-Var "FRI_FRONTEND_URL" $f }
-}
+# Optional CORS loosen for backend
+$env:CORS_ALLOW_ORIGINS = "$FrontendBase,$ApiBase,*"
 
-# Convenience aliases
-$global:backendUrl  = $env:FRI_BACKEND_URL
-$global:frontendUrl = $env:FRI_FRONTEND_URL
-Write-Host "backendUrl=$backendUrl" -ForegroundColor Yellow
-if ($frontendUrl) { Write-Host "frontendUrl=$frontendUrl" -ForegroundColor Yellow }
+Write-Host "`nCurrent ENV:" -ForegroundColor Green
+"VITE_API_BASE=$env:VITE_API_BASE"
+"VITE_BACKEND_BASE=$env:VITE_BACKEND_BASE"
+"VITE_SESSION_ID=$env:VITE_SESSION_ID"
+"CORS_ALLOW_ORIGINS=$env:CORS_ALLOW_ORIGINS" | ForEach-Object { Write-Host $_ }
+
