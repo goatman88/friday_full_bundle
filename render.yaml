@@ -1,9 +1,36 @@
 services:
   - type: web
-    name: friday
+    name: friday-backend
     env: python
-    buildCommand: |
-      pip install --upgrade pip setuptools wheel
-      pip install -r requirements.txt
-    startCommand: uvicorn src.app:app --host 0.0.0.0 --port $PORT
-    envVars: []
+    plan: free
+    region: oregon
+    buildCommand: "pip install -r backend/requirements.txt"
+    startCommand: "uvicorn backend.app:app --host 0.0.0.0 --port 10000"
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4o-mini
+      - key: OPENAI_REALTIME_MODEL
+        value: gpt-4o-realtime-preview
+      - key: REDIS_URL
+        sync: false  # e.g. from Render Redis or Upstash
+    healthCheckPath: /api/health
+    autoDeploy: true
+    # Exposes on https://friday-backend.onrender.com (actual slug will differ)
+    # Port is managed by Render; our startCommand binds to $PORT (10000 here is ignored by Render).
+    # You can also write: startCommand: "uvicorn backend.app:app --host 0.0.0.0 --port $PORT"
+
+  - type: static
+    name: friday-frontend
+    env: static
+    plan: free
+    buildCommand: "cd friday-frontend && npm ci && VITE_BACKEND_BASE=$FRIDAY_BACKEND_URL npm run build"
+    staticPublishPath: "friday-frontend/dist"
+    envVars:
+      - key: FRIDAY_BACKEND_URL
+        fromService:
+          name: friday-backend
+          type: web
+          property: url
+
