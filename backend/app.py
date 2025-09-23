@@ -1,27 +1,31 @@
-# backend/app.py
 import os
 import json
 import uuid
-from typing import Dict, Any, Optional
-from fastapi import FastAPI, Request, Response, HTTPException
-from fastapi.responses import JSONResponse, PlainTextResponse
+import asyncio
+from datetime import datetime, timezone
+from typing import Dict, Any, Optional, List
+
+from fastapi import FastAPI, Request, Response, HTTPException, Path
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
 
 from .redis_store import (
-    create_session, append_message, get_messages, push_wake, pop_wake
+    create_session, append_message, get_messages,
+    rt_append, rt_get_all, session_reset,
+    push_wake, pop_wake, get_client
 )
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-TEXT_MODEL = os.environ.get("TEXT_MODEL", "gpt-4o")
-REALTIME_MODEL = os.environ.get("REALTIME_MODEL", "gpt-4o-realtime-preview-2024-12-17")
-REALTIME_VOICE = os.environ.get("REALTIME_VOICE", "verse")
+TEXT_MODEL      = os.environ.get("TEXT_MODEL", "gpt-4o")
+REALTIME_MODEL  = os.environ.get("REALTIME_MODEL", "gpt-4o-realtime-preview-2024-12-17")
+REALTIME_VOICE  = os.environ.get("REALTIME_VOICE", "verse")
 CORS = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",")]
 
 if not OPENAI_API_KEY:
     print("WARNING: OPENAI_API_KEY not set")
 
-app = FastAPI()
+app = FastAPI(title="Friday API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"] if CORS == ["*"] else CORS,
@@ -29,6 +33,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+def _now_ts() -> float:
+    return datetime.now(tz=timezone.utc).timestamp()
 
 # ---------------- Health ----------------
 @app.get("/health")
@@ -39,7 +46,7 @@ def health_root():
 def health_api():
     return {"status": "ok"}
 
-# ---------------- Session ----------------
+# ---------------- Sessions ----------------
 @app.get("/session")
 async def get_session():
     sid = str(uuid.uuid4())
@@ -49,6 +56,11 @@ async def get_session():
         "realtime": {"model": REALTIME_MODEL, "voice": REALTIME_VOICE},
         "text_model": TEXT_MODEL,
     }
+
+@app.post("/session/{sid}/reset")
+async def post_reset_session(sid: str = Path(...)):
+    await session_reset(sid)
+    return {"ok": True}
 
 # ---------------- /api/ask ----------------
 @app.post("/api/ask")
@@ -72,7 +84,9 @@ async def ask(request: Request):
         {"role": "user", "content": q},
     ]
 
+    # Log user question into transcript as a note
     if session_id:
+        await rt_append(session_id, {"kind": "note", "text": f"USER: {q}", "ts": _now_ts()})
         await append_message(session_id, "user", q)
 
     url = "https://api.openai.com/v1/chat/completions"
@@ -85,8 +99,12 @@ async def ask(request: Request):
             raise HTTPException(r.status_code, r.text)
         data = r.json()
         answer = data["choices"][0]["message"]["content"]
+
+        # Log assistant answer into transcript as final
         if session_id:
             await append_message(session_id, "assistant", answer)
+            await rt_append(session_id, {"kind": "final", "text": f"ASSISTANT: {answer}", "ts": _now_ts()})
+
         return {"answer": answer}
 
 # ---------------- Realtime SDP proxy ----------------
@@ -121,14 +139,16 @@ async def sdp_proxy(request: Request):
 
 # ---------------- Ephemeral token (Direct Realtime) ----------------
 @app.post("/ephemeral")
-async def ephemeral_token(request: Request):
-    """
-    Returns a one-minute client token for direct WebRTC (browser -> OpenAI).
-    Do NOT expose your permanent key in the browser.
-    """
+async def ephemeral_token_post(request: Request):
     body = await request.json() if request.headers.get("content-type","").startswith("application/json") else {}
-    latency = (body.get("latency") or "").lower()
+    return await _issue_ephemeral(model_hint=(body.get("latency") or ""))
 
+@app.get("/ephemeral")
+async def ephemeral_token_get(latency: Optional[str] = None):
+    return await _issue_ephemeral(model_hint=(latency or ""))
+
+async def _issue_ephemeral(model_hint: str = ""):
+    latency = (model_hint or "").lower()
     model = REALTIME_MODEL
     if latency == "balanced":
         model = "gpt-4o-realtime-preview"
@@ -137,18 +157,13 @@ async def ephemeral_token(request: Request):
 
     url = "https://api.openai.com/v1/realtime/sessions"
     headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
-    payload = {
-        "model": model,
-        "voice": REALTIME_VOICE,
-        "ttl": 60,  # seconds
-    }
+    payload = {"model": model, "voice": REALTIME_VOICE, "ttl": 60}
 
     async with httpx.AsyncClient(timeout=30) as client:
         r = await client.post(url, headers=headers, json=payload)
         if r.status_code >= 400:
             raise HTTPException(r.status_code, r.text)
         data = r.json()
-        # OpenAI returns: { "client_secret": { "value": "ephemeral-..." }, ... }
         try:
             token = data["client_secret"]["value"]
         except Exception:
@@ -163,9 +178,76 @@ async def wake_post():
 
 @app.get("/wake/next")
 async def wake_next():
-    """Long-poll for a wake signal; returns {wake:true} or {wake:false}."""
     item = await pop_wake(timeout_sec=25)
     return {"wake": bool(item)}
+
+# ---------------- Realtime transcript log API ----------------
+@app.post("/session/{sid}/log/append")
+async def append_rt_log(request: Request, sid: str = Path(...)):
+    """
+    body: { text: string, kind?: "partial"|"final"|"note", ts?: number }
+    """
+    body = await request.json()
+    text = (body.get("text") or "").strip()
+    if not text:
+        raise HTTPException(400, "Missing 'text'")
+    kind = (body.get("kind") or "partial").lower()
+    if kind not in ("partial", "final", "note"):
+        kind = "partial"
+    payload = {"text": text, "kind": kind, "ts": body.get("ts", _now_ts())}
+    await rt_append(sid, payload)
+    return {"ok": True}
+
+@app.get("/session/{sid}/log")
+async def get_rt_log(sid: str = Path(...), download: Optional[int] = None):
+    data = await rt_get_all(sid)
+    if download:
+        return Response(
+            content=json.dumps(data, ensure_ascii=False, indent=2),
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{sid}-rtlog.json"'}
+        )
+    return {"items": data}
+
+# -------- NEW: Plain-text transcript --------
+@app.get("/session/{sid}/log.txt", response_class=PlainTextResponse)
+async def get_rt_log_txt(sid: str = Path(...)):
+    items = await rt_get_all(sid)
+    lines = []
+    for it in items:
+        ts = it.get("ts") or _now_ts()
+        dt = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+        lines.append(f"[{dt}] {it.get('kind','note').upper()}: {it.get('text','')}")
+    return "\n".join(lines) + ("\n" if lines else "")
+
+# -------- NEW: Live SSE stream of transcript --------
+@app.get("/session/{sid}/log/stream")
+async def sse_stream(sid: str = Path(...)):
+    """
+    Server-Sent Events: sends lines as they appear in Redis.
+    """
+    async def event_generator():
+        r = await get_client()
+        key = f"sess:{sid}:rtlog"
+        # send existing
+        last = await r.llen(key)
+        if last:
+            chunk = await r.lrange(key, 0, last - 1)
+            for raw in chunk:
+                yield f"data: {raw}\n\n"
+        # tail loop
+        idx = last
+        while True:
+            now_len = await r.llen(key)
+            if now_len > idx:
+                chunk = await r.lrange(key, idx, now_len - 1)
+                idx = now_len
+                for raw in chunk:
+                    yield f"data: {raw}\n\n"
+            await asyncio.sleep(1)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
 
 
 
