@@ -1,104 +1,68 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8" />
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0"
+    />
     <title>Friday Frontend</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <style>
-      body { font-family: system-ui, sans-serif; margin: 24px; }
-      h1 { margin-top: 0; }
-      .row { margin: 12px 0; }
-      .bar { background: #111; color: #bfffbf; padding: 10px; border-radius: 6px; white-space: pre-wrap; }
-      .group { border: 1px solid #ddd; border-radius: 8px; padding: 14px; margin: 20px 0; }
-      .grid { display: grid; gap: 10px; }
-      .grid-2 { grid-template-columns: 1fr 1fr; }
-      button { padding: 8px 12px; cursor: pointer; }
-      input[type="text"] { width: 100%; padding: 8px; }
-      video, canvas { width: 100%; max-width: 480px; background: #000; border-radius: 8px; }
-      .muted { color: #888; font-size: 12px; }
-      .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #eef; font-size: 12px; margin-left: 8px; }
-    </style>
   </head>
   <body>
-    <h1>Friday Frontend</h1>
+    <div id="app" style="max-width: 960px; margin: 24px auto; font-family: system-ui, sans-serif;">
+      <h1>Friday Frontend</h1>
+      <div> Status: <span id="status">checking…</span> </div>
 
-    <div class="group">
-      <div>Status: <span id="statusLabel">…</span></div>
+      <h3>/health</h3>
+      <pre id="healthBox">loading…</pre>
 
-      <div class="row">
-        <div>/health</div>
-        <pre id="healthBox" class="bar"></pre>
-      </div>
+      <h3>/api/health</h3>
+      <pre id="apiHealthBox">loading…</pre>
 
-      <div class="row">
-        <div>/api/health</div>
-        <pre id="apiHealthBox" class="bar"></pre>
-      </div>
-    </div>
-
-    <div class="group">
-      <div class="row"><strong>Ask (wired to POST /api/ask)</strong></div>
-      <div class="grid grid-2">
-        <input id="askInput" type="text" placeholder="what did the fox do?" />
+      <h3>Ask (wired to POST /api/ask)</h3>
+      <div style="display:flex; gap:8px;">
+        <input id="q" placeholder="what did the fox do?" style="flex:1;padding:8px;">
         <button id="askBtn">Ask</button>
+        <select id="latencySel" title="Latency mode">
+          <option value="">Studio (default)</option>
+          <option value="balanced">Live Chat</option>
+          <option value="ultra">Ultra-fast</option>
+        </select>
       </div>
-      <div class="row">Answer</div>
-      <pre id="answerBox" class="bar"></pre>
-    </div>
+      <h4>Answer</h4>
+      <pre id="answer"></pre>
 
-    <div class="group">
-      <div class="row">
-        <strong>Camera</strong>
-        <span class="pill">getUserMedia + Canvas</span>
-      </div>
-      <div class="grid grid-2">
-        <div>
-          <video id="videoEl" playsinline autoplay muted></video>
-          <div class="row">
-            <button id="startCamBtn">Start camera</button>
-            <button id="snapBtn">Snap</button>
-            <button id="stopCamBtn">Stop</button>
-          </div>
-        </div>
-        <div>
-          <canvas id="canvasEl" width="640" height="360"></canvas>
-          <div class="muted">Snapshot appears here</div>
-        </div>
-      </div>
-    </div>
+      <hr>
 
-    <div class="group">
-      <div class="row">
-        <strong>Realtime (two ways)</strong>
+      <h3>Camera</h3>
+      <div style="display:flex; gap:12px; align-items:center;">
+        <button id="startCamBtn">Start Camera</button>
+        <button id="snapBtn">Snap</button>
+        <canvas id="snapCanvas" width="320" height="240" style="border:1px solid #ddd"></canvas>
+      </div>
+      <video id="cam" playsinline autoplay muted style="width:320px; display:block; margin-top:8px; background:#000;"></video>
+
+      <hr>
+
+      <h3>Realtime</h3>
+      <div style="display:flex; gap:12px; align-items:center;">
+        <button id="rtServerBtn">Start via Server (secure)</button>
+        <button id="rtDirectBtn">Start Direct (dev)</button>
+        <select id="rtLatencySel">
+          <option value="">Studio</option>
+          <option value="balanced">Live Chat</option>
+          <option value="ultra">Ultra-fast</option>
+        </select>
       </div>
 
-      <div class="row">
-        <em>Server proxy (WS) →</em>
-        <button id="rtProxyConnectBtn">Connect</button>
-        <button id="rtProxyDisconnectBtn">Disconnect</button>
-      </div>
-      <div class="grid grid-2">
-        <input id="rtProxySend" type="text" placeholder='type a message and press "Send via proxy"' />
-        <button id="rtProxySendBtn">Send via proxy</button>
-      </div>
-      <pre id="rtProxyLog" class="bar" style="min-height:80px"></pre>
-
-      <hr />
-
-      <div class="row">
-        <em>Direct (WebRTC, ephemeral)</em>
-        <span class="pill">/session → OpenAI Realtime</span>
-      </div>
-      <div class="row">
-        <button id="rtDirectConnectBtn">Connect (direct)</button>
-        <button id="rtDirectDisconnectBtn">Disconnect</button>
-      </div>
-      <pre id="rtDirectLog" class="bar" style="min-height:80px"></pre>
+      <pre id="rtLog" style="margin-top:12px; height:140px; overflow:auto; background:#f7f7f7; padding:8px;"></pre>
+      <audio id="rtAudio" autoplay></audio>
     </div>
 
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>
+
 
 
 
