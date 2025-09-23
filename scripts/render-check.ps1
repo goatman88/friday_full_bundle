@@ -1,51 +1,48 @@
 # scripts/render-check.ps1
-param(
-  [Parameter(Mandatory=$false)][string]$Backend = $env:FRI_BACKEND_URL
+[CmdletBinding()]
+Param(
+  [Parameter(Mandatory=$true)][string]$Backend,   # e.g. https://friday-xxxx.onrender.com
+  [string]$Frontend = ""
 )
 
-if ([string]::IsNullOrWhiteSpace($Backend)) {
-  Write-Error "Provide -Backend https://your-backend.onrender.com or set FRI_BACKEND_URL"
-  exit 1
+$ErrorActionPreference = "Stop"
+
+function Show($label, $ok) {
+  $c = $(if ($ok) { "Green" } else { "Red" })
+  Write-Host ("{0,-28} {1}" -f $label, ($(if ($ok) { "OK" } else { "FAIL" }))) -ForegroundColor $c
 }
 
-function Get-Status([string]$u) {
-  try {
-    $r = Invoke-WebRequest -Uri $u -UseBasicParsing
-    return "$($r.StatusCode) OK"
-  } catch {
-    try { return "$($_.Exception.Response.StatusCode.value__) ERR" } catch { return "ERR $($_.Exception.Message)" }
-  }
+function Ping200($url) {
+  try { (Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 20).StatusCode -eq 200 } catch { $false }
 }
 
-Write-Host "Checking $Backend ..." -ForegroundColor Yellow
-" /health             => $(Get-Status "$Backend/health")"
-" /api/health         => $(Get-Status "$Backend/api/health")"
+Write-Host "=== Render probe: $Backend ===" -ForegroundColor Cyan
 
-# /session (POST)
+$ok1 = Ping200("$Backend/health")
+$ok2 = Ping200("$Backend/api/health")
+Show "/health" $ok1
+Show "/api/health" $ok2
+
+# Ask
 try {
-  $r = Invoke-WebRequest -Uri "$Backend/session" -Method Post -UseBasicParsing
-  Write-Host " /session (POST)   => $($r.StatusCode) OK"
-} catch {
-  try { Write-Host " /session (POST)   => $($_.Exception.Response.StatusCode.value__) ERR" -ForegroundColor Red }
-  catch { Write-Host " /session (POST)   => ERR $($_.Exception.Message)" -ForegroundColor Red }
+  $body = @{ prompt = "hello from render-check" } | ConvertTo-Json
+  $r = Invoke-WebRequest "$Backend/api/ask" -Method Post -ContentType "application/json" -Body $body -UseBasicParsing -TimeoutSec 20
+  $ok3 = ($r.StatusCode -eq 200)
+} catch { $ok3 = $false }
+Show "POST /api/ask" $ok3
+
+# Session
+try {
+  $r2 = Invoke-WebRequest "$Backend/api/session" -Method Post -UseBasicParsing -TimeoutSec 20
+  $ok4 = ($r2.StatusCode -eq 200)
+} catch { $ok4 = $false }
+Show "POST /api/session" $ok4
+
+if ($Frontend) {
+  Write-Host "`n=== Frontend probe: $Frontend ===" -ForegroundColor Cyan
+  $ok5 = Ping200("$Frontend/health")
+  $ok6 = Ping200("$Frontend/api/health")
+  Show "GET /health (frontend)" $ok5
+  Show "GET /api/health (frontend)" $ok6
 }
 
-# /api/ask (POST)
-try {
-  $body = @{ prompt = "diagnostic ping"; latency = "fast" } | ConvertTo-Json
-  $r = Invoke-WebRequest -Uri "$Backend/api/ask" -Method Post -ContentType "application/json" -Body $body -UseBasicParsing
-  Write-Host " /api/ask (POST)   => $($r.StatusCode) OK"
-} catch {
-  try { Write-Host " /api/ask (POST)   => $($_.Exception.Response.StatusCode.value__) ERR" -ForegroundColor Red }
-  catch { Write-Host " /api/ask (POST)   => ERR $($_.Exception.Message)" -ForegroundColor Red }
-}
-
-# Optional extras
-" /transcript (GET)   => $(Get-Status "$Backend/transcript")"
-try {
-  $r = Invoke-WebRequest -Uri "$Backend/transcript" -Method Delete -UseBasicParsing
-  Write-Host " /transcript (DEL)  => $($r.StatusCode) OK"
-} catch {
-  try { Write-Host " /transcript (DEL)  => $($_.Exception.Response.StatusCode.value__) ERR" -ForegroundColor Red }
-  catch { Write-Host " /transcript (DEL)  => ERR $($_.Exception.Message)" -ForegroundColor Red }
-}
