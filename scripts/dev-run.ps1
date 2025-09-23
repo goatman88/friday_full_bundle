@@ -1,36 +1,58 @@
 # scripts/dev-run.ps1
-Set-StrictMode -Version Latest
+[CmdletBinding()]
+Param(
+  [int]$BackendPort = 8000,
+  [int]$FrontendPort = 5173,
+  [switch]$OpenBrowser
+)
+
 $ErrorActionPreference = "Stop"
 
-Push-Location $PSScriptRoot\..\
-
-# 0) Load env and clear ports
-.\scripts\env.ps1
-.\scripts\fix-ports.ps1
-
-# 1) Backend (ensure requirements are installed)
-if (-not (Test-Path ".venv")) {
-  python -m venv .venv
+function Kill-Port([int]$port) {
+  Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue |
+    ForEach-Object { try { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue } catch {} }
 }
-.\.venv\Scripts\Activate.ps1
-pip install -r backend\requirements.txt
 
-# 2) Start backend in a new window
-$backendCmd = "cmd /c `"cd /d `"$((Get-Location).Path)`" && .\.venv\Scripts\Activate.ps1 && uvicorn backend.app:app --host 0.0.0.0 --port 8000 --reload`""
-Start-Process powershell -ArgumentList "-NoExit","-Command",$backendCmd
+Write-Host ">>> Cleaning ports $FrontendPort and $BackendPort..." -ForegroundColor Yellow
+Kill-Port $FrontendPort
+Kill-Port $BackendPort
+
+# Make sure env is set
+if (-not $env:VITE_API_BASE) {
+  . "$PSScriptRoot\env.ps1"
+}
+
+# Start backend
+Write-Host ">>> Starting BACKEND on :$BackendPort..." -ForegroundColor Cyan
+$backendCmd = "uvicorn backend.app:app --host 0.0.0.0 --port $BackendPort --reload"
+Start-Process pwsh -ArgumentList "-NoExit","-Command",$backendCmd
+
+Start-Sleep -Seconds 1
+
+# Start frontend
+Write-Host ">>> Starting FRONTEND on :$FrontendPort..." -ForegroundColor Cyan
+$frontCmd = "npm run dev"
+Start-Process pwsh -ArgumentList "-NoExit","-Command",$frontCmd
+
+# Probe health
 Start-Sleep -Seconds 2
+$api  = $env:VITE_API_BASE
+$ui   = "http://localhost:$FrontendPort"
+function Test-Health($u) { try { (Invoke-WebRequest -Uri $u -UseBasicParsing).StatusCode -eq 200 } catch { $false } }
 
-# 3) Frontend deps + dev
-npm install
-$frontCmd = "cmd /c `"cd /d `"$((Get-Location).Path)`" && npm run dev`""
-Start-Process powershell -ArgumentList "-NoExit","-Command",$frontCmd
+$h1 = Test-Health("$api/health")
+$h2 = Test-Health("$api/api/health")
+$h3 = Test-Health("$ui/health")
+$h4 = Test-Health("$ui/api/health")
 
-# 4) Quick local health check
-function Hit([string]$u) {
-  try { (Invoke-WebRequest -Uri $u -UseBasicParsing).StatusCode } catch { $_.Exception.Response.StatusCode.value__ }
+if ($h1 -and $h2 -and $h3 -and $h4) {
+  Write-Host "`nOK ✅  Both backend and frontend health are green." -ForegroundColor Green
+  if ($OpenBrowser) { Start-Process "$ui" }
+} else {
+  Write-Host "`nSomething is off. Check the two windows." -ForegroundColor Magenta
+  "`nBackend health ($api/health): $h1"
+  "Backend API health ($api/api/health): $h2"
+  "Frontend /health ($ui/health): $h3"
+  "Frontend /api/health ($ui/api/health): $h4" | ForEach-Object { Write-Host $_ }
 }
-Write-Host "`nLocal checks:" -ForegroundColor Yellow
-" http://localhost:8000/health  -> $(Hit "http://localhost:8000/health")"
-" http://localhost:5173/        -> open in browser"
 
-Pop-Location
