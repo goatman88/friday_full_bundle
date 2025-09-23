@@ -16,21 +16,37 @@ async function loadHealth() {
 }
 loadHealth();
 
-document.getElementById('ask').onclick = async () => {
-  const q = document.getElementById('q').value || 'ping';
-  // If /api/ask isn’t implemented yet, echo locally:
-  try{
-    const r = await fetch(`${BACKEND}/api/ask`,{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({q})
-    });
-    const j = await r.json();
-    document.getElementById('answer').textContent = j.text ?? JSON.stringify(j);
-  } catch {
-    document.getElementById('answer').textContent = `You asked: ${q}`;
+document.getElementById('rtConnect').onclick = async () => {
+  const out = document.getElementById('rtLog');
+  out.textContent = 'connecting…';
+
+  // Browser-only WebRTC to our server proxy (no API key in browser)
+  const pc = new RTCPeerConnection();
+  const dc = pc.createDataChannel('events');
+  dc.onmessage = e => { out.textContent = e.data; log(`oai: ${e.data}`); };
+
+  // Mic up
+  const mic = await navigator.mediaDevices.getUserMedia({audio:true});
+  mic.getTracks().forEach(t => pc.addTrack(t, mic));
+
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+
+  // Send SDP offer to backend proxy -> forwards to OpenAI -> returns answer SDP
+  const resp = await fetch(`${BACKEND}/api/realtime/sdp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/sdp' },
+    body: offer.sdp
+  });
+  if (!resp.ok) {
+    out.textContent = `proxy error ${resp.status}`;
+    return;
   }
+  const answerSdp = await resp.text();
+  await pc.setRemoteDescription({type:'answer', sdp:answerSdp});
+  out.textContent = 'connected';
 };
+
 
 // --- B) SSE
 document.getElementById('sseBtn').onclick = () => {
