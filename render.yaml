@@ -6,14 +6,16 @@ services:
     region: oregon
     buildCommand: "pip install -r backend/requirements.txt"
     startCommand: "uvicorn backend.app:app --host 0.0.0.0 --port 10000"
-    envVars:
-      - key: OPENAI_API_KEY
-        sync: false
-      - key: OPENAI_MODEL
-        value: gpt-4o-mini
-      - key: OPENAI_REALTIME_MODEL
-        value: gpt-4o-realtime-preview
-      - key: REDIS_URL
+ envVars:
+  - key: OPENAI_API_KEY
+    sync: false
+  - key: REALTIME_MODEL
+    value: gpt-4o-realtime-preview-2024-12-17   # or one of the other presets
+  - key: TEXT_MODEL
+    value: gpt-4o
+  - key: REALTIME_VOICE
+    value: verse
+ - key: REDIS_URL
         sync: false  # e.g. from Render Redis or Upstash
     healthCheckPath: /api/health
     autoDeploy: true
