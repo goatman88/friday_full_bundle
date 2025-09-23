@@ -1,152 +1,213 @@
-// frontend/src/main.js
-//
-// One file to run the whole demo in dev and on Render.
-// - Health checks (/health and /api/health)
-// - Ask form -> POST /api/ask
-// - Start/Stop Camera preview
-// - Start Realtime (mic + optional camera) via secure SDP proxy at /api/realtime/sdp
-//
-// API base:
-//   Dev:    vite proxy routes /health and /api/* to http://localhost:8000
-//   Render: set VITE_API_BASE=https://<your-backend>.onrender.com (or leave relative if same domain)
+// Small helpers
+const $ = (sel) => document.querySelector(sel);
+const log = (el, ...args) => { el.textContent += args.join(' ') + '\n'; el.scrollTop = el.scrollHeight; };
 
-const API_BASE =
-  (import.meta && import.meta.env && import.meta.env.VITE_API_BASE) || ""; // empty means "same origin"
+// DOM
+const statusLabel = $('#statusLabel');
+const healthBox = $('#healthBox');
+const apiHealthBox = $('#apiHealthBox');
+const askInput = $('#askInput');
+const askBtn = $('#askBtn');
+const answerBox = $('#answerBox');
 
-// ---------- tiny helpers ----------
-const $ = (id) => document.getElementById(id);
-const pre = (el, obj) => (el ? (el.textContent = typeof obj === "string" ? obj : JSON.stringify(obj, null, 2)) : null);
+const videoEl = $('#videoEl');
+const canvasEl = $('#canvasEl');
+const startCamBtn = $('#startCamBtn');
+const snapBtn = $('#snapBtn');
+const stopCamBtn = $('#stopCamBtn');
 
-async function getJSON(path) {
-  const r = await fetch(`${API_BASE}${path}`);
-  if (!r.ok) throw new Error(await r.text());
+const rtProxyLog = $('#rtProxyLog');
+const rtProxyConnectBtn = $('#rtProxyConnectBtn');
+const rtProxyDisconnectBtn = $('#rtProxyDisconnectBtn');
+const rtProxySend = $('#rtProxySend');
+const rtProxySendBtn = $('#rtProxySendBtn');
+
+const rtDirectLog = $('#rtDirectLog');
+const rtDirectConnectBtn = $('#rtDirectConnectBtn');
+const rtDirectDisconnectBtn = $('#rtDirectDisconnectBtn');
+
+// ────────────────────────────────────────────────────────────
+// Health checks
+async function fetchText(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${url} -> ${r.status}`);
+  return await r.text();
+}
+async function runHealth() {
+  try {
+    const h1 = await fetchText('/health').catch(() => '{"status":"error"}');
+    const h2 = await fetchText('/api/health').catch(() => '{"status":"error"}');
+    healthBox.textContent = h1;
+    apiHealthBox.textContent = h2;
+    const ok = h1.includes('"ok"') && h2.includes('"ok"');
+    statusLabel.textContent = ok ? 'OK' : 'ERROR';
+  } catch (e) {
+    statusLabel.textContent = 'ERROR';
+  }
+}
+runHealth();
+
+// ────────────────────────────────────────────────────────────
+askBtn.addEventListener('click', async () => {
+  const q = askInput.value.trim();
+  if (!q) return;
+  answerBox.textContent = '…';
+  try {
+    const r = await fetch('/api/ask', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ question: q })
+    });
+    const data = await r.json().catch(() => ({}));
+    answerBox.textContent = (data && (data.answer || data.message)) || JSON.stringify(data);
+  } catch (e) {
+    answerBox.textContent = 'Error: ' + e.message;
+  }
+});
+
+// ────────────────────────────────────────────────────────────
+// Camera + canvas
+let mediaStream = null;
+
+startCamBtn.addEventListener('click', async () => {
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    videoEl.srcObject = mediaStream;
+  } catch (e) {
+    alert('Camera error: ' + e.message);
+  }
+});
+
+snapBtn.addEventListener('click', () => {
+  if (!videoEl.srcObject) return;
+  const ctx = canvasEl.getContext('2d');
+  const { videoWidth: w, videoHeight: h } = videoEl;
+  canvasEl.width = w;
+  canvasEl.height = h;
+  ctx.drawImage(videoEl, 0, 0, w, h);
+});
+
+stopCamBtn.addEventListener('click', () => {
+  if (mediaStream) {
+    mediaStream.getTracks().forEach(t => t.stop());
+    mediaStream = null;
+    videoEl.srcObject = null;
+  }
+});
+
+// ────────────────────────────────────────────────────────────
+// Realtime via backend WS proxy
+let proxyWS = null;
+
+rtProxyConnectBtn.addEventListener('click', () => {
+  if (proxyWS && proxyWS.readyState === WebSocket.OPEN) return;
+  const wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/realtime';
+  proxyWS = new WebSocket(wsUrl);
+  proxyWS.onopen = () => log(rtProxyLog, '[proxy] connected');
+  proxyWS.onmessage = (ev) => log(rtProxyLog, '[proxy] ←', ev.data);
+  proxyWS.onerror = (ev) => log(rtProxyLog, '[proxy] error', ev.message || '');
+  proxyWS.onclose = () => log(rtProxyLog, '[proxy] closed');
+});
+
+rtProxyDisconnectBtn.addEventListener('click', () => {
+  if (proxyWS) proxyWS.close();
+});
+
+rtProxySendBtn.addEventListener('click', () => {
+  if (!proxyWS || proxyWS.readyState !== WebSocket.OPEN) return;
+  const msg = rtProxySend.value || '(hello)';
+  // You can define your server bridge to accept a simple JSON envelope
+  proxyWS.send(JSON.stringify({ type: 'message', data: msg }));
+  log(rtProxyLog, '[proxy] →', msg);
+});
+
+// ────────────────────────────────────────────────────────────
+// Realtime DIRECT (WebRTC using ephemeral key)
+let pc = null;      // RTCPeerConnection
+let micStream = null;
+
+async function getEphemeralKey() {
+  // Your FastAPI route should return: { client_secret: { value: "<ephemeral>" } }
+  const r = await fetch('/session');
+  if (!r.ok) throw new Error('/session failed: ' + r.status);
   return r.json();
 }
-async function postJSON(path, body) {
-  const r = await fetch(`${API_BASE}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
-}
 
-// ---------- health banners ----------
-const preHealthRoot = $("pre-health-root");
-const preHealthApi = $("pre-health-api");
-const statusEl = $("status-label");
+async function startDirectRealtime() {
+  if (pc) return;
 
-(async () => {
-  try {
-    const a = await getJSON("/health");
-    const b = await getJSON("/api/health");
-    pre(preHealthRoot, a);
-    pre(preHealthApi, b);
-    if (statusEl) statusEl.textContent = "OK";
-  } catch (err) {
-    pre(preHealthRoot, `ERROR: ${err}`);
-    pre(preHealthApi, `ERROR: ${err}`);
-    if (statusEl) statusEl.textContent = "ERROR";
-  }
-})();
+  // 1) Media tracks (mic is strongly recommended for Realtime voice)
+  micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
 
-// ---------- ask form ----------
-const askForm = $("ask-form");
-const askInput = $("ask-input");
-const answerPre = $("answer-pre");
+  // 2) Peer connection
+  pc = new RTCPeerConnection();
+  micStream.getTracks().forEach(t => pc.addTrack(t, micStream));
 
-if (askForm) {
-  askForm.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const q = (askInput?.value || "").trim();
-    if (!q) return;
-    pre(answerPre, "…thinking…");
-    try {
-      const { answer } = await postJSON("/api/ask", { q });
-      pre(answerPre, answer || "(empty)");
-    } catch (err) {
-      pre(answerPre, `Error: ${err}`);
-    }
-  });
-}
-
-// ---------- camera controls ----------
-let localStream = null;
-const localVideo = $("localVideo");
-
-async function startCamera() {
-  if (localStream) return;
-  localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-  if (localVideo) localVideo.srcObject = localStream;
-}
-
-function stopCamera() {
-  if (!localStream) return;
-  localStream.getTracks().forEach((t) => t.stop());
-  localStream = null;
-  if (localVideo) localVideo.srcObject = null;
-}
-
-$("btnStartCam")?.addEventListener("click", startCamera);
-$("btnStopCam")?.addEventListener("click", stopCamera);
-
-// ---------- OpenAI Realtime via secure SDP proxy ----------
-const remoteAudio = $("remoteAudio");
-
-async function startRealtime() {
-  // Peer connection
-  const pc = new RTCPeerConnection();
-
-  // local media (mic always, video if you've started camera or want fresh getUserMedia)
-  let micStream;
-  try {
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-  } catch (err) {
-    alert("Microphone permission is required for Realtime.");
-    throw err;
-  }
-  micStream.getTracks().forEach((t) => pc.addTrack(t, micStream));
-
-  if (localStream) {
-    localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
-  }
-
-  pc.ontrack = (evt) => {
-    if (evt.streams && evt.streams[0] && remoteAudio) {
-      remoteAudio.srcObject = evt.streams[0];
+  // Optional: handle remote audio
+  const remoteAudio = new Audio();
+  remoteAudio.autoplay = true;
+  pc.ontrack = (e) => {
+    if (e.streams && e.streams[0]) {
+      remoteAudio.srcObject = e.streams[0];
     }
   };
 
-  // Optional data channel for events
-  const dc = pc.createDataChannel("oai-events");
-  dc.onmessage = (e) => {
-    try {
-      const msg = JSON.parse(e.data);
-      console.debug("oai:", msg);
-    } catch {
-      console.debug("oai:", e.data);
-    }
+  pc.onconnectionstatechange = () => {
+    log(rtDirectLog, '[direct] state:', pc.connectionState);
   };
 
-  const offer = await pc.createOffer({
-    offerToReceiveAudio: true,
-    offerToReceiveVideo: false,
-  });
+  // 3) Create local SDP offer
+  const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
 
-  // use the backend proxy — keep your API key server-side
-  const answerSDP = await fetch(`${API_BASE}/api/realtime/sdp`, {
-    method: "POST",
-    headers: { "Content-Type": "application/sdp" },
-    body: offer.sdp,
-  }).then((r) => r.text());
+  // 4) Fetch ephemeral key from backend, then call OpenAI Realtime (WebRTC)
+  const { client_secret } = await getEphemeralKey();
+  const EPHEMERAL = client_secret?.value;
+  if (!EPHEMERAL) throw new Error('No ephemeral key from /session');
 
-  await pc.setRemoteDescription({ type: "answer", sdp: answerSDP });
+  // 5) POST the offer SDP to OpenAI. Replace with your desired realtime model.
+  const model = 'gpt-4o-realtime-preview-2024-12-17';
+  const openaiURL = `https://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`;
+  const resp = await fetch(openaiURL, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${EPHEMERAL}`,
+      'Content-Type': 'application/sdp'
+    },
+    body: offer.sdp
+  });
 
-  // stash for dev
-  window._oai_pc = pc;
+  if (!resp.ok) {
+    const txt = await resp.text();
+    throw new Error('OpenAI Realtime SDP failed: ' + resp.status + ' ' + txt);
+  }
+
+  const answerSDP = await resp.text();
+  await pc.setRemoteDescription({ type: 'answer', sdp: answerSDP });
+  log(rtDirectLog, '[direct] connected (WebRTC)');
+
+  // You can add DataChannel for text messages:
+  const dc = pc.createDataChannel('oai-data');
+  dc.onopen = () => log(rtDirectLog, '[direct] datachannel open');
+  dc.onmessage = (e) => log(rtDirectLog, '[direct] ←', e.data);
 }
 
-$("btnStartRealtime")?.addEventListener("click", startRealtime);
+async function stopDirectRealtime() {
+  if (pc) {
+    pc.getSenders().forEach(s => { try { s.track && s.track.stop(); } catch {} });
+    pc.close();
+    pc = null;
+  }
+  if (micStream) {
+    micStream.getTracks().forEach(t => t.stop());
+    micStream = null;
+  }
+  log(rtDirectLog, '[direct] disconnected');
+}
+
+rtDirectConnectBtn.addEventListener('click', () => {
+  startDirectRealtime().catch(e => log(rtDirectLog, 'error:', e.message));
+});
+rtDirectDisconnectBtn.addEventListener('click', stopDirectRealtime);
+
 
