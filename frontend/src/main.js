@@ -1,11 +1,10 @@
 // frontend/src/main.js
 const $ = (id) => document.getElementById(id);
-
 const BACKEND_BASE =
   import.meta.env.VITE_BACKEND_BASE?.replace(/\/$/, "") ||
   (location.origin.includes(":5173") ? "http://localhost:8000" : location.origin);
 
-// --- HEALTH ---
+// ---- HEALTH ----
 async function probe() {
   const h = await fetch(`${BACKEND_BASE}/health`).then(r => r.json()).catch(() => ({status:"ERROR"}));
   const ah = await fetch(`${BACKEND_BASE}/api/health`).then(r => r.json()).catch(() => ({status:"ERROR"}));
@@ -15,7 +14,7 @@ async function probe() {
 }
 probe();
 
-// --- ASK FORM ---
+// ---- ASK ----
 $("askBtn").onclick = async () => {
   const q = $("q").value.trim();
   const latency = $("latencySel").value;
@@ -33,7 +32,7 @@ $("askBtn").onclick = async () => {
   }
 };
 
-// --- CAMERA + SNAP ---
+// ---- CAMERA ----
 let mediaStream = null;
 $("startCamBtn").onclick = async () => {
   try {
@@ -51,28 +50,25 @@ $("snapBtn").onclick = () => {
   ctx.drawImage(v, 0, 0, c.width, c.height);
 };
 
-// --- REALTIME ---
+// ---- REALTIME (WebRTC) ----
 const logRT = (msg) => {
   const box = $("rtLog");
   box.textContent += msg + "\n";
   box.scrollTop = box.scrollHeight;
 };
 
-// SDP helper
-async function createAndPostOffer(toUrl) {
+async function createAndPostOffer(toUrl, bearerProvider) {
   const pc = new RTCPeerConnection();
-  // Microphone
+
+  // mic
   try {
     const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
     mic.getTracks().forEach(t => pc.addTrack(t, mic));
   } catch (e) {
     logRT("mic error: " + e.message);
   }
-
-  // (optional) camera into PC (not required by Realtime, but some demos use it)
-  if (mediaStream) {
-    mediaStream.getTracks().forEach(t => pc.addTrack(t, mediaStream));
-  }
+  // camera (optional)
+  if (mediaStream) mediaStream.getTracks().forEach(t => pc.addTrack(t, mediaStream));
 
   const audioEl = $("rtAudio");
   pc.ontrack = (evt) => {
@@ -83,19 +79,28 @@ async function createAndPostOffer(toUrl) {
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
 
-  const r = await fetch(toUrl, {
-    method: "POST",
-    headers: {"content-type":"application/sdp"},
-    body: offer.sdp
-  });
-  if (!r.ok) {
-    const t = await r.text();
-    throw new Error("SDP proxy failed: " + t);
+  // either hit our server SDP proxy or send directly with an ephemeral token
+  if (bearerProvider) {
+    const token = await bearerProvider();
+    const r = await fetch(toUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/sdp",
+        "authorization": `Bearer ${token}`
+      },
+      body: offer.sdp
+    });
+    if (!r.ok) throw new Error(await r.text());
+    const answer = await r.text();
+    await pc.setRemoteDescription({ type: "answer", sdp: answer });
+  } else {
+    const r = await fetch(toUrl, { method:"POST", headers:{ "content-type":"application/sdp" }, body: offer.sdp });
+    if (!r.ok) throw new Error(await r.text());
+    const answer = await r.text();
+    await pc.setRemoteDescription({ type: "answer", sdp: answer });
   }
-  const answer = await r.text();
-  const desc = { type: "answer", sdp: answer };
-  await pc.setRemoteDescription(desc);
-  return pc; // keep the connection alive
+
+  return pc;
 }
 
 $("rtServerBtn").onclick = async () => {
@@ -103,7 +108,7 @@ $("rtServerBtn").onclick = async () => {
   const url = `${BACKEND_BASE}/realtime/sdp${latency ? `?latency=${latency}` : ""}`;
   try {
     logRT("Starting Realtime via server…");
-    await createAndPostOffer(url);
+    await createAndPostOffer(url, /*bearerProvider*/ null);
     logRT("Realtime connected (server).");
   } catch (e) {
     logRT("Realtime error: " + e.message);
@@ -116,14 +121,51 @@ $("rtDirectBtn").onclick = async () => {
     ? "gpt-4o-realtime-preview-lite"
     : (latency === "balanced" ? "gpt-4o-realtime-preview" : "gpt-4o-realtime-preview-2024-12-17");
 
+  // get ephemeral from our backend
+  async function getEphemeral() {
+    const r = await fetch(`${BACKEND_BASE}/ephemeral`, {
+      method: "POST",
+      headers: {"content-type":"application/json"},
+      body: JSON.stringify({ latency })
+    });
+    const j = await r.json();
+    if (!j.ephemeral_token) throw new Error("no ephemeral token");
+    return j.ephemeral_token;
+  }
+
   try {
-    logRT("Starting Realtime direct…");
+    logRT("Starting Realtime direct (ephemeral) …");
     const url = `https://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}&voice=${encodeURIComponent("verse")}`;
-    // The direct path needs a server-issued ephemeral token in real apps.
-    // For local demos ONLY you can use a permanent key; we DO NOT do that here.
-    logRT("Direct mode requires ephemeral or server token. Use server button in prod.");
+    await createAndPostOffer(url, getEphemeral);
+    logRT("Realtime connected (direct).");
   } catch (e) {
     logRT("Realtime direct error: " + e.message);
   }
 };
+
+// ---- Wake: keyboard fallback (Shift+Space) ----
+let hotPressed = false;
+window.addEventListener("keydown", (e) => {
+  if (e.shiftKey && e.code === "Space" && !hotPressed) {
+    hotPressed = true;
+    $("rtServerBtn").click(); // start realtime quickly
+    setTimeout(() => (hotPressed = false), 800);
+  }
+});
+
+// ---- Wake: Porcupine helper triggers POST /wake, we long-poll here ----
+async function longPollWake() {
+  while (true) {
+    try {
+      const r = await fetch(`${BACKEND_BASE}/wake/next`);
+      const j = await r.json();
+      if (j.wake) {
+        logRT("Wake signal received.");
+        $("rtServerBtn").click();
+      }
+    } catch {}
+  }
+}
+longPollWake();
+
 
