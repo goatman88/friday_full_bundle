@@ -1,23 +1,30 @@
-// vite.config.js
 import { defineConfig } from "vite";
 
 export default defineConfig({
   server: {
     port: 5173,
-    strictPort: true,
     proxy: {
-      // forward both health roots and all API routes to the FastAPI backend
+      "/api": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+      },
       "/health": {
         target: "http://localhost:8000",
         changeOrigin: true,
       },
-      "/api": {
+      "/realtime": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+        ws: false,
+      },
+      "/session": {
         target: "http://localhost:8000",
         changeOrigin: true,
       },
     },
   },
 });
+
 
 
 
