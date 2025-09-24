@@ -1,20 +1,19 @@
-Param([string]$Base="http://localhost:8000")
+# Quick health + ask checks against local backend
+$iwrArgs = @{ UseBasicParsing = $true }
 
-function Show($label,$uri) {
-  try {
-    $r = Invoke-WebRequest -Uri $uri
-    "{0}: {1}" -f $label,$r.StatusCode
-    $r.Content
-  } catch { "ERROR {0}: {1}" -f $label,$_.Exception.Message }
-}
+Write-Host "GET /health:" -ForegroundColor Cyan
+iwr http://localhost:8000/health @iwrArgs | Select-Object -ExpandProperty StatusCode
 
-Show "root /health" "$Base/health"
-Show "api  /health" "$Base/api/health"
+Write-Host "GET /api/health:" -ForegroundColor Cyan
+iwr http://localhost:8000/api/health @iwrArgs | Select-Object -ExpandProperty StatusCode
 
-$body = @{ q="ping" } | ConvertTo-Json
-$r = Invoke-WebRequest -Uri "$Base/api/ask" -Method Post -ContentType "application/json" -Body $body
-"ask -> " + $r.Content
+$body = @{ q = "ping" } | ConvertTo-Json
+Write-Host "POST /api/ask:" -ForegroundColor Cyan
+iwr http://localhost:8000/api/ask -Method Post -ContentType "application/json" -Body $body |
+  Select-Object -ExpandProperty Content
 
-$r2 = Invoke-WebRequest -Uri "$Base/api/session" -Method Post
-"session -> " + $r2.Content
+Write-Host "POST /api/session:" -ForegroundColor Cyan
+iwr http://localhost:8000/api/session -Method Post -ContentType "application/json" -Body "{}" |
+  Select-Object -ExpandProperty Content
+
 
