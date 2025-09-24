@@ -1,23 +1,23 @@
-Param([switch]$OpenBrowser)
+Param(
+  [switch]$OpenBrowser
+)
 
-# 0) Make sure we’re in backend folder that contains app.py
-if (-not (Test-Path -Path "./app.py")) {
-  Write-Error "Run this from the folder that contains app.py (backend/)."
-  exit 1
-}
+$ErrorActionPreference = "Stop"
 
-# 1) Free ports we use locally
-Get-NetTCPConnection -LocalPort 5173,8000 -ErrorAction SilentlyContinue |
-  ForEach-Object { try { Stop-Process -Id $_.OwningProcess -Force } catch {} }
+# 1) set env + free ports
+& "$PSScriptRoot\env.ps1"
 
-# 2) Start backend (uvicorn app:app)
-Start-Process powershell -ArgumentList 'uvicorn app:app --host 0.0.0.0 --port 8000 --reload'
+# 2) start backend (from backend dir) in a new window
+Start-Process powershell -ArgumentList "-NoExit","-Command",
+  "& `"$PSScriptRoot\go-backend.ps1`"; python -m pip install -r requirements.txt; uvicorn app:app --host 0.0.0.0 --port 8000 --reload"
 
-# 3) Start frontend from repo root (one level up)
-$repoRoot = (Resolve-Path "..").Path
-Start-Process powershell -ArgumentList "cd `"$repoRoot`"; npm run dev"
+# 3) start frontend (from project root) in a new window
+$proj = (Resolve-Path "$PSScriptRoot\..").Path
+Start-Process powershell -ArgumentList "-NoExit","-Command",
+  "Set-Location `"$proj`"; if (Test-Path package.json) { npm install; npm run dev } else { Write-Host 'No package.json here; open your frontend window manually.' }"
 
-# 4) Optionally open browser
+# 4) optional: open frontend
 if ($OpenBrowser) { Start-Process "http://localhost:5173" }
+
 
 
