@@ -1,30 +1,23 @@
-Param(
-  [int]$Port = 8000,
-  [switch]$OpenBrowser
-)
+Param([switch]$OpenBrowser)
 
-# 0) run from this script's directory so relative paths work
-Set-Location (Resolve-Path "$PSScriptRoot\..")
-
-# 1) activate venv if you have one next to backend folder (optional)
-if (Test-Path "..\.venv\Scripts\Activate.ps1") {
-  & "..\.venv\Scripts\Activate.ps1"
+# 0) Make sure we’re in backend folder that contains app.py
+if (-not (Test-Path -Path "./app.py")) {
+  Write-Error "Run this from the folder that contains app.py (backend/)."
+  exit 1
 }
 
-# 2) free the port if it's stuck
-Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue |
+# 1) Free ports we use locally
+Get-NetTCPConnection -LocalPort 5173,8000 -ErrorAction SilentlyContinue |
   ForEach-Object { try { Stop-Process -Id $_.OwningProcess -Force } catch {} }
 
-# 3) start uvicorn
-Write-Host "Starting backend on http://localhost:$Port ..."
-$proc = Start-Process -PassThru powershell -ArgumentList @(
-  "-NoLogo","-NoProfile","-Command",
-  "uvicorn app:app --host 0.0.0.0 --port $Port --reload"
-)
+# 2) Start backend (uvicorn app:app)
+Start-Process powershell -ArgumentList 'uvicorn app:app --host 0.0.0.0 --port 8000 --reload'
 
-# 4) open docs (helpful)
-if ($OpenBrowser) {
-  Start-Sleep -Seconds 1
-  Start-Process "http://localhost:$Port/docs"
-}
+# 3) Start frontend from repo root (one level up)
+$repoRoot = (Resolve-Path "..").Path
+Start-Process powershell -ArgumentList "cd `"$repoRoot`"; npm run dev"
+
+# 4) Optionally open browser
+if ($OpenBrowser) { Start-Process "http://localhost:5173" }
+
 
