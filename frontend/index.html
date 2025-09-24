@@ -1,81 +1,35 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Friday — Frontend</title>
-  <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; }
-    fieldset { margin-bottom: 16px; }
-    .ok { color: #0a0; font-weight: 600; }
-    .bad { color: #a00; font-weight: 600; }
-    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-    pre { background: #fafafa; }
-    input, button, select, textarea { font: inherit; padding: 6px 8px; }
-    label { font-weight: 600; }
-  </style>
-</head>
-<body>
-  <h1>Friday</h1>
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Friday Frontend</title>
+  </head>
+  <body>
+    <h1>Friday Frontend</h1>
+    <p>Status: OK</p>
 
-  <fieldset>
-    <legend>Backend Health</legend>
-    <div class="row">
-      <button id="pingHealth" type="button">Ping /health</button>
-      <span id="healthStatus">unknown</span>
-      <button id="pingApiHealth" type="button">Ping /api/health</button>
-      <span id="apiHealthStatus">unknown</span>
-    </div>
-  </fieldset>
+    <h3>/health</h3>
+    <pre id="rootHealth"></pre>
 
-  <fieldset>
-    <legend>Ask</legend>
-    <div class="row">
-      <input id="askInput" type="text" placeholder="Ask something…" style="min-width:340px" />
-      <select id="latency">
-        <option value="">quality</option>
-        <option value="balanced">balanced</option>
-        <option value="ultra">ultra-fast</option>
-      </select>
-      <button id="askBtn" type="button">/api/ask</button>
-    </div>
-    <pre id="askOut"></pre>
-  </fieldset>
+    <h3>/api/health</h3>
+    <pre id="apiHealth"></pre>
 
-  <fieldset>
-    <legend>Session</legend>
-    <div class="row">
-      <button id="newSessionBtn" type="button">New Session</button>
-      <span>session_id:</span>
-      <code id="sessionId">(none)</code>
-      <button id="resetSessionBtn" type="button">Reset Session</button>
-    </div>
-  </fieldset>
+    <h3>Ask (wired to POST /api/ask)</h3>
+    <input id="askInput" placeholder="Ask something..." />
+    <button onclick="askQuestion()">Ask</button>
+    <pre id="askAnswer"></pre>
 
-  <!-- ✅ Live Transcript controls -->
-  <fieldset>
-    <legend>Realtime Transcript (live SSE)</legend>
-    <div class="row">
-      <button id="startSseBtn" type="button">Start Live Transcript</button>
-      <button id="clearLogBtn" type="button" title="Deletes /session/{sid}/log on server">Clear Transcript</button>
-      <a id="downloadLogJson" href="#" target="_blank" rel="noopener">Download JSON</a>
-      <a id="downloadLogTxt" href="#" target="_blank" rel="noopener">Download TXT</a>
-    </div>
-    <pre id="sseBox" style="max-height:220px;overflow:auto;border:1px solid #ccc;padding:8px"></pre>
-  </fieldset>
+    <h3>Camera</h3>
+    <button onclick="startCamera()">Start Camera</button>
+    <video id="video" autoplay></video>
 
-  <!-- ✅ Metrics stream -->
-  <fieldset>
-    <legend>Backend Metrics (live)</legend>
-    <div class="row">
-      <button id="startMetricsBtn" type="button">Start Metrics Stream</button>
-    </div>
-    <pre id="metricsBox" style="max-height:160px;overflow:auto;border:1px solid #ccc;padding:8px"></pre>
-  </fieldset>
+    <h3>Mic</h3>
+    <button onclick="startMic()">Start Mic</button>
 
-  <script type="module" src="/src/main.js"></script>
-</body>
+    <script type="module" src="/src/main.js"></script>
+  </body>
 </html>
+
 
 
 
