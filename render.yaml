@@ -1,24 +1,22 @@
 services:
-  # --- Backend (FastAPI) ---
   - type: web
     name: friday-backend
     env: python
     plan: free
     buildCommand: pip install -r backend/requirements.txt
     startCommand: uvicorn backend.app:app --host 0.0.0.0 --port $PORT
-    autoDeploy: true
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
+      - key: OPENAI_API_KEY
+        sync: false
       - key: TEXT_MODEL
         value: gpt-4o-mini
       - key: REALTIME_MODEL
         value: gpt-4o-realtime-preview
       - key: REALTIME_VOICE
         value: verse
-      # optional for later phases
-      # - key: OPENAI_API_KEY
-      #   sync: false
+
 
   # --- Frontend (optional static site; remove if not deploying now) ---
   - type: web
