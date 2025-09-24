@@ -1,16 +1,26 @@
-Param([switch]$OpenBrowser)
+Param(
+  [switch]$OpenBrowser
+)
 
-# kill 5173 and 8000
-Get-NetTCPConnection -LocalPort 5173,8000 -ErrorAction SilentlyContinue |
-  ForEach-Object { try { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue } catch {} }
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass | Out-Null
+$here = Split-Path -Parent $MyInvocation.MyCommand.Path
+$root = Split-Path -Parent $here
 
-# start backend (from backend dir)
-Start-Process powershell -ArgumentList "-NoExit","-Command","cd backend; ..\.venv\Scripts\Activate.ps1; uvicorn app:app --host 0.0.0.0 --port 8000 --reload"
+# 1) env (frees ports too)
+& "$here\env.ps1"
 
-# start frontend (from frontend root)
-Start-Process powershell -ArgumentList "-NoExit","-Command","npm run dev -- --port 5173"
+# 2) start backend
+Start-Process powershell -ArgumentList "-NoExit","-Command","`"$here\run-backend.ps1`""
 
-if ($OpenBrowser) { Start-Process "http://localhost:5173" }
+# 3) start frontend
+cd "$root\frontend"
+npm install | Out-Null
+Start-Process powershell -ArgumentList "-NoExit","-Command","npm run dev"
+
+if ($OpenBrowser) {
+  Start-Process "http://localhost:5173"
+}
+
 
 
 
