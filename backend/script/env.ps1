@@ -1,21 +1,20 @@
 Param(
-  [string]$ApiBase = "http://localhost:8000"
+  [string]$ApiBase = "http://localhost:8000",
+  [switch]$Show
 )
 
-$ErrorActionPreference = "Stop"
+# (optional) set your OpenAI key here or in user env
+# $env:OPENAI_API_KEY = "sk-...your-key..."
 
-# Show where we are
-Write-Host "🔧 Environment" -ForegroundColor Cyan
-Write-Host "Backend :" $ApiBase -ForegroundColor DarkCyan
-$env:API_BASE = $ApiBase
+# handy for relative imports if you later make packages
+$env:PYTHONPATH = (Resolve-Path "$PSScriptRoot\..").Path
 
-# Optional convenient defaults for models/voice
-if (-not $env:TEXT_MODEL)      { $env:TEXT_MODEL      = "gpt-4o-mini" }
-if (-not $env:REALTIME_MODEL)  { $env:REALTIME_MODEL  = "gpt-4o-realtime-preview-2024-12-17" }
-if (-not $env:REALTIME_VOICE)  { $env:REALTIME_VOICE  = "verse" }
+# let frontend know where the backend is (vite can read these if you export upstream)
+$env:VITE_BACKEND_BASE = $ApiBase
 
-Write-Host "TEXT_MODEL     =" $env:TEXT_MODEL
-Write-Host "REALTIME_MODEL =" $env:REALTIME_MODEL
-Write-Host "REALTIME_VOICE =" $env:REALTIME_VOICE
+if ($Show) {
+  Write-Host "Environment set:"
+  Write-Host "  PYTHONPATH       = $($env:PYTHONPATH)"
+  Write-Host "  VITE_BACKEND_BASE= $($env:VITE_BACKEND_BASE)"
+}
 
-Write-Host "✅ Environment set." -ForegroundColor Green
