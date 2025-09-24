@@ -10,3 +10,4 @@ if ($OpenBrowser) {
 } else {
     .\scripts\dev-run.ps1
 }
+
