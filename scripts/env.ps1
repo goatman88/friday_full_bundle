@@ -1,9 +1,8 @@
-# Local dev env
-$env:VITE_API_BASE = "http://localhost:8000"
-$env:VITE_BACKEND_BASE = "http://localhost:8000"
-$env:VITE_SESSION_ID = "local-dev"
+Param([string]$ApiBase = "http://localhost:8000", [string]$Port = "5173")
+$env:VITE_API_BASE = $ApiBase
 Write-Host "Environment set:"
-Write-Host "Backend : $env:VITE_BACKEND_BASE"
-Write-Host "Frontend: http://localhost:5173"
+Write-Host ("  Backend : {0}" -f $env:VITE_API_BASE)
+Write-Host ("  Frontend: http://localhost:{0}" -f $Port)
+
 
 
