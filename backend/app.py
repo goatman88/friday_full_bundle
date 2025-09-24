@@ -1,205 +1,156 @@
-# backend/app.py
-from __future__ import annotations
-
 import os
-from typing import Optional, Dict, Any
+import json
+from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, APIRouter, HTTPException, Response
+from fastapi import FastAPI, APIRouter, Body, Response, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import httpx
+from dotenv import load_dotenv
 
-# -----------------------------------------------------------------------------
-# App + CORS
-# -----------------------------------------------------------------------------
-app = FastAPI(title="Friday Backend", version="2.0.0")
+# --- env ---
+load_dotenv()
 
-ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-    "https://localhost:5173",
-    os.getenv("FRONTEND_ORIGIN", "").strip(),
-]
-ALLOWED_ORIGINS = [o for o in ALLOWED_ORIGINS if o]
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+TEXT_MODEL = os.getenv("TEXT_MODEL", "gpt-4o-mini")
+REALTIME_MODEL = os.getenv("REALTIME_MODEL", "gpt-4o-realtime-preview-2024-12-17")
+REALTIME_VOICE = os.getenv("REALTIME_VOICE", "verse")
 
+if not OPENAI_API_KEY:
+    print("⚠️  OPENAI_API_KEY is not set. /api/ask will fall back to echo mode; /api/session and /api/sdp will 401.")
+
+# --- app ---
+app = FastAPI(title="Friday Backend")
+
+# Allow your local Vite dev server and Render-hosted frontends
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS or ["*"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        os.getenv("FRONTEND_ORIGIN", "").strip() or "https://*",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 @app.get("/health")
-def root_health():
+def health_root():
     return {"status": "ok"}
 
 api = APIRouter(prefix="/api")
 
 @api.get("/health")
-def api_health():
+def health_api():
     return {"status": "ok"}
 
-# -----------------------------------------------------------------------------
-# Models
-# -----------------------------------------------------------------------------
-class AskBody(BaseModel):
+# ---------- /api/ask  ----------
+class AskIn(BaseModel):
     q: str
-    latency: Optional[str] = None  # "fast" | "quality" (hint)
 
-class AskResult(BaseModel):
+class AskOut(BaseModel):
     answer: str
 
-class SessionInfo(BaseModel):
-    session_id: str
-    text_model: str
-    realtime_model: str
-    realtime_voice: str
-    # For direct WebRTC (browser -> OpenAI) you'll use this:
-    webrtc_url: str
-    # For browser that talks via our proxy (optional):
-    sdp_proxy_url: str
-    # Ephemeral token (short-lived) that the browser uses for WebRTC auth:
-    client_secret: Optional[str] = None
-
-class SDPBody(BaseModel):
-    sdp: str
-    model: Optional[str] = None
-    voice: Optional[str] = None
-
-# -----------------------------------------------------------------------------
-# OpenAI settings
-# -----------------------------------------------------------------------------
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
-
-TEXT_MODEL      = os.getenv("TEXT_MODEL",      "gpt-4o-mini")
-REALTIME_MODEL  = os.getenv("REALTIME_MODEL",  "gpt-4o-realtime-preview")
-REALTIME_VOICE  = os.getenv("REALTIME_VOICE",  "verse")
-
-# Official endpoints
-OPENAI_BASE            = os.getenv("OPENAI_BASE", "https://api.openai.com/v1")
-REALTIME_WEBRTC_URL    = f"{OPENAI_BASE}/realtime?model={REALTIME_MODEL}"
-REALTIME_SESSION_URL   = f"{OPENAI_BASE}/realtime/sessions"
-
-# -----------------------------------------------------------------------------
-# Helpers
-# -----------------------------------------------------------------------------
-def _choose_text_model(latency_hint: Optional[str]) -> str:
-    if latency_hint == "quality":
-        # swap to a bigger model if you like, env override allowed
-        return os.getenv("TEXT_MODEL_QUALITY", TEXT_MODEL)
-    return os.getenv("TEXT_MODEL_FAST", TEXT_MODEL)
-
-# -----------------------------------------------------------------------------
-# /api/ask -> OpenAI text (fallback to echo if no key set)
-# -----------------------------------------------------------------------------
-@api.post("/ask", response_model=AskResult)
-async def api_ask(body: AskBody) -> Dict[str, Any]:
-    q = body.q.strip()
+@api.post("/ask", response_model=AskOut)
+async def ask_route(payload: AskIn):
+    """
+    Answers a text question. If OPENAI_API_KEY is set, calls the Responses API.
+    Otherwise, returns a simple echo (useful for smoke tests).
+    """
+    q = payload.q.strip()
     if not q:
-        raise HTTPException(status_code=400, detail="q is required")
+        raise HTTPException(status_code=400, detail="Missing 'q'")
 
-    # If no key yet, keep Phase-1 behavior so dev doesn’t break
     if not OPENAI_API_KEY:
-        return {"answer": f"You asked: {q}"}
+        return AskOut(answer=f"You asked: {q}")
 
-    model = _choose_text_model(body.latency)
+    url = "https://api.openai.com/v1/responses"
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    body: Dict[str, Any] = {
+        "model": TEXT_MODEL,
+        "input": [
+            {"role": "user", "content": q}
+        ],
+    }
+    async with httpx.AsyncClient(timeout=60) as client:
+        r = await client.post(url, headers=headers, json=body)
+        if r.status_code >= 400:
+            raise HTTPException(status_code=r.status_code, detail=r.text)
+        data = r.json()
+        # Responses API returns aggregated text under output_text
+        answer = data.get("output_text") or f"You asked: {q}"
+        return AskOut(answer=answer)
 
-    # Call Chat Completions (stable for gpt-4o-mini)
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.post(
-                f"{OPENAI_BASE}/chat/completions",
-                headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
-                json={
-                    "model": model,
-                    "messages": [
-                        {"role": "system", "content": "You are Friday, a concise helpful assistant."},
-                        {"role": "user", "content": q},
-                    ],
-                    "temperature": 0.3,
-                },
-            )
-            r.raise_for_status()
-            data = r.json()
-            answer = data["choices"][0]["message"]["content"]
-            return {"answer": answer}
-    except httpx.HTTPError as e:
-        # degrade gracefully
-        return {"answer": f"(fallback) You asked: {q} — upstream error: {e}"}
+# ---------- /api/session (Realtime ephemeral session) ----------
+class SessionOut(BaseModel):
+    # The OpenAI Realtime "client_secret" style payload (opaque to us)
+    client_secret: Dict[str, Any]
 
-# -----------------------------------------------------------------------------
-# /api/session -> mint ephemeral token for WebRTC + return model/voice
-# -----------------------------------------------------------------------------
-@api.get("/session", response_model=SessionInfo)
-async def api_session():
-    # Default response: no token, but still provide URLs & models (useful in dev)
-    client_secret: Optional[str] = None
+@api.post("/session", response_model=SessionOut)
+async def create_session():
+    """
+    Creates an ephemeral session for WebRTC or WebSocket Realtime clients.
+    Frontend fetches this and gives it to the OpenAI Realtime client.
+    """
+    if not OPENAI_API_KEY:
+        raise HTTPException(status_code=401, detail="Server missing OPENAI_API_KEY")
 
-    if OPENAI_API_KEY:
-        # Create a one-time short-lived client_secret for WebRTC
-        try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                r = await client.post(
-                    REALTIME_SESSION_URL,
-                    headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
-                    json={
-                        "model": REALTIME_MODEL,
-                        "voice": REALTIME_VOICE,
-                        # session expires quickly; it is intentionally ephemeral
-                        "expiration": 60,  # seconds (adjust to taste)
-                    },
-                )
-                r.raise_for_status()
-                client_secret = r.json().get("client_secret", {}).get("value")
-        except httpx.HTTPError:
-            # Keep going without a token so the UI can still render
-            client_secret = None
+    url = "https://api.openai.com/v1/realtime/sessions"
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    body = {
+        "model": REALTIME_MODEL,
+        "voice": REALTIME_VOICE,
+        # optionally tune other settings here:
+        # "input_audio_format": {"type": "wav"},
+        # "turn_detection": {"type": "server_vad"},
+    }
 
-    return SessionInfo(
-        session_id="local-dev",
-        text_model=TEXT_MODEL,
-        realtime_model=REALTIME_MODEL,
-        realtime_voice=REALTIME_VOICE,
-        webrtc_url=REALTIME_WEBRTC_URL,     # for direct browser->OpenAI WebRTC
-        sdp_proxy_url="/realtime/sdp",      # our backend SDP proxy
-        client_secret=client_secret,
-    )
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.post(url, headers=headers, json=body)
+        if r.status_code >= 400:
+            raise HTTPException(status_code=r.status_code, detail=r.text)
+        return r.json()
 
-# -----------------------------------------------------------------------------
-# /realtime/sdp (SDP offer->answer proxy) for WebRTC setups that
-# want the server in the middle instead of hitting OpenAI directly.
-# -----------------------------------------------------------------------------
+# ---------- /api/sdp (secure WebRTC SDP proxy) ----------
 @api.post("/sdp")
-async def realtime_sdp(body: SDPBody):
+async def sdp_proxy(request: Request):
+    """
+    Proxies a WebRTC SDP offer to OpenAI and returns the answer.
+    Accepts 'application/sdp' or raw text body. Returns text/SDP.
+    This keeps your API key on the server.
+    """
     if not OPENAI_API_KEY:
-        raise HTTPException(status_code=400, detail="OPENAI_API_KEY is not set on the server")
+        raise HTTPException(status_code=401, detail="Server missing OPENAI_API_KEY")
 
-    model = (body.model or REALTIME_MODEL).strip()
-    voice = (body.voice or REALTIME_VOICE).strip()
-    sdp   = body.sdp
+    offer_sdp = await request.body()
+    if not offer_sdp:
+        raise HTTPException(status_code=400, detail="Missing SDP offer body")
 
-    url = f"{OPENAI_BASE}/realtime?model={model}"
+    openai_url = f"https://api.openai.com/v1/realtime?model={REALTIME_MODEL}"
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/sdp",
+    }
 
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            r = await client.post(
-                url,
-                headers={
-                    "Authorization": f"Bearer {OPENAI_API_KEY}",
-                    "Content-Type": "application/sdp",
-                    # Optional: instruct voice at session start
-                    "OpenAI-Beta-Voice": voice,
-                },
-                content=sdp.encode("utf-8"),
-            )
-            r.raise_for_status()
-            # Pass the SDP answer straight through
-            return Response(content=r.text, media_type="application/sdp")
-    except httpx.HTTPError as e:
-        raise HTTPException(status_code=502, detail=f"Realtime upstream error: {e}") from e
+    async with httpx.AsyncClient(timeout=60) as client:
+        r = await client.post(openai_url, headers=headers, content=offer_sdp)
+        if r.status_code >= 400:
+            # Return underlying error from OpenAI (keep text to preserve SDP diagnostics)
+            raise HTTPException(status_code=r.status_code, detail=r.text)
 
-# mount router
+        # OpenAI returns an SDP answer as text/plain
+        return Response(content=r.text, media_type="application/sdp")
+
+# Mount router
 app.include_router(api)
+
 
 
 
