@@ -1,45 +1,30 @@
 Param(
+  [int]$Port = 8000,
   [switch]$OpenBrowser
 )
 
-$ErrorActionPreference = "Stop"
+# 0) run from this script's directory so relative paths work
+Set-Location (Resolve-Path "$PSScriptRoot\..")
 
-# 1) Kill anything on 8000
-Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue |
-  ForEach-Object { try { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue } catch {} }
-Write-Host "✅ Freed port 8000"
-
-# 2) Activate venv if present
-if (Test-Path .\.venv\Scripts\Activate.ps1) {
-  & .\.venv\Scripts\Activate.ps1
-  Write-Host "✅ venv activated"
-} else {
-  Write-Host "ℹ️  No venv found; using global python." -ForegroundColor Yellow
+# 1) activate venv if you have one next to backend folder (optional)
+if (Test-Path "..\.venv\Scripts\Activate.ps1") {
+  & "..\.venv\Scripts\Activate.ps1"
 }
 
-# 3) Install deps (idempotent)
-pip install -r requirements.txt | Out-Null
-Write-Host "✅ requirements installed"
+# 2) free the port if it's stuck
+Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue |
+  ForEach-Object { try { Stop-Process -Id $_.OwningProcess -Force } catch {} }
 
-# 4) Run Uvicorn (from backend folder!)
-$pwdPath = (Get-Location).Path
-if (-not ($pwdPath -like "*\backend")) {
-  Set-Location backend
-}
-Write-Host "🚀 Starting backend at http://localhost:8000 ..."
-Start-Process powershell -ArgumentList "uvicorn app:app --host 0.0.0.0 --port 8000 --reload"
+# 3) start uvicorn
+Write-Host "Starting backend on http://localhost:$Port ..."
+$proc = Start-Process -PassThru powershell -ArgumentList @(
+  "-NoLogo","-NoProfile","-Command",
+  "uvicorn app:app --host 0.0.0.0 --port $Port --reload"
+)
 
-# 5) Optional quick checks
-Start-Sleep -Seconds 1
-try {
-  $r1 = Invoke-WebRequest -Uri "http://localhost:8000/health" -UseBasicParsing
-  $r2 = Invoke-WebRequest -Uri "http://localhost:8000/api/health" -UseBasicParsing
-  Write-Host "/health     :" $r1.StatusCode
-  Write-Host "/api/health :" $r2.StatusCode
-} catch {
-  Write-Host "Health checks failed (backend may still be starting):" $_.Exception.Message -ForegroundColor Yellow
-}
-
+# 4) open docs (helpful)
 if ($OpenBrowser) {
-  Start-Process "http://localhost:8000/health"
+  Start-Sleep -Seconds 1
+  Start-Process "http://localhost:$Port/docs"
 }
+
