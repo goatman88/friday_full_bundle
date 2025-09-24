@@ -1,44 +1,27 @@
 services:
-  # --- Backend (FastAPI) ---
   - type: web
     name: friday-backend
     env: python
-    region: oregon
-    buildCommand: pip install -r backend/requirements.txt
-    startCommand: uvicorn backend.app:app --host 0.0.0.0 --port $PORT
-    services:
-  - type: web
-    name: friday-backend
-    env: python
-    buildCommand: pip install -r backend/requirements.txt
-    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port 8000
-
-    autoDeploy: true
+    plan: free
+    buildCommand: "pip install -r backend/requirements.txt"
+    startCommand: "uvicorn backend.main:app --host 0.0.0.0 --port 8000"
     envVars:
-      - key: OPENAI_API_KEY
-        sync: false
-      # Default = Studio preset (you can change at any time)
+      - key: PYTHON_VERSION
+        value: 3.11.9
       - key: REALTIME_MODEL
-        value: gpt-4o-realtime-preview-2024-12-17
-      - key: TEXT_MODEL
-        value: gpt-4o
+        value: gpt-4o-realtime-preview
       - key: REALTIME_VOICE
         value: verse
-      # (Optional) allow the frontend to read which mode we're in
-      - key: CORS_ORIGINS
-        value: "*"
 
-  # --- Frontend (Vite static build) ---
-  - type: static
+  - type: web
     name: friday-frontend
-    buildCommand: npm ci && npm run build
-    publishPath: dist
+    env: node
+    plan: free
+    buildCommand: "cd frontend && npm install && npm run build"
+    staticPublishPath: frontend/dist
     envVars:
-      # Point built site to your backend (Render injects this at build time)
-      - key: VITE_BACKEND_BASE
-        fromService:
-          type: web
-          name: friday-backend
-          property: host
+      - key: VITE_API_BASE
+        value: https://friday-backend.onrender.com
+
 
 
