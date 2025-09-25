@@ -1,9 +1,16 @@
-Param(
-  [string]$ProjectRoot = (Resolve-Path "$PSScriptRoot\..").Path
-)
-$backend = Join-Path $ProjectRoot "backend"
-if (-not (Test-Path $backend)) {
-  throw "Backend folder not found at: $backend"
+Param([switch]$OpenBrowser)
+$ErrorActionPreference = "Stop"
+
+$env:API_BASE = "http://localhost:8000"
+
+# free dev ports
+foreach ($p in 5173,8000) {
+  Get-NetTCPConnection -State Listen -LocalPort $p -ErrorAction SilentlyContinue |
+    ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
 }
-Set-Location $backend
-Write-Host "Now in: $(Get-Location)"
+
+Write-Host "Environment set. API_BASE=$($env:API_BASE)"
+Write-Host "Freed ports 5173, 8000" -ForegroundColor Green
+
+if ($OpenBrowser) { Start-Process "http://localhost:5173" }
+
