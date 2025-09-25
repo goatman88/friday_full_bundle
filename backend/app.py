@@ -7,7 +7,7 @@ app = FastAPI(title="Friday Backend")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # dev only
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -26,13 +26,12 @@ def health_api():
 
 @app.post("/api/ask")
 def ask(body: AskBody):
-    # mock answer for phase 1
     return {"answer": f"You asked: {body.q}"}
 
 @app.post("/api/session")
 def session():
-    # super simple mock session for phase 2 scaffolding
     return {"session_id": "local-dev", "models": {"voice": "verse", "text": "gpt-mock"}}
+
 
 
 
