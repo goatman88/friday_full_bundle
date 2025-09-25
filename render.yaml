@@ -1,5 +1,14 @@
 services:
   - type: web
+    name: friday-frontend
+    env: static
+    buildCommand: |
+      cd frontend
+      npm install
+      npm run build
+    staticPublishPath: frontend/dist
+
+  - type: web
     name: friday-backend
     env: python
     plan: free
@@ -7,33 +16,8 @@ services:
     startCommand: uvicorn backend.app:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
-        value: 3.11.9
-      - key: OPENAI_API_KEY
-        sync: false
-      - key: TEXT_MODEL
-        value: gpt-4o-mini
-      - key: REALTIME_MODEL
-        value: gpt-4o-realtime-preview
-      - key: REALTIME_VOICE
-        value: verse
+        value: 3.12.5
 
-
-  # --- Frontend (optional static site; remove if not deploying now) ---
-  - type: web
-    name: friday-frontend
-    env: node
-    plan: free
-    buildCommand: |
-      cd frontend
-      npm ci
-      npm run build
-    startCommand: npx serve -s frontend/dist -l $PORT
-    autoDeploy: true
-    envVars:
-      - key: VITE_API_BASE
-        # Point your frontend to the backend’s public URL after the first deploy.
-        # e.g., https://friday-backend-xxxx.onrender.com
-        value: ""
 
 
 
