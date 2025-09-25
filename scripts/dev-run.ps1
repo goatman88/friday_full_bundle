@@ -1,29 +1,33 @@
-Param(
-  [string]$ApiBase = "http://localhost:8000",
-  [switch]$OpenBrowser
+param([switch]$OpenBrowser)
+
+$ErrorActionPreference = 'Stop'
+$root = Split-Path -Parent $MyInvocation.MyCommand.Path | Split-Path -Parent
+if (-not $root) { $root = (Get-Location).Path }
+Set-Location $root
+
+# Ensure venv is active
+if (-not (Test-Path ".venv")) { python -m venv .venv }
+. .\.venv\Scripts\Activate.ps1
+
+# Kill anything on 8000/5173 (optional)
+Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'node|uvicorn' } | Stop-Process -Force -ErrorAction SilentlyContinue | Out-Null
+
+# Start backend (repo root => backend.app:app)
+$be = Start-Process pwsh -PassThru -ArgumentList @(
+  "-NoExit","-Command","Set-Location '$root'; uvicorn backend.app:app --host 0.0.0.0 --port 8000"
 )
 
-$ErrorActionPreference = "Stop"
-& "$PSScriptRoot\env.ps1" -ApiBase $ApiBase | Out-Null
+Start-Sleep 2
 
-function Free-Port([int[]]$ports){
-  foreach($p in $ports){
-    Get-NetTCPConnection -LocalPort $p -ErrorAction SilentlyContinue |
-      ForEach-Object { try { Stop-Process -Id $_.OwningProcess -Force } catch {} }
-  }
-}
+# Start frontend
+$fe = Start-Process pwsh -PassThru -ArgumentList @(
+  "-NoExit","-Command","Set-Location '$root\frontend'; npm run dev"
+)
 
-Free-Port 8000,5173
+if ($OpenBrowser) { Start-Process http://localhost:5173 }
 
-# backend
-Start-Process powershell -ArgumentList "uvicorn backend.app:app --host 0.0.0.0 --port 8000"
+Write-Host "Dev servers launching. Backend : http://localhost:8000 | Frontend : http://localhost:5173"
 
-# frontend
-Start-Process powershell -ArgumentList "cd frontend; npm install; npm run dev"
-
-if ($OpenBrowser) {
-  Start-Process "http://localhost:5173"
-}
 
 
 
