@@ -1,38 +1,45 @@
-const apiBase = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+const root = document.getElementById('app');
 
-async function checkHealth() {
-  const root = await fetch(`${apiBase}/health`).then(r => r.json());
-  document.getElementById("rootHealth").textContent = JSON.stringify(root);
+root.innerHTML = `
+  <h1>Friday Frontend</h1>
+  <div>Status: <span id="status">…</span></div>
 
-  const api = await fetch(`${apiBase}/api/health`).then(r => r.json());
-  document.getElementById("apiHealth").textContent = JSON.stringify(api);
+  <h3>/health</h3>
+  <pre id="healthPre"></pre>
+
+  <h3>Ask (wired to POST /api/ask)</h3>
+  <form id="askForm">
+    <input id="askInput" placeholder="what did the fox do?" />
+    <button>Ask</button>
+  </form>
+  <pre id="askPre"></pre>
+`;
+
+async function getJSON(url, opts) {
+  const r = await fetch(url, opts);
+  const t = await r.text();
+  try { return { ok: r.ok, json: JSON.parse(t) }; }
+  catch { return { ok: r.ok, text: t }; }
 }
 
-async function askQuestion() {
-  const q = document.getElementById("askInput").value;
-  const res = await fetch(`${apiBase}/api/ask`, {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({prompt: q})
-  }).then(r => r.json());
-  document.getElementById("askAnswer").textContent = JSON.stringify(res);
-}
+(async () => {
+  // /api/health
+  const h = await getJSON('/api/health');
+  document.getElementById('status').textContent = h.ok ? 'OK' : 'ERROR';
+  document.getElementById('healthPre').textContent = JSON.stringify(h.json ?? h.text, null, 2);
+})();
 
-// Camera & mic hooks
-async function startCamera() {
-  const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-  document.getElementById("video").srcObject = stream;
-}
+document.getElementById('askForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const q = document.getElementById('askInput').value || '';
+  const r = await getJSON('/api/ask', {
+    method: 'POST',
+    headers: { 'Content-Type':'application/json' },
+    body: JSON.stringify({ q })
+  });
+  document.getElementById('askPre').textContent = JSON.stringify(r.json ?? r.text, null, 2);
+});
 
-async function startMic() {
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  console.log("Mic started:", stream);
-}
-
-window.onload = checkHealth;
-window.askQuestion = askQuestion;
-window.startCamera = startCamera;
-window.startMic = startMic;
 
 
 
