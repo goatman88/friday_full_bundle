@@ -1,89 +1,16 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
   <head>
     <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
     <title>Friday Frontend</title>
   </head>
   <body>
-    <h1>Friday Frontend</h1>
-    <p>Status: OK</p>
-
-    <h3>/health</h3>
-    <pre id="rootHealth"></pre>
-
-    <h3>/api/health</h3>
-    <pre id="apiHealth"></pre>
-
-    <section style="margin-top:18px">
-  <h3>Realtime (Phase 2)</h3>
-  <div style="display:flex; gap:8px; flex-wrap:wrap">
-    <button id="btnStartCamera">Start Camera</button>
-    <button id="btnStartMic">Start Mic</button>
-    <button id="btnRTCProxy">Start Realtime (Server SDP)</button>
-  </div>
-  <video id="localVideo" autoplay playsinline muted style="width:280px; margin-top:8px; background:#111"></video>
-  <audio id="remoteAudio" autoplay></audio>
-</section>
-
-<script type="module">
-  import { sdpExchangeViaServer } from '/src/realtime.js';
-
-  const btnCam = document.getElementById('btnStartCamera');
-  const btnMic = document.getElementById('btnStartMic');
-  const btnRTCProxy = document.getElementById('btnRTCProxy');
-  const localVideo = document.getElementById('localVideo');
-  const remoteAudio = document.getElementById('remoteAudio');
-
-  let localStream;
-
-  btnCam.onclick = async () => {
-    localStream = await navigator.mediaDevices.getUserMedia({ video:true, audio:false });
-    localVideo.srcObject = localStream;
-  };
-
-  btnMic.onclick = async () => {
-    const s = await navigator.mediaDevices.getUserMedia({ audio:true, video:false });
-    if (localStream) s.getAudioTracks().forEach(t => localStream.addTrack(t));
-    else localStream = s;
-  };
-
-  btnRTCProxy.onclick = async () => {
-    const pc = new RTCPeerConnection();
-    pc.ontrack = (ev) => {
-      // OpenAI returns audio; attach to hidden audio tag
-      remoteAudio.srcObject = ev.streams[0];
-    };
-    if (localStream) {
-      localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
-    }
-
-    const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: false });
-    await pc.setLocalDescription(offer);
-
-    // Send our SDP offer to the server; receive SDP answer
-    const answerSdp = await sdpExchangeViaServer(offer.sdp);
-    const answer = { type: 'answer', sdp: answerSdp };
-    await pc.setRemoteDescription(answer);
-    console.log('✅ Realtime session established via server proxy');
-  };
-</script>
-
-    <h3>Ask (wired to POST /api/ask)</h3>
-    <input id="askInput" placeholder="Ask something..." />
-    <button onclick="askQuestion()">Ask</button>
-    <pre id="askAnswer"></pre>
-
-    <h3>Camera</h3>
-    <button onclick="startCamera()">Start Camera</button>
-    <video id="video" autoplay></video>
-
-    <h3>Mic</h3>
-    <button onclick="startMic()">Start Mic</button>
-
+    <div id="app"></div>
     <script type="module" src="/src/main.js"></script>
-  
   </body>
 </html>
+
 
 
 
