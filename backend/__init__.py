@@ -1,4 +1,5 @@
-# makes 'backend' an importable package
+# must exist so "backend" is a Python package
+
 
 
 
