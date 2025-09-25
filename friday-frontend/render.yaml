@@ -1,0 +1,13 @@
+﻿services:
+  - type: web
+    name: friday-backend
+    env: python
+    rootDir: .
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: uvicorn backend.app:app --host 0.0.0.0 --port $PORT
+
+  - type: static
+    name: friday-frontend
+    rootDir: .
+    buildCommand: bash -lc "cd frontend && (npm ci || npm i) && npm run build"
+    staticPublishPath: frontend/dist
