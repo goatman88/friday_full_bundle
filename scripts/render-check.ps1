@@ -1,19 +1,19 @@
-Param(
-  [Parameter(Mandatory)][string]$Backend,
-  [Parameter(Mandatory)][string]$Frontend
-)
+param([ValidateSet("root","backend")]$ServiceRoot="root")
 
-function Show($label,$uri){
-  try {
-    $r = iwr -Uri $uri -UseBasicParsing
-    "{0}: {1}" -f $label,$r.StatusCode
-  } catch {
-    "{0}: ERROR -> {1}" -f $label,$_.Exception.Message
-  }
+$ErrorActionPreference = 'Stop'
+$root = Split-Path -Parent $MyInvocation.MyCommand.Path | Split-Path -Parent
+Set-Location $root
+. .\.venv\Scripts\Activate.ps1
+
+if ($ServiceRoot -eq "backend") {
+  Write-Host "Simulating Render with service root = /backend"
+  Set-Location backend
+  uvicorn app:app --host 0.0.0.0 --port 8000
+} else {
+  Write-Host "Simulating Render with service root = repo root"
+  Set-Location $root
+  uvicorn backend.app:app --host 0.0.0.0 --port 8000
 }
 
-Show "Backend /health" "$Backend/health"
-Show "Backend /api/health" "$Backend/api/health"
-Show "Frontend" $Frontend
 
 
