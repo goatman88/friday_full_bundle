@@ -1,19 +1,27 @@
 Param(
-  [string]$ApiBase = "http://localhost:8000"
+  [string]$ApiBase = "http://localhost:8000",
+  [switch]$Print=$true
 )
 
-# Let scripts run just for this shell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass | Out-Null
+$ErrorActionPreference = "Stop"
 
-# Free any stuck local ports
-Get-NetTCPConnection -LocalPort 5173,8000 -ErrorAction SilentlyContinue | ForEach-Object {
-  try { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue } catch {}
+$script:Root = (Resolve-Path "$PSScriptRoot\..").Path
+Set-Location $script:Root
+
+# show where we are
+if ($Print) {
+  Write-Host "Repo root:" $script:Root -ForegroundColor Green
 }
 
-$env:VITE_API_BASE = $ApiBase
-Write-Host "`n✅ Environment set:" -ForegroundColor Green
-Write-Host "  Backend : $ApiBase"
-Write-Host "  Frontend: http://localhost:5173"
+# helpful envs for Python imports
+$env:PYTHONPATH = $script:Root
+
+# print service endpoints
+if ($Print) {
+  Write-Host "Backend : $ApiBase" -ForegroundColor Cyan
+  Write-Host "Frontend: http://localhost:5173" -ForegroundColor Cyan
+}
+
 
 
 
