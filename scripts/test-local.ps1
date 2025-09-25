@@ -1,12 +1,17 @@
-Param([string]$ApiBase = "http://localhost:8000")
+$ErrorActionPreference = 'Stop'
+function Ping($label,$url) {
+  try {
+    $r = Invoke-WebRequest -UseBasicParsing -Uri $url -TimeoutSec 5
+    Write-Host "$label: $($r.StatusCode) $($r.Content)"
+  } catch { Write-Host "ERR $label: $($_.Exception.Message)" -ForegroundColor Red }
+}
 
-Write-Host "GET $ApiBase/health" -ForegroundColor Yellow
-try { (iwr "$ApiBase/health").StatusCode } catch { $_.Exception.Message }
+Ping "health" "http://localhost:8000/api/health"
 
-Write-Host "GET $ApiBase/api/health" -ForegroundColor Yellow
-try { (iwr "$ApiBase/api/health").StatusCode } catch { $_.Exception.Message }
+$body = @{ q = "ping" } | ConvertTo-Json
+try {
+  $r = Invoke-WebRequest "http://localhost:8000/api/ask" -Method Post -ContentType "application/json" -Body $body
+  Write-Host "ask: $($r.StatusCode) $($r.Content)"
+} catch { Write-Host "ERR ask: $($_.Exception.Message)" -ForegroundColor Red }
 
-Write-Host "POST $ApiBase/api/ask" -ForegroundColor Yellow
-$body = @{ q = "what did the fox do?" } | ConvertTo-Json
-try { iwr "$ApiBase/api/ask" -Method Post -ContentType "application/json" -Body $body } catch { $_.Exception.Message }
 
