@@ -1,14 +1,12 @@
-$base = "http://localhost:8000"
+Param([string]$ApiBase = "http://localhost:8000")
 
-"`n/health -> $(Invoke-WebRequest -Uri "$base/health").StatusCode"
-"/api/health -> $(Invoke-WebRequest -Uri "$base/api/health").StatusCode"
+Write-Host "GET $ApiBase/health" -ForegroundColor Yellow
+try { (iwr "$ApiBase/health").StatusCode } catch { $_.Exception.Message }
 
-$body = @{ q = "ping" } | ConvertTo-Json
-$r = Invoke-WebRequest -Uri "$base/api/ask" -Method Post -ContentType "application/json" -Body $body
-"`n/api/ask -> $($r.StatusCode) $($r.Content)"
+Write-Host "GET $ApiBase/api/health" -ForegroundColor Yellow
+try { (iwr "$ApiBase/api/health").StatusCode } catch { $_.Exception.Message }
 
-# session (should be 401 if no OPENAI_API_KEY set)
-try {
-  $s = Invoke-WebRequest -Uri "$base/api/session" -Method Post
-  "/api/session -> $($s.StatusCode)"
-} catch { "/api/session -> ERROR $($_.Exception.Message)" }
+Write-Host "POST $ApiBase/api/ask" -ForegroundColor Yellow
+$body = @{ q = "what did the fox do?" } | ConvertTo-Json
+try { iwr "$ApiBase/api/ask" -Method Post -ContentType "application/json" -Body $body } catch { $_.Exception.Message }
+
