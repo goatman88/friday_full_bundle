@@ -1,12 +1,12 @@
-param(
-  [Parameter(Mandatory=$true)][string]$Backend,
-  [Parameter(Mandatory=$true)][string]$Frontend
+Param(
+  [Parameter(Mandatory)][string]$Backend,
+  [Parameter(Mandatory)][string]$Frontend
 )
 
-function Show($label,$uri) {
+function Show($label,$uri){
   try {
-    $r = Invoke-WebRequest -Uri $uri -UseBasicParsing
-    "{0}: {1} {2}" -f $label,$r.StatusCode,$uri
+    $r = iwr -Uri $uri -UseBasicParsing
+    "{0}: {1}" -f $label,$r.StatusCode
   } catch {
     "{0}: ERROR -> {1}" -f $label,$_.Exception.Message
   }
@@ -15,4 +15,5 @@ function Show($label,$uri) {
 Show "Backend /health" "$Backend/health"
 Show "Backend /api/health" "$Backend/api/health"
 Show "Frontend" $Frontend
+
 
