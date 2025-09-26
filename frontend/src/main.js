@@ -1,44 +1,40 @@
-const root = document.getElementById('app');
+const app = document.getElementById('app');
 
-root.innerHTML = `
-  <h1>Friday Frontend</h1>
-  <div>Status: <span id="status">…</span></div>
+async function ping() {
+  try {
+    const r = await fetch('http://localhost:8000/api/health');
+    const j = await r.json();
+    return j;
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
 
-  <h3>/health</h3>
-  <pre id="healthPre"></pre>
-
-  <h3>Ask (wired to POST /api/ask)</h3>
-  <form id="askForm">
-    <input id="askInput" placeholder="what did the fox do?" />
-    <button>Ask</button>
-  </form>
-  <pre id="askPre"></pre>
-`;
-
-async function getJSON(url, opts) {
-  const r = await fetch(url, opts);
-  const t = await r.text();
-  try { return { ok: r.ok, json: JSON.parse(t) }; }
-  catch { return { ok: r.ok, text: t }; }
+async function ask(q) {
+  const r = await fetch('http://localhost:8000/api/ask', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ q })
+  });
+  return r.json();
 }
 
 (async () => {
-  // /api/health
-  const h = await getJSON('/api/health');
-  document.getElementById('status').textContent = h.ok ? 'OK' : 'ERROR';
-  document.getElementById('healthPre').textContent = JSON.stringify(h.json ?? h.text, null, 2);
+  const health = await ping();
+  app.innerHTML = `
+    <h1>Friday Frontend</h1>
+    <pre>health: ${JSON.stringify(health)}</pre>
+    <input id="q" placeholder="type a question" />
+    <button id="go">Ask</button>
+    <pre id="out"></pre>
+  `;
+  document.getElementById('go').onclick = async () => {
+    const q = document.getElementById('q').value || 'ping';
+    const res = await ask(q);
+    document.getElementById('out').textContent = JSON.stringify(res, null, 2);
+  };
 })();
 
-document.getElementById('askForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const q = document.getElementById('askInput').value || '';
-  const r = await getJSON('/api/ask', {
-    method: 'POST',
-    headers: { 'Content-Type':'application/json' },
-    body: JSON.stringify({ q })
-  });
-  document.getElementById('askPre').textContent = JSON.stringify(r.json ?? r.text, null, 2);
-});
 
 
 
