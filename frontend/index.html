@@ -1,41 +1,33 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Friday Frontend</title>
-    <style>
-      html,body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; padding: 0; background:#0b0e14; color:#e6e6e6; }
-      .wrap { max-width: 720px; margin: 48px auto; padding: 0 16px; }
-      h1 { margin: 0 0 24px; font-size: 28px; }
-      .row { display: flex; gap: 8px; }
-      input[type="text"] { flex: 1 1 auto; padding: 10px 12px; border-radius: 8px; border: 1px solid #2a2f3a; background:#121622; color:#e6e6e6; }
-      button { padding: 10px 16px; border-radius: 8px; border: 1px solid #2a2f3a; background:#1f2430; color:#e6e6e6; cursor: pointer; }
-      button:disabled { opacity: .6; cursor: not-allowed; }
-      .card { margin-top: 16px; padding: 12px; border: 1px solid #2a2f3a; border-radius: 8px; background:#121622; white-space: pre-wrap; }
-      .ok { color: #7bd88f; }
-      .bad { color: #ff6666; }
-      small { opacity:.8 }
-    </style>
   </head>
   <body>
-    <div class="wrap">
+    <main style="max-width:680px;margin:2rem auto;font-family:system-ui, sans-serif">
       <h1>Friday Frontend</h1>
 
-      <div class="card" id="health">Checking backend health…</div>
+      <section style="margin:1rem 0;padding:1rem;border:1px solid #ddd">
+        <button id="btnHealth">Check /api/health</button>
+        <pre id="healthOut" style="white-space:pre-wrap"></pre>
+      </section>
 
-      <form id="ask-form" class="row" autocomplete="off">
-        <input id="q" type="text" placeholder="Ask something…" />
-        <button id="send" type="submit">Ask</button>
-      </form>
-
-      <div class="card" id="out"><small>Waiting for a question…</small></div>
-      <p><small>Backend base: <code id="base"></code></small></p>
-    </div>
+      <section style="margin:1rem 0;padding:1rem;border:1px solid #ddd">
+        <label>
+          Ask:
+          <input id="q" value="ping" />
+        </label>
+        <button id="btnAsk">POST /api/ask</button>
+        <pre id="askOut" style="white-space:pre-wrap"></pre>
+      </section>
+    </main>
 
     <script type="module" src="/main.js"></script>
   </body>
 </html>
+
 
 
 
