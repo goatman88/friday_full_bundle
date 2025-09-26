@@ -135,3 +135,4 @@ Write-Host "  1) .\.venv\Scripts\Activate.ps1"
 Write-Host "  2) uvicorn backend.app:app --host 0.0.0.0 --port 8000   (from repo root)"
 Write-Host "  3) cd frontend && npm run dev"
 
+
