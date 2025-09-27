@@ -1,39 +1,35 @@
-const app = document.getElementById('app');
+const API_BASE = 'http://localhost:8000';
 
-async function ping() {
+const el = (id) => document.getElementById(id);
+
+el('btn-health').addEventListener('click', async () => {
+  el('health-out').textContent = '…checking';
   try {
-    const r = await fetch('http://localhost:8000/api/health');
+    const r = await fetch(`${API_BASE}/api/health`);
     const j = await r.json();
-    return j;
+    el('health-out').textContent = JSON.stringify(j, null, 2);
   } catch (e) {
-    return { error: String(e) };
+    el('health-out').textContent = `Health error: ${e}`;
   }
-}
+});
 
-async function ask(q) {
-  const r = await fetch('http://localhost:8000/api/ask', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ q })
-  });
-  return r.json();
-}
+el('btn-ask').addEventListener('click', async () => {
+  const q = el('q').value.trim();
+  if (!q) { el('ask-out').textContent = 'Enter a question first.'; return; }
+  el('ask-out').textContent = '…sending';
+  try {
+    const r = await fetch(`${API_BASE}/api/ask`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ q })
+    });
+    const j = await r.json();
+    el('ask-out').textContent = JSON.stringify(j, null, 2);
+  } catch (e) {
+    el('ask-out').textContent = `Ask error: ${e}`;
+  }
+});
 
-(async () => {
-  const health = await ping();
-  app.innerHTML = `
-    <h1>Friday Frontend</h1>
-    <pre>health: ${JSON.stringify(health)}</pre>
-    <input id="q" placeholder="type a question" />
-    <button id="go">Ask</button>
-    <pre id="out"></pre>
-  `;
-  document.getElementById('go').onclick = async () => {
-    const q = document.getElementById('q').value || 'ping';
-    const res = await ask(q);
-    document.getElementById('out').textContent = JSON.stringify(res, null, 2);
-  };
-})();
 
 
 
