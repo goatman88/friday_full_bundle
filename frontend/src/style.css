@@ -1,0 +1,9 @@
+:root { font-family: system-ui, Segoe UI, Roboto, Arial, sans-serif; }
+body { margin: 0; padding: 2rem; background:#0b1020; color:#e7ecff; }
+main { max-width: 720px; margin: 0 auto; }
+h1 { margin-top: 0; }
+form { margin: 1rem 0; display:flex; gap:.5rem; }
+input { flex:1; padding:.6rem .8rem; border-radius:8px; border:1px solid #4b5577; background:#101838; color:#e7ecff; }
+button { padding:.6rem .9rem; border-radius:8px; border:1px solid #5c7cff; background:#2940ff; color:white; cursor:pointer; }
+button:hover { filter:brightness(1.08); }
+pre { background:#0d1430; border:1px solid #2a3560; border-radius:8px; padding:1rem; }
