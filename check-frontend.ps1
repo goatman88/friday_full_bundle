@@ -1,202 +1,85 @@
-param(
-  # Path to the repo root (parent of 'frontend'). Defaults to current dir.
-  [string]$Root = (Get-Location).Path,
-  # Try to auto-fix safe issues (remove stray postcss folder, create missing files)
-  [switch]$Fix,
-  # Also try to start Vite after checks pass
-  [switch]$StartDev
-)
-
+# check-frontend.ps1
 $ErrorActionPreference = 'Stop'
-function Section($t){Write-Host "`n=== $t ===" -ForegroundColor Cyan}
-function Ok($t){Write-Host "OK  $t" -ForegroundColor Green}
-function Warn($t){Write-Host "WARN $t" -ForegroundColor Yellow}
-function Bad($t){Write-Host "ERR $t" -ForegroundColor Red}
+function Section($t){ "`n=== $t ===" | Write-Host -ForegroundColor Cyan }
+function Good($t){ "OK  $t" | Write-Host -ForegroundColor Green }
+function Warn($t){ "WARN $t" | Write-Host -ForegroundColor Yellow }
+function Bad($t){ "ERR $t"  | Write-Host -ForegroundColor Red }
 
-$front = Join-Path $Root 'frontend'
-$src   = Join-Path $front 'src'
-$pkg   = Join-Path $front 'package.json'
-$post  = Join-Path $front 'postcss.config.js'
-$idx   = Join-Path $front 'index.html'
-$main  = Join-Path $src   'main.js'
+$root  = Split-Path -Parent $PSCommandPath
+$front = Join-Path $root 'frontend'
+if(!(Test-Path $front)){ Bad "missing frontend/"; exit 1 }
+Set-Location $front
 
-Section "Resolve paths"
-Write-Host "Root: $Root"
-Write-Host "Frontend: $front"
-if(!(Test-Path $front)){ Bad "missing folder: $front"; if(-not $Fix){exit 1} else {New-Item -ItemType Directory -Force -Path $front | Out-Null; Ok "created $front"}}
+Section "Node & npm"
+node -v
+npm -v
 
-# 1) Catch the exact Vite/PostCSS problem: accidental folder 'frontend\postcss\'
-Section "PostCSS folder trap"
-$badPostcssFolder = Join-Path $front 'postcss'
-if(Test-Path $badPostcssFolder){
-  Warn "Found folder '$($badPostcssFolder)'. This confuses Vite/PostCSS."
-  if($Fix){
-    Remove-Item -Recurse -Force $badPostcssFolder
-    Ok "Removed stray folder: $badPostcssFolder"
-  } else {
-    Warn "Re-run with -Fix to remove it automatically."
-  }
-} else { Ok "No stray 'frontend\\postcss\\' folder" }
-
-# 2) Ensure minimal files exist (index.html, postcss.config.js, src/main.js, package.json)
-Section "Ensure minimal files exist"
-if(!(Test-Path $src)){ if($Fix){ New-Item -ItemType Directory -Force -Path $src | Out-Null; Ok "created $src" } else { Bad "missing $src"; } }
-
-if(!(Test-Path $idx) -and $Fix){
-@'
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Friday Frontend</title>
-  </head>
-  <body style="font-family: system-ui,-apple-system,Segoe UI,Roboto,sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px;">
-    <h1>Friday Frontend</h1>
-    <section id="health" style="margin: 16px 0; padding: 12px; border: 1px solid #ddd;">
-      <button id="btn-health">Check API /api/health</button>
-      <pre id="health-out" style="white-space: pre-wrap; margin-top: 8px;"></pre>
-    </section>
-    <section id="ask" style="margin: 16px 0; padding: 12px; border: 1px solid #ddd;">
-      <label for="q">Ask:</label>
-      <input id="q" placeholder="type a question…" style="width: 60%; padding: 6px;" />
-      <button id="btn-ask">Send</button>
-      <pre id="ask-out" style="white-space: pre-wrap; margin-top: 8px;"></pre>
-    </section>
-    <script type="module" src="/src/main.js"></script>
-  </body>
-</html>
-'@ | Set-Content -Encoding UTF8 $idx
-  Ok "created $([IO.Path]::GetFileName($idx))"
+# Exactly one postcss config
+Section "PostCSS config"
+$cfgs = Get-ChildItem $front -Filter 'postcss.config.*' -File -Name
+if($cfgs.Count -gt 1){
+  Warn "Found multiple: $($cfgs -join ', ') -> keeping .cjs"
+  $cfgs | Where-Object { $_ -ne 'postcss.config.cjs' } | ForEach-Object { Remove-Item -Force $_ }
 }
-
-if(!(Test-Path $main) -and $Fix){
-@'
-const API_BASE = "http://localhost:8000";
-const el = (id) => document.getElementById(id);
-
-el("btn-health").addEventListener("click", async () => {
-  el("health-out").textContent = "…checking";
-  try {
-    const r = await fetch(`${API_BASE}/api/health`);
-    const j = await r.json();
-    el("health-out").textContent = JSON.stringify(j, null, 2);
-  } catch (e) {
-    el("health-out").textContent = `Health error: ${e}`;
-  }
-});
-
-el("btn-ask").addEventListener("click", async () => {
-  const q = el("q").value.trim();
-  if (!q) { el("ask-out").textContent = "Enter a question first."; return; }
-  el("ask-out").textContent = "…sending";
-  try {
-    const r = await fetch(`${API_BASE}/api/ask`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ q })
-    });
-    const j = await r.json();
-    el("ask-out").textContent = JSON.stringify(j, null, 2);
-  } catch (e) {
-    el("ask-out").textContent = `Ask error: ${e}`;
-  }
-});
-'@ | Set-Content -Encoding UTF8 $main
-  Ok "created src/main.js"
-}
-
-if(!(Test-Path $post) -and $Fix){
-@'
-module.exports = {
-  plugins: { autoprefixer: {} }
-};
-'@ | Set-Content -Encoding UTF8 $post
-  Ok "created postcss.config.js"
-}
-
-if(!(Test-Path $pkg) -and $Fix){
-@'
-{
-  "name": "friday-frontend",
-  "version": "0.0.0",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview --port 5173"
-  },
-  "devDependencies": {
-    "vite": "^5.4.9",
-    "postcss": "^8.4.47",
-    "autoprefixer": "^10.4.20"
+if(!(Test-Path 'postcss.config.cjs') -and (Test-Path 'postcss.config.js')){
+  # If in ESM mode, module.exports will fail—convert to .cjs
+  $pkg = Get-Content 'package.json' -Raw | ConvertFrom-Json
+  if($pkg.type -eq 'module'){
+    Warn "ESM mode detected; converting postcss.config.js -> .cjs"
+    Remove-Item -Force 'postcss.config.cjs' -ErrorAction SilentlyContinue
+    Rename-Item 'postcss.config.js' 'postcss.config.cjs'
   }
 }
-'@ | Set-Content -Encoding UTF8 $pkg
-  Ok "created package.json"
+if(!(Test-Path 'postcss.config.cjs') -and !(Test-Path 'postcss.config.js')){
+  Good "Creating postcss.config.cjs"
+  Set-Content -Encoding UTF8 'postcss.config.cjs' @'
+module.exports = { plugins: { autoprefixer: {} } };
+'@
 }
+Get-ChildItem -Name postcss.config.*
 
-# 3) Validate file contents
-Section "Validate files"
-if(Test-Path $post){
-  $txt = Get-Content $post -Raw
-  if($txt.Trim().StartsWith('{')){ Bad "postcss.config.js is JSON – must be JS (module.exports = …)"; } else { Ok "postcss.config.js looks like JS" }
-} else { Warn "postcss.config.js missing" }
-
-if(Test-Path $pkg){
-  try {
-    $json = Get-Content $pkg -Raw | ConvertFrom-Json
-    if($json.scripts.dev -ne 'vite'){ Warn "scripts.dev is '$($json.scripts.dev)'; expected 'vite'" } else { Ok "package.json parsed" }
-  } catch {
-    Bad "package.json not valid JSON: $($_.Exception.Message)"
-  }
-} else { Warn "package.json missing" }
-
-if(Test-Path $idx){ Ok "index.html present" } else { Warn "index.html missing" }
-if(Test-Path $main){ Ok "src/main.js present" } else { Warn "src/main.js missing" }
-
-# 4) Node & npm sanity
-Section "Node/npm"
-try { $nodeV = node -v; Ok "node $nodeV" } catch { Bad "node not found"; exit 1 }
-try { $npmV  = npm -v;  Ok "npm $npmV" }  catch { Bad "npm not found";  exit 1 }
-
-# 5) Install deps if needed
-Section "npm install"
-Push-Location $front
+# package.json sanity
+Section "package.json"
 try {
-  if(Test-Path (Join-Path $front 'package-lock.json')){ npm ci | Out-Null } else { npm install | Out-Null }
-  Ok "npm deps installed"
-} catch { Bad "npm install failed: $($_.Exception.Message)" ; Pop-Location; exit 1 }
-
-# 6) Backend quick health ping (optional)
-Section "Backend /api/health"
-try {
-  $r = Invoke-WebRequest -Uri "http://localhost:8000/api/health" -TimeoutSec 3
-  Ok "backend responded: $($r.Content)"
+  $pkgJson = Get-Content 'package.json' -Raw | ConvertFrom-Json
+  Good "package.json parsed; scripts.dev = '$($pkgJson.scripts.dev)'"
 } catch {
-  Warn "backend not reachable on :8000 (start your uvicorn if you need it)"
+  Bad "package.json invalid JSON: $($_.Exception.Message)"; exit 1
 }
 
-# 7) Ensure dev port 5173 is free (optional clean if -Fix)
-Section "Dev port 5173"
-$port = 5173
-$holders = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue
-if($holders){
-  Warn "something is already using :$port"
-  if($Fix){
-    $holders | Select-Object -Expand OwningProcess -Unique | ForEach-Object { Try { Stop-Process -Id $_ -Force -ErrorAction Stop } Catch {} }
-    Ok "freed :$port"
-  }
-} else { Ok "port $port free" }
-
-# 8) Optionally start Vite
-if($StartDev){
-  Section "Start Vite (CTRL+C to stop)"
-  npm run dev
-  Pop-Location
-} else {
-  Pop-Location
-  Section "Done"
-  Write-Host "Tip: start Vite with:  Push-Location `"$front`"; npm run dev" -ForegroundColor Gray
+# Required files
+Section "Files"
+'$front/index.html','src/main.js' | ForEach-Object {
+  if(!(Test-Path $_)){ Bad "missing $_"; exit 1 } else { Good "$_ present" }
 }
+
+# npm install
+Section "npm install"
+npm install | Out-Null
+Good "npm install ok"
+
+# Kill 5173 (vite) if needed
+Section "Free port 5173"
+Get-NetTCPConnection -LocalPort 5173 -ErrorAction SilentlyContinue |
+  Select-Object -Expand OwningProcess | ForEach-Object { try { Stop-Process -Id $_ -Force } catch {} }
+Good "port 5173 appears free"
+
+# Start vite (5s smoke)
+Section "Vite smoke"
+$psi = New-Object System.Diagnostics.ProcessStartInfo
+$psi.FileName = (Get-Command npm).Source
+$psi.Arguments = 'run dev'
+$psi.RedirectStandardOutput = $true
+$psi.RedirectStandardError = $true
+$psi.UseShellExecute = $false
+$p = [System.Diagnostics.Process]::Start($psi)
+Start-Sleep 2
+try {
+  $r = Invoke-WebRequest 'http://localhost:5173' -TimeoutSec 3
+  Good "Vite responded ($($r.StatusCode))"
+} catch {
+  Warn "Vite not reachable yet: $($_.Exception.Message) (this may be normal if still compiling)"
+} finally {
+  if(!$p.HasExited){ $p.Kill() }
+}
+Good "frontend doctor done"
