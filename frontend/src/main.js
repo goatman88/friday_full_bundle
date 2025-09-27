@@ -1,40 +1,35 @@
-const API_BASE = 'http://localhost:8000';
+import './style.css';
 
-const el = (id) => document.getElementById(id);
+const el = document.querySelector('#app');
+el.innerHTML = `
+  <main>
+    <h1>Hello Friday! 🎉</h1>
+    <p>Your Vite app is running.</p>
 
-el('btn-health').addEventListener('click', async () => {
-  el('health-out').textContent = '…checking';
-  try {
-    const r = await fetch(`${API_BASE}/api/health`);
-    const j = await r.json();
-    el('health-out').textContent = JSON.stringify(j, null, 2);
-  } catch (e) {
-    el('health-out').textContent = `Health error: ${e}`;
-  }
-});
-import './style.css'
-
-document.querySelector('#app').innerHTML = `
-  <h1>Hello Friday!</h1>
-  <p>Frontend is working with Vite 🎉</p>
+    <form id="askForm">
+      <input id="q" placeholder="Type something…" />
+      <button>Ask</button>
+    </form>
+    <pre id="out"></pre>
+  </main>
 `;
 
-el('btn-ask').addEventListener('click', async () => {
-  const q = el('q').value.trim();
-  if (!q) { el('ask-out').textContent = 'Enter a question first.'; return; }
-  el('ask-out').textContent = '…sending';
+document.querySelector('#askForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const q = document.querySelector('#q').value;
   try {
-    const r = await fetch(`${API_BASE}/api/ask`, {
+    const r = await fetch('http://localhost:8000/api/ask', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ q })
     });
-    const j = await r.json();
-    el('ask-out').textContent = JSON.stringify(j, null, 2);
-  } catch (e) {
-    el('ask-out').textContent = `Ask error: ${e}`;
+    const data = await r.json();
+    document.querySelector('#out').textContent = JSON.stringify(data, null, 2);
+  } catch (err) {
+    document.querySelector('#out').textContent = String(err);
   }
 });
+
 
 
 
