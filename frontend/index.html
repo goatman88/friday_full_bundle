@@ -1,12 +1,26 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Friday Frontend</title>
   </head>
   <body>
-    <div id="app"></div>
+    <main style="max-width:720px;margin:40px auto;font-family:system-ui,Segoe UI,Roboto,Arial">
+      <h1>Friday Frontend</h1>
+
+      <section id="health" style="padding:12px;border:1px solid #ddd;margin-bottom:16px">
+        <button id="btnHealth">Check backend /api/health</button>
+        <pre id="healthOut" style="white-space:pre-wrap;margin-top:8px"></pre>
+      </section>
+
+      <section id="ask" style="padding:12px;border:1px solid #ddd">
+        <label for="q">Ask:</label>
+        <input id="q" placeholder="type something…" style="width:70%;padding:6px;margin-left:6px" />
+        <button id="btnAsk">Send</button>
+        <pre id="askOut" style="white-space:pre-wrap;margin-top:8px"></pre>
+      </section>
+    </main>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>
