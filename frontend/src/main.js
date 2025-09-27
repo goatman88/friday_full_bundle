@@ -12,6 +12,12 @@ el('btn-health').addEventListener('click', async () => {
     el('health-out').textContent = `Health error: ${e}`;
   }
 });
+import './style.css'
+
+document.querySelector('#app').innerHTML = `
+  <h1>Hello Friday!</h1>
+  <p>Frontend is working with Vite 🎉</p>
+`;
 
 el('btn-ask').addEventListener('click', async () => {
   const q = el('q').value.trim();
