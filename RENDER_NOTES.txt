@@ -1,0 +1,8 @@
+﻿# Backend web service on Render (Python)
+# Build Command:   pip install -r backend/requirements.txt
+# Start Command:   uvicorn backend.app:app --host 0.0.0.0 --port $PORT
+# Runtime:         Python 3.12 (or your choice)
+
+# If you want a static frontend on Render, create a second "Static Site" and point publish folder to frontend/dist
+# Build Command:   npm ci && npm run build
+# Publish directory: frontend/dist
