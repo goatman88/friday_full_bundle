@@ -17,5 +17,5 @@ def health():
 
 @app.post("/api/ask")
 def ask(body: dict):
-    q = body.get("q", "")
+    q = (body or {}).get("q", "")
     return {"answer": f"you asked: {q}"}

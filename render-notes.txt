@@ -1,0 +1,11 @@
+Render Backend (Web Service)
+- Root: repo root
+- Runtime: Python 3.x
+- Build command: pip install -r backend/requirements.txt
+- Start command: uvicorn backend.app:app --host 0.0.0.0 --port $PORT
+
+Render Frontend (Static Site)
+- Root: frontend
+- Build command: npm ci && npm run build
+- Publish directory: frontend/dist
+- Environment: NODE_VERSION 20 (or 22)
