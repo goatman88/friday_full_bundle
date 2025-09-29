@@ -1,5 +1,5 @@
 ﻿services:
-  # === BACKEND: FastAPI (Uvicorn) ===
+  # === BACKEND: FastAPI (uvicorn) ===
   - name: friday-backend
     type: web
     env: python
@@ -7,31 +7,28 @@
     region: oregon
     buildCommand: pip install -r backend/requirements.txt
     startCommand: uvicorn backend.app:app --host 0.0.0.0 --port $PORT
-    healthCheckPath: /api/health
     autoDeploy: true
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.6
-      # In prod, we’ll allow the static site origin (set automatically below if supported),
-      # else you can set/override this later in the dashboard.
-      - key: FRONTEND_ORIGIN
-        fromService:
-          type: static_site
-          name: friday-frontend
-          property: url
+      - key: WEB_CONCURRENCY
+        value: "1"          # free tier friendly
+      - key: UVICORN_WORKERS
+        value: "1"
 
   # === FRONTEND: Vite static site ===
   - name: friday-frontend
-    type: static_site
-    rootDir: frontend
-    buildCommand: npm ci && npm run build
-    staticPublishPath: dist
-    autoDeploy: true
+    type: static
+    plan: free
+    region: oregon
     envVars:
-      # Make built frontend call the live backend URL
+      # IMPORTANT: we'll set the actual URL *after* the backend comes up (step 3)
       - key: VITE_BACKEND_URL
-        fromService:
-          type: web
-          name: friday-backend
-          property: url
+        value: ""           # placeholder; Render lets you edit after services are created
+    buildCommand: |
+      cd frontend
+      npm ci || npm install
+      npm run build
+    staticPublishPath: frontend/dist
+
 
