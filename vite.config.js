@@ -1,14 +1,16 @@
-﻿// frontend/vite.config.js
-import { defineConfig } from 'vite';
+﻿import { defineConfig } from "vite";
 
 export default defineConfig({
   server: {
+    port: 5173,
     proxy: {
-      // Any request starting with /api will be forwarded to FastAPI in dev
-      '/api': {
-        target: 'http://localhost:8000',
+      "/api": {
+        target: "http://localhost:8000",
         changeOrigin: true,
       },
     },
   },
 });
+
+
+
