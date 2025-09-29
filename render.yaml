@@ -1,21 +1,37 @@
 ﻿services:
-  - type: web
-    name: friday
+  # === BACKEND: FastAPI (Uvicorn) ===
+  - name: friday-backend
+    type: web
     env: python
     plan: free
-    buildCommand: |
-      # Frontend build (if present)
-      if [ -f frontend/package.json ]; then
-        cd frontend
-        # Use npm ci only if lockfile exists. Else fallback to install.
-        if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then npm ci; else npm install; fi
-        npm run build || true
-        cd ..
-      fi
-      # Backend deps
-      pip install -r backend/requirements.txt
-    startCommand: |
-      cd backend && uvicorn app:app --host 0.0.0.0 --port $PORT
+    region: oregon
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: uvicorn backend.app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    autoDeploy: true
     envVars:
       - key: PYTHON_VERSION
-        value: 3.12.5
+        value: 3.12.6
+      # In prod, we’ll allow the static site origin (set automatically below if supported),
+      # else you can set/override this later in the dashboard.
+      - key: FRONTEND_ORIGIN
+        fromService:
+          type: static_site
+          name: friday-frontend
+          property: url
+
+  # === FRONTEND: Vite static site ===
+  - name: friday-frontend
+    type: static_site
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    autoDeploy: true
+    envVars:
+      # Make built frontend call the live backend URL
+      - key: VITE_BACKEND_URL
+        fromService:
+          type: web
+          name: friday-backend
+          property: url
+
