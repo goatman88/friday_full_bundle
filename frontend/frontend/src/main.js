@@ -1,12 +1,12 @@
-// frontend/src/main.js
 const out = document.querySelector('#out');
 const btn = document.querySelector('#ping');
 
 btn.addEventListener('click', async () => {
   out.textContent = '...';
   try {
-    // in dev this goes through the Vite proxy to localhost:8000
-    const res = await fetch('/api/health');
+    // Use env when deployed, otherwise proxy in dev
+    const base = import.meta.env.VITE_BACKEND_URL || '';
+    const res = await fetch(`${base}/api/health`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     out.textContent = JSON.stringify(data);
