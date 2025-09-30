@@ -1,5 +1,5 @@
 ﻿services:
-  # === BACKEND: FastAPI (uvicorn) ===
+  # === BACKEND: FastAPI (Uvicorn) ===
   - name: friday-backend
     type: web
     env: python
@@ -7,28 +7,25 @@
     region: oregon
     buildCommand: pip install -r backend/requirements.txt
     startCommand: uvicorn backend.app:app --host 0.0.0.0 --port $PORT
-    autoDeploy: true
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.12.6
-      - key: WEB_CONCURRENCY
-        value: "1"          # free tier friendly
-      - key: UVICORN_WORKERS
-        value: "1"
+      - key: PORT
+        value: 8000
+      - key: HOST
+        value: 0.0.0.0
+      - key: CORS_ORIGINS
+        value: https://friday-full-bundle.onrender.com  # frontend URL
 
-  # === FRONTEND: Vite static site ===
+  # === FRONTEND: Vite (Static Site) ===
   - name: friday-frontend
-    type: static
+    type: web
+    env: node
     plan: free
     region: oregon
+    buildCommand: npm install && npm run build --prefix frontend
+    startCommand: npm run preview --prefix frontend -- --port $PORT --host 0.0.0.0
     envVars:
-      # IMPORTANT: we'll set the actual URL *after* the backend comes up (step 3)
       - key: VITE_BACKEND_URL
-        value: ""           # placeholder; Render lets you edit after services are created
-    buildCommand: |
-      cd frontend
-      npm ci || npm install
-      npm run build
-    staticPublishPath: frontend/dist
+        value: https://friday-backend-ksep.onrender.com  # backend URL
+
 
 
