@@ -1,24 +1,24 @@
+# backend/app.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import os
 
-app = FastAPI(title="Friday Backend", version="0.1.0")
+app = FastAPI()
 
-# ----- CORS -----
-# In dev we allow all (Vite runs on 5173). In prod, set FRONTEND_ORIGIN env var on Render.
-frontend_origin = os.getenv("FRONTEND_ORIGIN", "*")
-origins = [frontend_origin] if frontend_origin != "*" else ["*"]
+# Allow your Render frontend (and localhost for dev)
+FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
+# You can also allow multiple origins:
+allow_origins = [FRONTEND_ORIGIN, "http://localhost:5173", "https://localhost:5173"]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=allow_origins,   # put your frontend URL here
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["*"],           # needed so OPTIONS preflight succeeds
+    allow_headers=["*"],           # needed so OPTIONS preflight succeeds
 )
 
-# ----- Routes -----
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
@@ -28,8 +28,5 @@ class AskBody(BaseModel):
 
 @app.post("/api/ask")
 def ask(body: AskBody):
-    # Placeholder logic; later we’ll call OpenAI here.
-    q = body.q.strip()
-    if not q:
-        return {"answer": "Please ask a question."}
-    return {"answer": f"You asked: {q}"}
+    return {"answer": f"you asked: {body.q}"}
+
