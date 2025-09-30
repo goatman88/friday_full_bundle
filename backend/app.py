@@ -3,27 +3,27 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
-# Allow local + Render frontend
+# Allow frontend to call backend
 origins = [
-    "http://localhost:5173",                  # local dev
-    "https://friday-full-bundle.onrender.com" # Render frontend
+    "http://localhost:5173",  # local dev
+    "https://friday-full-bundle.onrender.com",  # deployed frontend
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=origins,          # frontend URLs allowed
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["*"],            # allow all HTTP methods
+    allow_headers=["*"],            # allow all headers
 )
 
 @app.get("/api/health")
-def health_check():
+async def health():
     return {"status": "ok"}
 
-@app.post("/api/ask")
-async def ask(payload: dict):
-    question = payload.get("q", "")
-    return {"answer": f"You asked: {question}"}
+@app.get("/api/ping")
+async def ping():
+    return {"message": "pong"}
+
 
 
