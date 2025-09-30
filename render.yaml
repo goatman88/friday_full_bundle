@@ -1,5 +1,5 @@
 services:
-  # === BACKEND: FastAPI (Uvicorn) ===
+  # Backend (FastAPI)
   - name: friday-backend
     type: web
     env: python
@@ -7,16 +7,20 @@ services:
     region: oregon
     buildCommand: pip install -r backend/requirements.txt
     startCommand: uvicorn backend.app:app --host 0.0.0.0 --port $PORT
+    autoDeploy: true
+    branch: mtw27-client
 
-  # === FRONTEND: Vite static site ===
+  # Frontend (Vite static)
   - name: friday-frontend
-    type: static
+    type: static             # not "static_site"
     env: static
     plan: free
-    region: oregon
-    buildCommand: npm install && npm run build --prefix frontend
+    buildCommand: cd frontend && npm ci && npm run build
     staticPublishPath: frontend/dist
+    autoDeploy: true
+    branch: mtw27-client
     envVars:
       - key: VITE_BACKEND_URL
-        value: https://friday-backend-ksep.onrender.com
+        value: https://friday-backend-XXXXX.onrender.com
+
 
