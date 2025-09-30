@@ -1,32 +1,29 @@
-# backend/app.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-import os
 
 app = FastAPI()
 
-# Allow your Render frontend (and localhost for dev)
-FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
-# You can also allow multiple origins:
-allow_origins = [FRONTEND_ORIGIN, "http://localhost:5173", "https://localhost:5173"]
+# Allow local + Render frontend
+origins = [
+    "http://localhost:5173",                  # local dev
+    "https://friday-full-bundle.onrender.com" # Render frontend
+]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allow_origins,   # put your frontend URL here
+    allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],           # needed so OPTIONS preflight succeeds
-    allow_headers=["*"],           # needed so OPTIONS preflight succeeds
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 @app.get("/api/health")
-def health():
+def health_check():
     return {"status": "ok"}
 
-class AskBody(BaseModel):
-    q: str
-
 @app.post("/api/ask")
-def ask(body: AskBody):
-    return {"answer": f"you asked: {body.q}"}
+async def ask(payload: dict):
+    question = payload.get("q", "")
+    return {"answer": f"You asked: {question}"}
+
 
