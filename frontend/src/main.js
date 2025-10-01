@@ -4,8 +4,25 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
-const BASE = import.meta.env.VITE_BACKEND_URL || '';
-document.querySelector('#base').textContent = `Backend: ${BASE || '(not set)'}`;
+const BASE = import.meta.env.VITE_BACKEND_URL;
+const out = document.querySelector("#out");
+const btn = document.querySelector("#ping");
+
+btn.addEventListener("click", async () => {
+  out.textContent = "Loading…";
+  try {
+    const r = await fetch(`${BASE}/api/health`, { headers: { "Content-Type": "application/json" }});
+    const j = await r.json();
+    out.textContent = JSON.stringify(j);
+  } catch (e) {
+    out.textContent = "ERROR: " + (e?.message || e);
+  }
+});
+
+// optional: show which base is baked in
+const baseEl = document.querySelector("#base");
+if (baseEl) baseEl.textContent = `BASE = ${BASE}`;
+
 
 async function hit(path) {
   const res = await fetch(`${BASE}${path}`);
