@@ -1,73 +1,114 @@
 // frontend/src/main.js
 
-// Decide the backend base URL.
-// - In PRODUCTION (Render), we expect VITE_BACKEND_URL to be defined in the
-//   frontend service’s Environment tab (e.g. https://friday-backend-xxxx.onrender.com).
-// - In DEV, we use the /api proxy defined in vite.config.js.
-const BASE =
-  (import.meta.env.PROD && import.meta.env.VITE_BACKEND_URL)
-    ? import.meta.env.VITE_BACKEND_URL
-    : "/api";
+// ---------- API base selection ----------
+// In production we read the baked-in env var VITE_BACKEND_URL.
+// In local dev we hit the Vite proxy at /api (configured in vite.config.js).
+const isProd = import.meta.env.PROD;
+const baked = import.meta.env.VITE_BACKEND_URL?.trim();
+const API_BASE = (isProd && baked) ? baked : '/api';
 
-// --- tiny UI helpers ---
-const out = document.querySelector("#out");
-const baseEl = document.querySelector("#base");
-const btnPing = document.querySelector("#ping");
-const askForm = document.querySelector("#ask-form");
-const askInput = document.querySelector("#ask-input");
+// Small helper to build URLs safely
+const api = (path) => {
+  const p = path.startsWith('/') ? path : `/${path}`;
+  return isProd && baked ? `${API_BASE}${p}` : `${API_BASE}${p}`;
+};
 
-function show(text) {
-  out.textContent = (typeof text === "string") ? text : JSON.stringify(text);
-}
+// ---------- DOM ----------
+const out = document.querySelector('#out');
+const statusEl = document.querySelector('#status');
+const btnPing = document.querySelector('#ping');
+const askInput = document.querySelector('#ask');
+const askBtn = document.querySelector('#askBtn');
+const baseEl = document.querySelector('#base');
 
-function resToText(res) {
-  const ct = res.headers.get("content-type") || "";
-  if (ct.includes("application/json")) return res.json();
-  return res.text();
-}
+if (baseEl) baseEl.textContent = API_BASE || '(not set)';
 
-// Show what BASE we’re using (helps diagnose prod vs dev)
-if (baseEl) baseEl.textContent = `BASE: ${BASE}`;
+// ---------- utils ----------
+const show = (msg, type = 'info') => {
+  const line = document.createElement('div');
+  line.textContent = typeof msg === 'string' ? msg : JSON.stringify(msg);
+  line.style.whiteSpace = 'pre-wrap';
+  line.dataset.type = type;
+  out?.prepend(line);
+};
 
-// Ping button -> GET /api/health
-if (btnPing) {
-  btnPing.addEventListener("click", async () => {
-    show("…");
-    try {
-      const res = await fetch(`${BASE}/api/health`, { method: "GET" });
-      const payload = await resToText(res);
-      show(payload);
-    } catch (e) {
-      show(`Error: ${e.message}`);
+const setStatus = (msg, isError = false) => {
+  if (!statusEl) return;
+  statusEl.textContent = msg;
+  statusEl.style.color = isError ? 'crimson' : 'inherit';
+};
+
+const fetchJSON = async (url, opts = {}) => {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 10000);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal, ...opts });
+    const ct = res.headers.get('content-type') || '';
+    if (!res.ok) {
+      // Try to read JSON error, else text
+      let body;
+      try { body = ct.includes('json') ? await res.json() : await res.text(); }
+      catch { body = '<no body>'; }
+      throw new Error(`HTTP ${res.status} ${res.statusText} — ${body}`);
     }
-  });
-}
-
-// Ask form -> POST /api/ask { q }
-if (askForm) {
-  askForm.addEventListener("submit", async (ev) => {
-    ev.preventDefault();
-    const q = (askInput?.value || "").trim();
-    if (!q) return;
-    show("…");
-    try {
-      const res = await fetch(`${BASE}/api/ask`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ q })
-      });
-      const payload = await resToText(res);
-      show(payload);
-    } catch (e) {
-      show(`Error: ${e.message}`);
+    if (!ct.includes('json')) {
+      const text = await res.text();
+      throw new Error(`Expected JSON, got: ${text.slice(0, 120)}…`);
     }
-  });
-}
+    return await res.json();
+  } finally {
+    clearTimeout(t);
+  }
+};
 
-// Also log the BASE to the console for quick checks
-console.log("[Friday Frontend] Using BASE:", BASE, {
-  PROD: import.meta.env.PROD,
-  VITE_BACKEND_URL: import.meta.env.VITE_BACKEND_URL
+// ---------- actions ----------
+const doPing = async () => {
+  setStatus('Pinging /api/health…');
+  try {
+    const data = await fetchJSON(api('/api/health'));
+    setStatus('OK');
+    show(data);
+  } catch (err) {
+    setStatus('ERROR: Failed to fetch', true);
+    show(String(err), 'error');
+    // Common CORS hint
+    if (String(err).includes('TypeError: Failed to fetch') || String(err).includes('CORS')) {
+      show(`Hint: If this is on Render prod, make sure backend CORS allows:
+- https://friday-full-bundle.onrender.com
+And VITE_BACKEND_URL points to your backend URL.`, 'error');
+    }
+  }
+};
+
+const doAsk = async () => {
+  const q = askInput?.value?.trim();
+  if (!q) return;
+  setStatus('Asking backend…');
+  try {
+    const data = await fetchJSON(api('/api/ask'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ q })
+    });
+    setStatus('OK');
+    show(data);
+  } catch (err) {
+    setStatus('ERROR: Failed to fetch', true);
+    show(String(err), 'error');
+  }
+};
+
+// ---------- wire up ----------
+btnPing?.addEventListener('click', doPing);
+askBtn?.addEventListener('click', doAsk);
+askInput?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') doAsk();
 });
+
+// Initial status
+setStatus('Ready');
+// Optional: show where we’re pointing
+show(`API_BASE = ${API_BASE}`);
+
 
 
