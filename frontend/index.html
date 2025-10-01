@@ -1,21 +1,32 @@
-<!-- frontend/index.html -->
 <!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Friday Frontend</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+      .container { max-width: 720px; margin: 40px auto; padding: 12px; }
+      h1 { margin: 0 0 8px; }
+      #base { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; opacity: .85; }
+      pre { background: #f4f4f4; padding: 10px; border-radius: 6px; white-space: pre-wrap; }
+      input { width: 100%; padding: 8px; }
+      button { padding: 6px 10px; }
+      hr { margin: 18px 0; }
+    </style>
   </head>
   <body>
     <div class="container">
       <h1>Friday Frontend</h1>
 
-      <p id="base" style="font-family: monospace; opacity:.8;"></p>
+      <p id="base"></p>
 
       <button id="ping">Ping backend</button>
-      <pre id="out" style="margin-top:12px;">(click "Ping backend")</pre>
+
+      <pre id="out" style="margin-top:12px;">(click “Ping backend”)</pre>
 
       <hr />
+
       <div>
         <h3>Ask (wired to POST /api/ask)</h3>
         <form id="ask-form">
@@ -28,6 +39,7 @@
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>
+
 
 
 
