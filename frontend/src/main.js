@@ -4,6 +4,15 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
+const BASE = import.meta.env.VITE_BACKEND_URL || '';
+document.querySelector('#base').textContent = `Backend: ${BASE || '(not set)'}`;
+
+async function hit(path) {
+  const res = await fetch(`${BASE}${path}`);
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json();
+}
+
 origins = [
     "http://localhost:5173",
     "https://friday-full-bundle.onrender.com",
