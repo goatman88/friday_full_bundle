@@ -26,6 +26,10 @@ async def ask(payload: dict):
     q = (payload or {}).get("question", "")
     return {"you_asked": q, "answer": "42"}
 
+@app.options("/{full_path:path}")
+async def any_options(full_path: str):
+    from fastapi import Response
+    return Response(status_code=204)
 
 
 
