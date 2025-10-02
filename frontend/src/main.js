@@ -1,70 +1,66 @@
-// frontend/src/main.js
-// Small vanilla JS demo that reads the backend base from Vite env
-// and calls /api/health and /api/ask on the BACKEND (never the static site).
+// --- Friday Frontend main.js (works in dev + prod) ---
 
-const out = document.querySelector("#out");
-const statusEl = document.querySelector("#status");
-const pingBtn = document.querySelector("#ping");
-const askForm = document.querySelector("#ask-form");
-const askInput = document.querySelector("#ask-input");
-const baseEl = document.querySelector("#base");
+// If VITE_BACKEND_URL is provided, use it. Otherwise use "" (so /api goes through Vite proxy in dev)
+const RAW = (import.meta.env?.VITE_BACKEND_URL || "").trim();
+const BASE = RAW.endsWith("/") ? RAW.slice(0, -1) : RAW; // strip trailing slash if any
 
-// 1) Resolve backend base URL from Vite env
-//    REQUIRED: VITE_BACKEND_URL must be set at build time (Render “Environment”)
-const BACKEND = import.meta.env.VITE_BACKEND_URL?.replace(/\/+$/, "");
-if (!BACKEND) {
-  baseEl.textContent = "ERROR: VITE_BACKEND_URL is empty";
-} else {
-  baseEl.textContent = `Backend: ${BACKEND}`;
+// tiny helper
+const j = (sel) => document.querySelector(sel);
+const out = j("#out");
+const base = j("#base");
+const btn = j("#ping");
+const askForm = j("#ask-form");
+const askInput = j("#ask-input");
+
+// show what we're targeting so it's obvious
+base.textContent = `Backend: ${BASE || "(dev proxy -> http://localhost:8000)"}`;
+
+function show(result) {
+  try { out.textContent = JSON.stringify(result, null, 2); }
+  catch { out.textContent = String(result); }
 }
 
-function setStatus(t) {
-  statusEl.textContent = t;
-}
-
-async function getJSON(path) {
-  const url = `${BACKEND}${path}`;
-  const res = await fetch(url, { credentials: "omit" });
+async function hit(path, init) {
+  const url = BASE ? `${BASE}${path}` : path;  // absolute in prod, relative in dev (proxy)
+  const res = await fetch(url, {
+    // CORS-safe defaults
+    method: (init && init.method) || "GET",
+    headers: { "Content-Type": "application/json", ...(init && init.headers) },
+    body: init && init.body,
+    mode: "cors",
+    credentials: "omit",
+  });
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
-    throw new Error(`${res.status} ${res.statusText} – ${url}\n${txt}`);
+    throw new Error(`HTTP ${res.status}${txt ? ` — ${txt}` : ""}`);
   }
   return res.json();
 }
 
-pingBtn?.addEventListener("click", async () => {
-  setStatus("Pinging …");
-  out.textContent = "";
+btn.addEventListener("click", async () => {
+  out.textContent = "…";
   try {
-    const data = await getJSON("/api/health");
-    setStatus("OK");
-    out.textContent = JSON.stringify(data);
+    const data = await hit("/api/health");
+    show(data);
   } catch (err) {
-    setStatus("ERROR");
-    out.textContent = String(err);
+    show(`Error: ${err.message || err}`);
   }
 });
 
-askForm?.addEventListener("submit", async (e) => {
+askForm.addEventListener("submit", async (e) => {
   e.preventDefault();
-  setStatus("Asking …");
-  out.textContent = "";
-  const q = askInput.value.trim();
+  out.textContent = "…";
   try {
-    const res = await fetch(`${BACKEND}/api/ask`, {
+    const data = await hit("/api/ask", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ q }),
+      body: JSON.stringify({ question: askInput.value || "" }),
     });
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-    const data = await res.json();
-    setStatus("OK");
-    out.textContent = JSON.stringify(data, null, 2);
+    show(data);
   } catch (err) {
-    setStatus("ERROR");
-    out.textContent = String(err);
+    show(`Error: ${err.message || err}`);
   }
 });
+
 
 
 
