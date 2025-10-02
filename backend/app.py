@@ -1,38 +1,40 @@
+# backend/app.py
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 
 app = FastAPI()
 
-# ---- CORS ----
+# Render frontend URL and local dev URL:
 ALLOWED_ORIGINS = [
-    "http://localhost:5173",                     # local dev
-    "https://friday-full-bundle.onrender.com",   # your deployed frontend
+    "http://localhost:5173",
+    "https://friday-full-bundle.onrender.com",
 ]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# (Optional safety net) Handle any stray OPTIONS so preflight never 404s
-@app.options("/{path:path}")
-async def any_options(path: str, request: Request):
-    # Let CORSMiddleware attach the proper CORS headers;
-    # just return an empty 204 body.
-    return JSONResponse(status_code=204, content=None)
-
-# ---- API ----
 @app.get("/api/health")
 async def health():
     return {"status": "ok"}
 
-@app.get("/api/ping")
-async def ping():
-    return {"message": "pong"}
+# Optional demo POST
+@app.post("/api/ask")
+async def ask(payload: dict):
+    q = payload.get("q", "")
+    return {"echo": q or "(empty)"}
+
+# Safety: handle stray preflights (some proxies can 404 OPTIONS)
+@app.options("/{full_path:path}")
+async def any_options(full_path: str, request: Request):
+    # CORS middleware will inject the proper Access-Control-* headers.
+    return Response(status_code=204)
+
 
 
 
