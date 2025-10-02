@@ -1,56 +1,39 @@
-# backend/app.py
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-
-app = FastAPI()
-
 const BASE = import.meta.env.VITE_BACKEND_URL;
-const out = document.querySelector("#out");
-const btn = document.querySelector("#ping");
 
-btn.addEventListener("click", async () => {
-  out.textContent = "Loading…";
+document.getElementById("base").textContent = BASE;
+
+const out = document.getElementById("out");
+
+// Ping backend
+document.getElementById("ping").addEventListener("click", async () => {
   try {
-    const r = await fetch(`${BASE}/api/health`, { headers: { "Content-Type": "application/json" }});
-    const j = await r.json();
-    out.textContent = JSON.stringify(j);
-  } catch (e) {
-    out.textContent = "ERROR: " + (e?.message || e);
+    const res = await fetch(`${BASE}/api/health`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    out.textContent = JSON.stringify(data, null, 2);
+  } catch (err) {
+    out.textContent = `Error: ${err.message}`;
   }
 });
 
-// optional: show which base is baked in
-const baseEl = document.querySelector("#base");
-if (baseEl) baseEl.textContent = `BASE = ${BASE}`;
+// Ask form
+document.getElementById("ask-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const q = document.getElementById("ask-input").value;
 
-
-async function hit(path) {
-  const res = await fetch(`${BASE}${path}`);
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  return res.json();
-}
-
-origins = [
-    "http://localhost:5173",
-    "https://friday-full-bundle.onrender.com",
-]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-@app.get("/api/health")
-async def health():
-    return {"status": "ok"}
-
-@app.post("/api/ask")
-async def ask(payload: dict):
-    q = (payload or {}).get("q", "")
-    return {"answer": f"you asked: {q}"}
+  try {
+    const res = await fetch(`${BASE}/api/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: q }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    out.textContent = JSON.stringify(data, null, 2);
+  } catch (err) {
+    out.textContent = `Error: ${err.message}`;
+  }
+});
 
 
 
