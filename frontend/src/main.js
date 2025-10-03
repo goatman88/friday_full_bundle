@@ -1,34 +1,24 @@
-// frontend/src/main.js
-const BACKEND = (import.meta.env.VITE_BACKEND_URL || '')
-  .replace(/\/+$/, ''); // strip trailing slashes
+import { API, BACKEND } from "../env.mjs";
 
-function api(path) {
-  const p = path.startsWith('/') ? path : `/${path}`;
-  return `${BACKEND}${p}`;
-}
+const out = document.getElementById("out");
+const btn = document.getElementById("ping");
 
-const baseEl = document.getElementById('base');
-const outEl  = document.getElementById('out');
-const pingBtn = document.getElementById('ping');
-
-baseEl.textContent = `Backend: ${BACKEND || '(unset!)'}`;
+// show where we're pointing
+const base = document.getElementById("base");
+if (base) base.textContent = `Backend: ${BACKEND}  |  API: ${API}`;
 
 async function ping() {
-  outEl.textContent = '…calling /api/health';
+  out.textContent = "…";
   try {
-    const res = await fetch(api('/api/health'), { method: 'GET' });
-    if (!res.ok) {
-      outEl.textContent = `Error: HTTP ${res.status}`;
-      return;
-    }
-    const body = await res.json();
-    outEl.textContent = JSON.stringify(body);
-  } catch (err) {
-    outEl.textContent = `Error: ${err.message || err}`;
+    const r = await fetch(`${API}/health`, { method: "GET" });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    out.textContent = JSON.stringify(await r.json());
+  } catch (e) {
+    out.textContent = `Error: ${e.message}`;
   }
 }
 
-pingBtn.addEventListener('click', ping);
+btn?.addEventListener("click", ping);
 
 
 
