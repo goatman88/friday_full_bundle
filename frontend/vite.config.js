@@ -1,16 +1,26 @@
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 
-export default defineConfig({
-  server: {
-    // local dev only: point /api/* to your local FastAPI (change port if needed)
-    proxy: {
-      "/api": {
-        target: "http://localhost:8000",
-        changeOrigin: true,
-      },
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), "");
+  const backend = (env.VITE_BACKEND_URL || "").replace(/\/+$/, "");
+
+  return {
+    server: {
+      proxy: backend
+        ? {
+            // dev convenience: requests to /api/* go to your local backend
+            "/api": {
+              target: backend,
+              changeOrigin: true,
+              secure: false,
+            },
+          }
+        : undefined,
     },
-  },
+    build: { sourcemap: false },
+  };
 });
+
 
 
 
