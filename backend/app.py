@@ -1,18 +1,18 @@
+# backend/app.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
-# Allow your local and Render frontends
-ALLOWED_ORIGINS = [
+origins = [
     "http://localhost:5173",
     "https://friday-full-bundle.onrender.com",
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=False,
+    allow_origins=origins,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -23,13 +23,8 @@ async def health():
 
 @app.post("/api/ask")
 async def ask(payload: dict):
-    q = (payload or {}).get("question", "")
-    return {"you_asked": q, "answer": "42"}
+    return {"echo": payload.get("question", "")}
 
-@app.options("/{full_path:path}")
-async def any_options(full_path: str):
-    from fastapi import Response
-    return Response(status_code=204)
 
 
 
