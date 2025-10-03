@@ -1,4 +1,3 @@
-# backend/app.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -11,19 +10,21 @@ origins = [
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=origins,       # or set allow_origins=["*"] during testing
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 @app.get("/api/health")
-async def health():
+async def api_health():
     return {"status": "ok"}
 
-@app.post("/api/ask")
-async def ask(payload: dict):
-    return {"echo": payload.get("question", "")}
+# Optional convenience for any older UI bits that may hit /health
+@app.get("/health")
+async def root_health():
+    return {"status": "ok"}
+
 
 
 
