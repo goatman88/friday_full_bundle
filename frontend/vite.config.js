@@ -1,16 +1,19 @@
-import { defineConfig } from "vite";
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
 
-// In local dev we want /api/* -> http://localhost:8000
-// In production (Render/static) this proxy is ignored; main.js uses absolute URL when VITE_BACKEND_URL is set.
+// Use env var for backend API
 export default defineConfig({
+  plugins: [react()],
   server: {
     proxy: {
-      "/api": {
-        target: "http://localhost:8000",
+      '/api': {
+        target: process.env.VITE_BACKEND_URL,
         changeOrigin: true,
-      },
-    },
-  },
-});
+        secure: false,
+      }
+    }
+  }
+})
+
 
 
