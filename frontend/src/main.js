@@ -1,65 +1,66 @@
-// --- Friday Frontend main.js (works in dev + prod) ---
+// Friday frontend main.js — uses a single env var:
+//   VITE_BACKEND_URL  (e.g. https://friday-backend-ksep.onrender.com)
 
-// If VITE_BACKEND_URL is provided, use it. Otherwise use "" (so /api goes through Vite proxy in dev)
-const RAW = (import.meta.env?.VITE_BACKEND_URL || "").trim();
-const BASE = RAW.endsWith("/") ? RAW.slice(0, -1) : RAW; // strip trailing slash if any
+const API_BASE = (import.meta.env?.VITE_BACKEND_URL || "").replace(/\/+$/, "");
+const $ = (sel) => document.querySelector(sel);
 
-// tiny helper
-const j = (sel) => document.querySelector(sel);
-const out = j("#out");
-const base = j("#base");
-const btn = j("#ping");
-const askForm = j("#ask-form");
-const askInput = j("#ask-input");
-
-// show what we're targeting so it's obvious
-base.textContent = `Backend: ${BASE || "(dev proxy -> http://localhost:8000)"}`;
-
-function show(result) {
-  try { out.textContent = JSON.stringify(result, null, 2); }
-  catch { out.textContent = String(result); }
+function setStatus(msg, ok = true) {
+  const out = $("#out");
+  out.textContent = msg;
+  out.style.color = ok ? "#222" : "#b00020";
 }
 
-async function hit(path, init) {
-  const url = BASE ? `${BASE}${path}` : path;  // absolute in prod, relative in dev (proxy)
-  const res = await fetch(url, {
-    // CORS-safe defaults
-    method: (init && init.method) || "GET",
-    headers: { "Content-Type": "application/json", ...(init && init.headers) },
-    body: init && init.body,
-    mode: "cors",
-    credentials: "omit",
-  });
-  if (!res.ok) {
-    const txt = await res.text().catch(() => "");
-    throw new Error(`HTTP ${res.status}${txt ? ` — ${txt}` : ""}`);
-  }
+function showBase() {
+  const base = $("#base");
+  base.textContent = API_BASE ? `Backend: ${API_BASE}` : "Backend: <not set>";
+  base.style.color = API_BASE ? "#222" : "#b00020";
+}
+
+// simple GET helper
+async function getJson(path) {
+  const url = `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
+  const res = await fetch(url, { method: "GET" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
 
-btn.addEventListener("click", async () => {
-  out.textContent = "…";
-  try {
-    const data = await hit("/api/health");
-    show(data);
-  } catch (err) {
-    show(`Error: ${err.message || err}`);
-  }
-});
+// wire UI
+function wire() {
+  $("#ping")?.addEventListener("click", async () => {
+    setStatus("…pinging…");
+    try {
+      const data = await getJson("/api/health");
+      setStatus(JSON.stringify(data));
+    } catch (e) {
+      setStatus(`Error: ${e.message}`, false);
+    }
+  });
 
-askForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  out.textContent = "…";
-  try {
-    const data = await hit("/api/ask", {
-      method: "POST",
-      body: JSON.stringify({ question: askInput.value || "" }),
-    });
-    show(data);
-  } catch (err) {
-    show(`Error: ${err.message || err}`);
-  }
-});
+  const askForm = $("#ask-form");
+  askForm?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const q = $("#ask-input")?.value ?? "";
+    setStatus("…asking…");
+    try {
+      const url = `${API_BASE}/api/ask`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: q }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setStatus(JSON.stringify(data));
+    } catch (e) {
+      setStatus(`Error: ${e.message}`, false);
+    }
+  });
+}
+
+// boot
+showBase();
+wire();
+
 
 
 
