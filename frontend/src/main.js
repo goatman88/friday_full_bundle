@@ -1,51 +1,32 @@
-import { api } from "./env.mjs";
+// frontend/src/main.js
+const BACKEND = import.meta.env.VITE_BACKEND_URL?.replace(/\/$/, "") || "";
 
-const out = document.getElementById("out");
-const ping = document.getElementById("ping");
-const base = document.getElementById("base");
+const out = document.querySelector("#out");
+const btn = document.querySelector("#ping");
 
-function show(msg) {
-  out.textContent = msg;
+// Small helper to show a line of text
+function show(text) {
+  out.textContent = typeof text === "string" ? text : JSON.stringify(text);
 }
 
-function status(s) {
-  const el = document.getElementById("status");
-  if (el) el.textContent = s;
-}
-
-async function getJSON(url, opts = {}) {
-  const r = await fetch(url, { ...opts, headers: { "content-type": "application/json", ...(opts.headers || {}) } });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return r.json();
-}
-
-(async () => {
-  // show which backend the bundle is using
-  base.textContent = `Backend: ${api("").replace(/\/$/, "")}`;
-})();
-
-ping?.addEventListener("click", async () => {
+// Calls /api/health on the backend using the absolute host
+async function ping() {
+  const url = `${BACKEND}/api/health`;
   try {
-    status("OK");
-    const data = await getJSON(api("/api/health"));
-    show(JSON.stringify(data));
-  } catch (e) {
-    status("ERROR");
-    show(String(e.message || e));
+    const res = await fetch(url, { method: "GET" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    show(data);
+  } catch (err) {
+    show(`Error: ${err.message || err}`);
   }
-});
+}
 
-// Mini demo inputs (optional)
-document.getElementById("ask-form")?.addEventListener("submit", async (ev) => {
-  ev.preventDefault();
-  const q = document.getElementById("ask-input")?.value || "";
-  try {
-    const data = await getJSON(api("/api/ask"), { method: "POST", body: JSON.stringify({ q }) });
-    show(JSON.stringify(data));
-  } catch (e) {
-    show(String(e.message || e));
-  }
-});
+btn?.addEventListener("click", ping);
+
+// Optional: kick one call on load so you can see status without clicking
+// ping();
+
 
 
 
