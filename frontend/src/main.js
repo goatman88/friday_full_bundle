@@ -1,24 +1,18 @@
-import { API, BACKEND } from "../env.mjs";
+// Single source of truth for the backend host.
+// At build time on Render, VITE_BACKEND_URL is baked into the bundle.
+export const BACKEND = (import.meta?.env?.VITE_BACKEND_URL || "").trim().replace(/\/+$/, "");
 
-const out = document.getElementById("out");
-const btn = document.getElementById("ping");
-
-// show where we're pointing
-const base = document.getElementById("base");
-if (base) base.textContent = `Backend: ${BACKEND}  |  API: ${API}`;
-
-async function ping() {
-  out.textContent = "…";
-  try {
-    const r = await fetch(`${API}/health`, { method: "GET" });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    out.textContent = JSON.stringify(await r.json());
-  } catch (e) {
-    out.textContent = `Error: ${e.message}`;
-  }
+if (!BACKEND) {
+  // Helpful message in local dev if you forgot .env.local
+  // (Site will still run; fetches will fail until you set this.)
+  console.warn("VITE_BACKEND_URL is empty. Set it in frontend/.env.local (local dev) or Render env (deploy).");
 }
 
-btn?.addEventListener("click", ping);
+// Build a full URL to the backend for /api/* endpoints
+export function api(path) {
+  const p = String(path || "").startsWith("/") ? path : `/${path}`;
+  return `${BACKEND}${p}`;
+}
 
 
 
