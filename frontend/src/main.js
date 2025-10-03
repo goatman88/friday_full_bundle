@@ -1,55 +1,35 @@
-// ---- tiny helper to build absolute URLs from your backend base ----
-const BASE = import.meta.env.VITE_BACKEND_URL?.replace(/\/+$/, '') || '';
-const api = (path) => `${BASE}${path.startsWith('/') ? path : `/${path}`}`;
+// frontend/src/main.js
+const BACKEND = (import.meta.env.VITE_BACKEND_URL || '')
+  .replace(/\/+$/, ''); // strip trailing slashes
 
-const out = document.getElementById('out');
-const pingBtn = document.getElementById('ping');
+function api(path) {
+  const p = path.startsWith('/') ? path : `/${path}`;
+  return `${BACKEND}${p}`;
+}
+
 const baseEl = document.getElementById('base');
-const askForm = document.getElementById('ask-form');
-const askInput = document.getElementById('ask-input');
+const outEl  = document.getElementById('out');
+const pingBtn = document.getElementById('ping');
 
-// show which backend we’re talking to
-baseEl.textContent = `Backend: ${BASE || '(missing VITE_BACKEND_URL)'}`;
+baseEl.textContent = `Backend: ${BACKEND || '(unset!)'}`;
 
-// generic GET helper (handles network + HTTP errors into one message)
-async function getJSON(url) {
+async function ping() {
+  outEl.textContent = '…calling /api/health';
   try {
-    const res = await fetch(url, { method: 'GET' });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.json();
+    const res = await fetch(api('/api/health'), { method: 'GET' });
+    if (!res.ok) {
+      outEl.textContent = `Error: HTTP ${res.status}`;
+      return;
+    }
+    const body = await res.json();
+    outEl.textContent = JSON.stringify(body);
   } catch (err) {
-    throw new Error(err.message || 'Failed to fetch');
+    outEl.textContent = `Error: ${err.message || err}`;
   }
 }
 
-// wire the “Ping backend” button to /api/health (on the backend host)
-pingBtn.addEventListener('click', async () => {
-  out.textContent = '…';
-  try {
-    const data = await getJSON(api('/api/health'));
-    out.textContent = JSON.stringify(data);
-  } catch (e) {
-    out.textContent = `Error: ${e.message}`;
-  }
-});
+pingBtn.addEventListener('click', ping);
 
-// simple demo form wired to POST /api/ask
-askForm.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  out.textContent = '…';
-  try {
-    const res = await fetch(api('/api/ask'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ q: askInput.value || '' }),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    out.textContent = JSON.stringify(data);
-  } catch (err) {
-    out.textContent = `Error: ${err.message}`;
-  }
-});
 
 
 
