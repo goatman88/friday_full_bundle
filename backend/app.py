@@ -21,10 +21,7 @@ async def health():
     return {"status": "ok"}
 
 
-# Optional convenience for any older UI bits that may hit /health
-@app.get("/health")
-async def root_health():
-    return {"status": "ok"}
+
 
 
 
