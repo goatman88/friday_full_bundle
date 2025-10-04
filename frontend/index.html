@@ -6,15 +6,33 @@
     <title>Friday Frontend</title>
   </head>
   <body>
-    <h1>Friday Frontend</h1>
+    <div class="container" style="max-width:760px;margin:40px auto;font-family:system-ui;">
+      <h1>Friday Frontend</h1>
 
-    <button id="ping">Ping backend</button>
+      <p id="status" style="opacity:.8;">Status: <span id="stat">…</span></p>
 
-    <pre id="out" style="margin-top:12px;">(click “Ping backend”)</pre>
+      <button id="ping">Ping backend</button>
+
+      <pre id="out" style="margin-top:12px;">(click “Ping backend”)</pre>
+
+      <hr style="margin:24px 0;" />
+
+      <h3>/api/health (GET)</h3>
+      <pre id="health"></pre>
+
+      <h3>Ask (wired to POST {BACKEND}/api/ask)</h3>
+      <form id="ask-form">
+        <input id="ask-input" placeholder="what did the fox do?" />
+        <button type="submit">Ask</button>
+      </form>
+
+      <p id="base" style="font-family:monospace;opacity:.6;margin-top:18px;"></p>
+    </div>
 
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>
+
 
 
 
