@@ -1,8 +1,7 @@
-const backend = import.meta.env.VITE_BACKEND_URL;
-const api = (p) => (BASE ? `${BASE}${p}` : p);
+const backend = import.meta.env.VITE_BACKEND_URL || window.VITE_BACKEND_URL || "https://friday-backend-ksep.onrender.com";
+const r = await fetch(`${backend}/api/health`);
 
 async function ping() {
-  const res = await fetch(api('/api/health'));
   const txt = await res.text();
   document.getElementById('out').textContent = txt;
 }
