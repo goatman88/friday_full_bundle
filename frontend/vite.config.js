@@ -8,7 +8,7 @@ export default defineConfig({
     proxy: {
       // send /api/* to the backend running on 8000
       '/api': {
-        target: 'http://localhost:8000',
+        target: 'ate literals like fetch(`/api/...`)',
         changeOrigin: true,
         secure: false,
         // keep the /api prefix (FastAPI routes are /api/...)
@@ -18,3 +18,4 @@ export default defineConfig({
     },
   },
 });
+
