@@ -1,13 +1,14 @@
-// frontend/vite.config.js
 import { defineConfig } from "vite";
+
+// Local dev helper: proxy /api/* to a local FastAPI (optional)
+const LOCAL_BACKEND = process.env.LOCAL_BACKEND || "http://localhost:8000";
 
 export default defineConfig({
   server: {
-    port: 5173,
-    // Local dev only: proxy /api/* to your local FastAPI on 8000
     proxy: {
+      // This is ONLY used during `npm run dev` if you choose to hit relative /api/*
       "/api": {
-        target: "http://localhost:8000",
+        target: LOCAL_BACKEND,
         changeOrigin: true,
       },
     },
