@@ -1,31 +1,55 @@
-// frontend/src/main.js
-const BACKEND = import.meta.env.VITE_BACKEND_URL?.replace(/\/$/, "") || "";
+// Always use absolute backend URL provided by Vite env
+const BACKEND = import.meta.env.VITE_BACKEND_URL?.replace(/\/$/, "");
+const $ = (id) => document.getElementById(id);
+const show = (id, v) => ($(id).textContent = typeof v === "string" ? v : JSON.stringify(v));
 
-const out = document.querySelector("#out");
-const btn = document.querySelector("#ping");
+$("base").textContent = `BACKEND = ${BACKEND || "(missing)"}`;
 
-// Small helper to show a line of text
-function show(text) {
-  out.textContent = typeof text === "string" ? text : JSON.stringify(text);
+async function getJSON(url, opts = {}) {
+  const r = await fetch(url, { ...opts, headers: { "content-type": "application/json", ...(opts.headers || {}) } });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return await r.json();
 }
 
-// Calls /api/health on the backend using the absolute host
 async function ping() {
-  const url = `${BACKEND}/api/health`;
+  $("stat").textContent = "…";
   try {
-    const res = await fetch(url, { method: "GET" });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    show(data);
-  } catch (err) {
-    show(`Error: ${err.message || err}`);
+    const json = await getJSON(`${BACKEND}/api/health`);
+    $("out").textContent = JSON.stringify(json);
+    $("stat").textContent = "OK";
+  } catch (e) {
+    $("out").textContent = `Error: ${e.message}`;
+    $("stat").textContent = "ERROR";
   }
 }
 
-btn?.addEventListener("click", ping);
+async function loadHealth() {
+  try {
+    const json = await getJSON(`${BACKEND}/api/health`);
+    $("health").textContent = JSON.stringify(json);
+  } catch (e) {
+    $("health").textContent = `Error: ${e.message}`;
+  }
+}
 
-// Optional: kick one call on load so you can see status without clicking
-// ping();
+$("ping").addEventListener("click", ping);
+
+$("ask-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const q = $("ask-input").value.trim();
+  if (!q) return;
+  try {
+    const json = await getJSON(`${BACKEND}/api/ask`, {
+      method: "POST",
+      body: JSON.stringify({ question: q })
+    });
+    $("out").textContent = JSON.stringify(json);
+  } catch (e) {
+    $("out").textContent = `Error: ${e.message}`;
+  }
+});
+
+loadHealth();
 
 
 
