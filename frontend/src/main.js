@@ -1,5 +1,4 @@
-// Build an absolute API base from env at build-time; in dev Vite will proxy /api
-const BASE = (import.meta.env?.VITE_BACKEND_URL || "").replace(/\/+$/,"");
+const backend = import.meta.env.VITE_BACKEND_URL;
 const api = (p) => (BASE ? `${BASE}${p}` : p);
 
 async function ping() {
