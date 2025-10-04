@@ -1,44 +1,20 @@
 <!doctype html>
-<html lang="en">
+<html>
   <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Friday Frontend</title>
-    <style>
-      body { font-family: system-ui, sans-serif; max-width: 720px; margin: 40px auto; }
-      .muted { opacity: .7; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-      pre { background: #f5f5f5; padding: 12px; border-radius: 6px; overflow:auto; }
-      button { padding: 6px 10px; }
-      input { padding: 6px 10px; width: 70%; }
-      .row { display:flex; gap:8px; align-items:center; }
-    </style>
   </head>
   <body>
-    <h1>Friday Frontend</h1>
-
-    <p class="muted" id="status">Status: (not checked yet)</p>
-    <p class="muted" id="base"></p>
-
-    <div class="row">
+    <main style="max-width:720px;margin:2rem auto;font-family:system-ui">
+      <h1>Friday Frontend</h1>
       <button id="ping">Ping backend</button>
-      <code id="endpoint" class="muted"></code>
-    </div>
-
-    <pre id="out">(click “Ping backend”)</pre>
-
-    <hr />
-
-    <h3>Ask (wired to POST /api/ask)</h3>
-    <form id="ask-form" class="row">
-      <input id="ask-input" placeholder="what did the fox do?" />
-      <button type="submit">Ask</button>
-    </form>
-
-    <pre id="ask-out">(not asked)</pre>
-
+      <pre id="out" style="padding:.75rem;background:#f5f5f5;border-radius:.5rem;margin-top:1rem"></pre>
+    </main>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>
+
 
 
 
