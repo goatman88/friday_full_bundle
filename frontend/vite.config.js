@@ -4,12 +4,12 @@ import { defineConfig } from 'vite';
 const target = process.env.VITE_BACKEND_URL || 'http://localhost:8000';
 
 export default defineConfig({
-  server: {
-    proxy: {
-      '/api': { target, changeOrigin: true, secure: true }
-    }
+  server: { proxy: {} },
+  define: {
+    'import.meta.env.VITE_BACKEND_URL': JSON.stringify(process.env.VITE_BACKEND_URL)
   }
 });
+
 
 
 
