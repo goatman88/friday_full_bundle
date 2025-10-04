@@ -9,3 +9,5 @@ async function ping() {
 document.addEventListener('click', e => { if(e.target.id==='btn') ping() });
 ping();
 
+
+
