@@ -3,65 +3,78 @@ param(
   [string]$FrontendPath = "$PSScriptRoot/frontend"
 )
 
-Write-Host "== Friday Frontend Auto Patch ==" -ForegroundColor Cyan
-Write-Host "Using backend: $Backend" -ForegroundColor Yellow
-
-# 0) sanity
-if (!(Test-Path $FrontendPath)) {
-  Write-Host "✗ Frontend folder not found at $FrontendPath" -ForegroundColor Red
-  exit 1
+function Say($msg, [string]$color="") {
+  if ($color) { Write-Host $msg -ForegroundColor $color } else { Write-Host $msg }
 }
+function Pass($msg) { Say "[PASS] $msg" "Green" }
+function Fail($msg) { Say "[FAIL] $msg" "Red" }
 
-$src  = Join-Path $FrontendPath "src/main.js"
-$vite = Join-Path $FrontendPath "vite.config.js"
-$envL = Join-Path $FrontendPath ".env.local"
+Say "== Friday Frontend Auto Patch ==" "Cyan"
+Say "Using backend: $Backend" "Yellow"
 
-if (!(Test-Path $src))  { throw "src/main.js not found at $src" }
-if (!(Test-Path $vite)) { throw "vite.config.js not found at $vite" }
+if (!(Test-Path $FrontendPath)) { Fail "Frontend folder not found at $FrontendPath"; exit 1 }
 
-# 1) bake absolute backend URL into main.js (replace any relative /api/* fetches)
-$js = Get-Content $src -Raw
+$envFile = Join-Path $FrontendPath ".env.local"
+$viteCfg = Join-Path $FrontendPath "vite.config.js"
 
-# repair accidental double backslashes if present
-$js = $js -replace "fetch\(\s*\\\\\s*api","fetch('/api'"
+# 1) write .env.local for dev AND for bake step
+"VITE_BACKEND_URL=$Backend" | Out-File -Encoding UTF8 $envFile
+Pass "Updated .env.local"
 
-# replace relative fetch('/api/...') or fetch("/api/...")
-$js = $js -replace "fetch\(\s*(['`""])\s*/api","fetch('$Backend/api"
-
-Set-Content -Encoding UTF8 $src $js
-Write-Host "✓ main.js updated to use absolute $Backend/api/*" -ForegroundColor Green
-
-# 2) ensure Vite dev proxy points to same backend (dev only)
-$v = Get-Content $vite -Raw
-if ($v -match "server\s*:\s*\{") {
-  # replace existing '/api' proxy block
-  $v = $v -replace "'/api'\s*:\s*\{[^\}]*\}",
-    "'/api': { target: '$Backend', changeOrigin: $true, secure: $true }"
+# 2) ensure vite dev proxy points to backend (safe if file missing)
+if (Test-Path $viteCfg) {
+  $v = Get-Content $viteCfg -Raw
+  if ($v -notmatch "server\s*:\s*{") {
+    $v = @"
+import { defineConfig } from 'vite'
+export default defineConfig({
+  server: { proxy: { '/api': { target: '$Backend', changeOrigin: true, secure: true } } }
+})
+"@
+  } else {
+    $v = $v -replace "target:\s*['""][^'""]+['""]", "target: '$Backend'"
+    if ($v -notmatch "/api") {
+      $v = $v -replace "server\s*:\s*{", "server:{ proxy:{ '/api':{ target:'$Backend', changeOrigin:true, secure:true } },"
+    }
+  }
+  Set-Content -Encoding UTF8 $viteCfg $v
+  Pass "Patched vite.config.js"
 } else {
-  # inject a server proxy section
-  $v = $v -replace "defineConfig\(\{",
-    ("defineConfig({`n  server: { proxy: { '/api': { target: '" + $Backend + "', changeOrigin: true, secure: true } } },")
+  Say "vite.config.js not found (ok for static-only usage)" "DarkGray"
 }
-Set-Content -Encoding UTF8 $vite $v
-Write-Host "✓ vite.config.js dev proxy set to $Backend" -ForegroundColor Green
 
-# 3) local env for dev (Render will ignore .env.local)
-"VITE_BACKEND_URL=$Backend" | Out-File -Encoding UTF8 $envL
-Write-Host "✓ .env.local written (dev only)" -ForegroundColor Green
+# 3) make sure source fetch uses baked var (optional, keeps working in dev & prod)
+$mainJs = Join-Path $FrontendPath "src/main.js"
+if (Test-Path $mainJs) {
+  $m = Get-Content $mainJs -Raw
+  # fix backslashes that broke the build
+  $m = $m -replace "\\\\\/api\/health","/api/health"
+  # prefer using env var
+  $m = $m -replace "fetch\(['""]\/api","fetch(`${import.meta.env.VITE_BACKEND_URL}/api"
+  Set-Content -Encoding UTF8 $mainJs $m
+  Pass "Patched src/main.js (env var + removed backslashes)"
+}
 
 # 4) build
 Push-Location $FrontendPath
-Write-Host "→ npm ci" -ForegroundColor DarkGray
-npm ci
-Write-Host "→ npm run build" -ForegroundColor DarkGray
-npm run build
-Pop-Location
+try {
+  Say "Installing deps…"
+  npm i | Out-Host
+  Say "Building production bundle…"
+  npm run build | Out-Host
+  Pass "Local build completed. You can commit & push:"
+  Say "  git add frontend/src/main.js frontend/.env.local frontend/vite.config.js" "DarkGray"
+  Say "  git commit -m 'Frontend: bake backend & remove relative /api/*'" "DarkGray"
+  Say "  git push" "DarkGray"
+  Say "Then in Render (Static Site): Environment ➜ keep ONLY:  VITE_BACKEND_URL = $Backend" "Yellow"
+  Say "Click **Manual Deploy** ➜ **Clear build cache & Deploy**." "Yellow"
+}
+catch {
+  Fail ("Local build failed: {0}" -f $_.Exception.Message)
+  exit 1
+}
+finally { Pop-Location }
 
-Write-Host "✓ Build complete. Bundle now references $Backend" -ForegroundColor Green
-Write-Host ""
-Write-Host "Next:" -ForegroundColor Cyan
-Write-Host "  1) Commit & push:  git add frontend/src/main.js frontend/vite.config.js ; git commit -m ""Frontend: bake backend into build"" ; git push" -ForegroundColor Gray
-Write-Host "  2) On Render (Static Site): Manual Deploy → Clear build cache & Deploy" -ForegroundColor Gray
 
 
 
