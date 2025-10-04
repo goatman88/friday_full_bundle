@@ -1,17 +1,16 @@
-# backend/app.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
-ALLOWED_ORIGINS = [
+origins = [
     "http://localhost:5173",
-    "https://friday-full-bundle.onrender.com",
+    "https://friday-full-bundle.onrender.com",  # your static site
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -21,9 +20,11 @@ app.add_middleware(
 async def health():
     return {"status": "ok"}
 
-@app.get("/api/ping")
-async def ping():
-    return {"message": "pong"}
+@app.post("/api/ask")
+async def ask(payload: dict):
+    q = payload.get("q", "")
+    return {"echo": q or "(empty)"}
+
 
 
 
