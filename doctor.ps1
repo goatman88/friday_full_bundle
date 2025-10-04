@@ -1,51 +1,97 @@
-# doctor.ps1 — run from repo root in **Windows PowerShell** (not pwsh)
-param([switch]$Fix)
-$ErrorActionPreference = "Stop"
-
-function Note($m){ Write-Host $m -ForegroundColor Cyan }
-function Good($m){ Write-Host "OK  $m" -ForegroundColor Green }
-function Bad($m){ Write-Host "ERR $m" -ForegroundColor Red }
-
-Push-Location $PSScriptRoot
-Note "Repo root: $PWD"
-
-# Tools
-python --version | Out-Null;  if($LASTEXITCODE){ Bad "Python missing"; exit 1 } else { Good (python --version) }
-node   -v       | Out-Null;  if($LASTEXITCODE){ Bad "Node missing";   exit 1 } else { Good (node -v) }
-npm    -v       | Out-Null;  if($LASTEXITCODE){ Bad "npm missing";    exit 1 } else { Good (npm -v) }
-
-# Files
-$must = @(
-  "backend\app.py",
-  "backend\requirements.txt",
-  "frontend\index.html",
-  "frontend\src\main.js",
-  "frontend\vite.config.js"
+param(
+  [Parameter(Mandatory=$true)][string]$Backend,   # e.g. https://friday-backend-ksep.onrender.com
+  [Parameter(Mandatory=$true)][string]$Site       # e.g. https://friday-full-bundle.onrender.com
 )
-$missing = @($must | Where-Object { -not (Test-Path $_) })
-if($missing.Count){
-  Bad "Missing: $($missing -join ', ')"
-  if(-not $Fix){ exit 1 }
+
+function Show($ok, $msg) {
+  if ($ok) { Write-Host "[PASS]" -ForegroundColor Green -NoNewline }
+  else      { Write-Host "[FAIL]" -ForegroundColor Red -NoNewline }
+  Write-Host " $msg"
 }
 
-# Backend import check (looks for backend.app:app)
-$venvPy = ".\.venv\Scripts\python.exe"
-$py = (Test-Path $venvPy) ? $venvPy : "python"
-$code = "import importlib; m=importlib.import_module('backend.app'); print(hasattr(m,'app'))"
-$ok = & $py -c $code
-if("$ok" -ne "True"){ Bad "backend.app.app not found"; exit 1 } else { Good "backend exposes app" }
+# ---------- 0) normalize ----------
+$Backend = $Backend.TrimEnd('/')
+$Site    = $Site.TrimEnd('/')
 
-# Health endpoint (if backend is running)
+Write-Host "Backend: $Backend"
+Write-Host "Site:    $Site"
+Write-Host ""
+
+# ---------- 1) CORS preflight like a browser ----------
 try {
-  $r = Invoke-WebRequest http://localhost:8000/api/health -UseBasicParsing -TimeoutSec 2
-  if($r.StatusCode -eq 200){ Good "health endpoint reachable" } else { Bad "health HTTP $($r.StatusCode)" }
-} catch { Note "Start backend then run doctor again for live check." }
+  $opt = Invoke-WebRequest `
+    -Method Options `
+    -Uri "$Backend/api/health" `
+    -Headers @{ "Origin"=$Site; "Access-Control-Request-Method"="GET" } `
+    -TimeoutSec 25 -ErrorAction Stop
 
-# Frontend sanity
-Push-Location frontend
-if(-not (Test-Path package.json)){ Bad "frontend/package.json missing"; Pop-Location; exit 1 }
-Good "frontend/package.json present"
-Pop-Location
+  $acao = $opt.Headers['access-control-allow-origin']
+  $ok = ($opt.StatusCode -eq 200) -and $acao -and ($acao -eq $Site -or $acao -eq "*")
+  Show $ok "CORS preflight OPTIONS /api/health -> $($opt.StatusCode)  ACAO='$acao'"
+}
+catch {
+  Show $false "CORS preflight OPTIONS failed: $($_.Exception.Message)"
+}
 
-Good "Doctor complete"
-Pop-Location
+# ---------- 2) Actual GET with Origin header ----------
+try {
+  $get = Invoke-WebRequest `
+    -Method GET `
+    -Uri "$Backend/api/health" `
+    -Headers @{ "Origin"=$Site } `
+    -TimeoutSec 25 -ErrorAction Stop
+
+  $acao2 = $get.Headers['access-control-allow-origin']
+  $body  = $get.Content.Trim()
+  $ok = ($get.StatusCode -eq 200) -and $body -match '"status"\s*:\s*"ok"' -and ($acao2 -eq $Site -or $acao2 -eq "*")
+  Show $ok "GET /api/health -> $($get.StatusCode)  ACAO='$acao2'  body=$body"
+}
+catch {
+  Show $false "GET /api/health failed: $($_.Exception.Message)"
+}
+
+# ---------- 3) Fetch index.html, find the JS bundle URL ----------
+try {
+  $index = Invoke-WebRequest "$Site" -UseBasicParsing -TimeoutSec 25 -ErrorAction Stop
+  # find first <script type="module" src="...*.js">
+  $m = [regex]::Match($index.Content, '<script[^>]*type="module"[^>]*src="([^"]+\.js)"', 'IgnoreCase')
+  if (-not $m.Success) { throw "Could not locate the JS bundle tag in index.html" }
+  $jsPath = $m.Groups[1].Value
+
+  # make absolute if needed
+  if ($jsPath -notmatch '^https?://') {
+    $left  = $Site.TrimEnd('/')
+    $right = $jsPath.TrimStart('/')
+    $jsUrl = "$left/$right"
+  } else {
+    $jsUrl = $jsPath
+  }
+  Show $true "Found bundle JS: $jsUrl"
+}
+catch {
+  Show $false "Parse index.html failed: $($_.Exception.Message)"
+  return
+}
+
+# ---------- 4) Download the bundle and check which backend it calls ----------
+try {
+  $bundle = Invoke-WebRequest $jsUrl -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
+  $backendHost = ([Uri]$Backend).Host
+  $hasBackend  = $bundle.Content -match [regex]::Escape($backendHost)
+  $hasRelative = $bundle.Content -match "fetch\(\s*`'/?api/"
+
+  Show $hasBackend  "Bundle contains backend host '$backendHost' = $hasBackend"
+  Show $hasRelative "Bundle also uses relative '/api/*' = $hasRelative"
+
+  if (-not $hasBackend) {
+    Write-Host ""
+    Write-Host "Your Render Static Site build probably did NOT bake VITE_BACKEND_URL." -ForegroundColor Yellow
+    Write-Host "Fix: In Render -> Static Site -> Environment, keep ONLY:" -ForegroundColor Yellow
+    Write-Host "  VITE_BACKEND_URL = $Backend" -ForegroundColor Cyan
+    Write-Host "Then: Manual Deploy -> Clear build cache & deploy." -ForegroundColor Yellow
+  }
+}
+catch {
+  Show $false "Fetch bundle failed: $($_.Exception.Message)"
+}
+
