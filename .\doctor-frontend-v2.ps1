@@ -1,79 +1,78 @@
 param(
-  [Parameter(Mandatory = $true)][string]$Backend,
-  [Parameter(Mandatory = $true)][string]$Site
+  [Parameter(Mandatory=$true)][string]$Backend,
+  [Parameter(Mandatory=$true)][string]$Site
 )
 
-function Show([bool]$ok, [string]$msg){
-  if($ok){ Write-Host "[PASS] " -NoNewline -ForegroundColor Green }
-  else   { Write-Host "[FAIL] " -NoNewline -ForegroundColor Red }
+function Show([bool]$ok, [string]$msg) {
+  if ($ok) { Write-Host "[PASS] " -ForegroundColor Green -NoNewLine }
+  else     { Write-Host "[FAIL] " -ForegroundColor Red   -NoNewLine }
   Write-Host $msg
 }
 
-Write-Host "`n=== Friday Frontend Doctor (auto-check) ===`n" -ForegroundColor Cyan
+Write-Host "`n=== Friday Frontend Doctor (auto-check) ===" -ForegroundColor Cyan
 Write-Host "Backend : $Backend"
 Write-Host "Static  : $Site`n"
 
-# 1) CORS preflight (OPTIONS)
+# 1) CORS preflight OPTIONS (simulates browser)
 try{
-  $opt = Invoke-WebRequest `
-    -Method Options `
-    -Uri "$Backend/api/health" `
-    -Headers @{ "Origin"=$Site; "Access-Control-Request-Method"="GET" } `
-    -TimeoutSec 20 -ErrorAction Stop
+  $opt = Invoke-WebRequest -Method Options -Uri "$Backend/api/health" `
+         -Headers @{ "Origin"="$Site"; "Access-Control-Request-Method"="GET" } `
+         -TimeoutSec 25 -ErrorAction Stop
   $acao = $opt.Headers['access-control-allow-origin']
-  Show ($opt.StatusCode -eq 200 -and $acao -and ($acao -eq $Site -or $acao -eq '*')) "CORS preflight OPTIONS -> $($opt.StatusCode)  ACAO=$acao"
+  Show ($opt.StatusCode -eq 200 -and $acao -match $Site) "CORS preflight OPTIONS /api/health (ACAO=$acao, status=$($opt.StatusCode))"
 } catch { Show $false "CORS preflight OPTIONS failed: $($_.Exception.Message)" }
 
-# 2) Actual GET with Origin
+# 2) GET with Origin (what browsers do after preflight)
 try{
-  $get = Invoke-WebRequest -Method GET -Uri "$Backend/api/health" -Headers @{ "Origin"=$Site } -TimeoutSec 20 -ErrorAction Stop
+  $get  = Invoke-WebRequest -Method GET -Uri "$Backend/api/health" `
+          -Headers @{ "Origin"="$Site" } -TimeoutSec 25 -ErrorAction Stop
   $acao2 = $get.Headers['access-control-allow-origin']
-  $ok2 = ($get.StatusCode -eq 200) -and ($acao2 -and ($acao2 -eq $Site -or $acao2 -eq "*")) -and ($get.Content -match '"status"\s*:\s*"ok"')
-  Show $ok2 "GET $Backend/api/health with Origin (ACAO=$acao2, status=$($get.StatusCode), body=$($get.Content.Trim()))"
+  $ok2 = ($get.StatusCode -eq 200) -and ($acao2 -match $Site) -and ($get.Content -match '"status"\s*:\s*"ok"')
+  Show $ok2 "GET $Backend/api/health (ACAO=$acao2, status=$($get.StatusCode))"
 } catch { Show $false "GET with Origin failed: $($_.Exception.Message)" }
 
-# 3) Find deployed JS bundle from index.html
+# 3) Locate built JS from deployed index.html
 $jsUrl = $null
 try{
-  $index = Invoke-WebRequest $Site -UseBasicParsing -TimeoutSec 20 -ErrorAction Stop
-  $m = [regex]::Match($index.Content, '<script[^>]*type="module"[^>]*src="([^"]+\.js)"', 'IgnoreCase')
+  $index = Invoke-WebRequest $Site -UseBasicParsing -TimeoutSec 25 -ErrorAction Stop
+  $m = [regex]::Match($index.Content,'<script[^>]+type="module"[^>]+src="([^"]+\.js)"','IgnoreCase')
   if (-not $m.Success) { throw "Could not find main JS <script> in index.html" }
   $jsPath = $m.Groups[1].Value
-  if ($jsPath -notmatch '^https?://') {
-    # join Site + jsPath (ensure one slash)
-    $left = $Site.TrimEnd('/')
+  $jsUrl  = if ($jsPath -match '^https?://') { $jsPath } else {
+    $left  = $Site.TrimEnd('/')
     $right = $jsPath.TrimStart('/')
-    $jsUrl = "$left/$right"
-  } else { $jsUrl = $jsPath }
-  Show $true "Bundle JS found: $jsUrl"
+    "$left/$right"
+  }
+  Show $true "Found bundle JS: $jsUrl"
 } catch { Show $false "Parse index.html failed: $($_.Exception.Message)" }
 
-# 4) Download bundle and inspect
-$hasBackend = $false
+# 4) Inspect bundle for backend host + relative '/api'
+$hasBackend  = $false
 $usesRelative = $false
-if ($jsUrl) {
-  try {
+if ($jsUrl){
+  try{
     $bundle = Invoke-WebRequest $jsUrl -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
     $backendHost = ([Uri]$Backend).Host
     $hasBackend  = $bundle.Content -match [regex]::Escape($backendHost)
-    $usesRelative = $bundle.Content -match "fetch\(\s*['""`]\/api\/"
+    $usesRelative = $bundle.Content -match "fetch\(\s*'/?api/"
     Show $hasBackend  "Bundle contains backend host '$backendHost' (baked absolute URL)"
     Show $usesRelative "Bundle contains relative '/api/*' fetches"
-    $first = ([regex]::Match($bundle.Content, "https?://[^'""\s]+/api/health")).Value
+    $first = ([regex]::Match($bundle.Content,'https?://[^"''\s]+/api/health')).Value
     if ($first) { Write-Host "Hint: first absolute /api/health found in bundle: $first" -ForegroundColor DarkGray }
   } catch { Show $false "Fetch bundle failed: $($_.Exception.Message)" }
 }
 
-# 5) Final guidance
+# 5) Guidance
 Write-Host "`n--- Final guidance ---"
 if (-not $hasBackend) {
   Write-Host "Result: Your deployed bundle does NOT include the backend host." -ForegroundColor Yellow
-  Write-Host "Fix on Render (Static Site): keep ONLY this key:  VITE_BACKEND_URL = $Backend" -ForegroundColor Yellow
+  Write-Host "Fix on Render (Static Site): keep ONLY this key: VITE_BACKEND_URL = $Backend" -ForegroundColor Yellow
   Write-Host "Then Manual Deploy → Clear build cache & Deploy (IMPORTANT)." -ForegroundColor Yellow
 } elseif ($usesRelative) {
   Write-Host "Result: Bundle still contains relative '/api/*' calls." -ForegroundColor Yellow
-  Write-Host "Ensure your code uses the baked env var, e.g. fetch(`${import.meta.env.VITE_BACKEND_URL}/api/health`)." -ForegroundColor Green
+  Write-Host "Ensure your code uses the baked env var, e.g. fetch(`${import.meta.env.VITE_BACKEND_URL}/api/health`)." -ForegroundColor Yellow
 } else {
   Write-Host "Result: Looks good. The bundle references the backend host and uses absolute URLs." -ForegroundColor Green
 }
 Write-Host "`n=== End ==="
+
