@@ -1,19 +1,20 @@
 import { defineConfig } from "vite";
 
-// Local dev helper: proxy /api/* to a local FastAPI (optional)
-const LOCAL_BACKEND = process.env.LOCAL_BACKEND || "http://localhost:8000";
+const LOCAL_BACKEND = "http://localhost:8000";
 
 export default defineConfig({
   server: {
     proxy: {
-      // This is ONLY used during `npm run dev` if you choose to hit relative /api/*
+      // only used if your code calls relative paths (we don’t by default)
       "/api": {
-        target: LOCAL_BACKEND,
+        target: process.env.VITE_BACKEND_URL || LOCAL_BACKEND,
         changeOrigin: true,
+        secure: false,
       },
     },
   },
 });
+
 
 
 
