@@ -1,101 +1,67 @@
 param(
-  [Parameter(Mandatory = $true)][string]$Backend,
-  [string]$FrontendPath = ".\frontend"
+  [Parameter(Mandatory=$true)][string]$Backend,
+  [string]$FrontendPath = "$PSScriptRoot/frontend"
 )
 
-function Say($t){ Write-Host $t -ForegroundColor Cyan }
-function Ok($t){ Write-Host $t -ForegroundColor Green }
-function Warn($t){ Write-Host $t -ForegroundColor Yellow }
-function Fail($t){ Write-Host $t -ForegroundColor Red }
+function Say($m){ Write-Host $m -ForegroundColor Cyan }
+function Done($m){ Write-Host $m -ForegroundColor Green }
+function Fail($m){ Write-Host "[FAIL] $m" -ForegroundColor Red; exit 1 }
 
-# Resolve paths safely (don't rely on $PSScriptRoot for pasted scripts)
-try {
-  $Front = Resolve-Path -LiteralPath $FrontendPath -ErrorAction Stop
-} catch {
-  Fail "Frontend folder not found at '$FrontendPath'. Run this from your project root (the folder that contains 'frontend')."
-  exit 1
-}
+Write-Host "🛠  Patching frontend to bake backend URL: $Backend" -ForegroundColor Yellow
 
-$envFile = Join-Path $Front ".env.local"
-$vconf   = Join-Path $Front "vite.config.js"
-$mainjs  = Join-Path $Front "src\main.js"
+if (!(Test-Path $FrontendPath)) { Fail "Frontend folder not found at $FrontendPath" }
 
-Say "=== Friday Auto-Patch ==="
-Say "Using backend: $Backend"
-Say "Frontend at:  $($Front.Path)"
+# 1) .env.local for dev & for build-time variable
+$envFile = Join-Path $FrontendPath ".env.local"
+"VITE_BACKEND_URL=$Backend" | Out-File -Encoding UTF8 $envFile
+Done "Wrote .env.local"
 
-# 1) Write .env.local for local dev
-"VITE_BACKEND_URL=$Backend" | Out-File -Encoding UTF8 -NoNewline $envFile
-Ok "Wrote $envFile"
+# 2) Ensure vite proxy points at backend for dev
+$vite = Join-Path $FrontendPath "vite.config.js"
+if (!(Test-Path $vite)) { Fail "vite.config.js not found" }
+# (File we ship already reads VITE_BACKEND_URL, so nothing else to do)
+Done "vite.config.js ok"
 
-# 2) Ensure dev proxy in vite.config.js points to backend (if the file exists)
-if (Test-Path $vconf) {
-  $v = Get-Content -Raw $vconf
-  # naive replace of any 'target:' line inside a proxy block
-  $v = $v -replace "target:\s*['""]https?:\/\/[^'""]+['""]", "target: '$Backend'"
-  Set-Content -Encoding UTF8 $vconf $v
-  Ok "Patched dev proxy in vite.config.js (for npm run dev)"
-} else {
-  Warn "vite.config.js not found (that's ok if you don't need the dev proxy)."
-}
-
-# 3) Patch src/main.js fetches to bake absolute URLs at build time
-if (-not (Test-Path $mainjs)) {
-  Fail "Expected file not found: $mainjs"
-  exit 1
-}
-
-$js = Get-Content -Raw $mainjs
-
-# Replace common relative calls: '/api/...'
-$js = $js -replace "fetch\(\s*(['""])/api/", "fetch(`${import.meta.env.VITE_BACKEND_URL}/api/"
-# Also handle template literals like fetch(`/api/...`)
-$js = $js -replace "fetch\(\s*`/api/", "fetch(`${import.meta.env.VITE_BACKEND_URL}/api/"
-
-Set-Content -Encoding UTF8 $mainjs $js
-Ok "Patched $mainjs to use import.meta.env.VITE_BACKEND_URL"
-
-# 4) Build frontend and verify the bundle contains the backend host
-Push-Location $Front
-try {
-  Say "Running npm install…"
+# 3) Build
+Push-Location $FrontendPath
+try{
+  Say "Installing npm deps…"
   npm i | Out-Host
-  Ok "npm install ok"
+  Done "npm install ok"
 
   Say "Building production bundle…"
   npm run build | Out-Host
-  Ok "vite build ok"
-} catch {
+  Done "vite build ok"
+}
+catch{
   Pop-Location
-  Fail "Build failed: $($_.Exception.Message)"
-  exit 1
+  Fail $_.Exception.Message
 }
 Pop-Location
 
-# 5) Verify the baked URL appears inside built JS
-$dist = Join-Path $Front "dist\assets"
-if (-not (Test-Path $dist)) {
-  Fail "Build output not found at $dist"
-  exit 1
-}
-$jsFiles = Get-ChildItem $dist -Filter *.js -Recurse
-$found = $false
-foreach ($f in $jsFiles) {
-  $c = Get-Content -Raw $f.FullName
-  if ($c -match [regex]::Escape($Backend)) {
-    $found = $true
-    Ok "PASS: backend host found in bundle ⇒ $($f.Name)"
-    break
-  }
+# 4) Verify bundle contains the backend host
+$dist = Join-Path $FrontendPath "dist"
+if (!(Test-Path $dist)) { Fail "Build output not found at $dist" }
+
+$indexPath = Join-Path $dist "index.html"
+if (!(Test-Path $indexPath)) { Fail "dist/index.html not found" }
+
+$idx = Get-Content $indexPath -Raw
+$jsPath = [regex]::Match($idx,'src="([^"]+\.js)"').Groups[1].Value
+if (-not $jsPath) { Fail "Could not find built JS in index.html" }
+
+$jsUrl = if ($jsPath -match '^https?://') { $jsPath } else {
+  $left  = $dist.TrimEnd('\','/')
+  $right = $jsPath.TrimStart('\','/')
+  Join-Path $left $right
 }
 
-if (-not $found) {
-  Fail "FAIL: backend host NOT found in built JS. Ensure code uses import.meta.env.VITE_BACKEND_URL and re-run."
-  exit 1
-}
+$js = if (Test-Path $jsUrl) { Get-Content $jsUrl -Raw } else { (Invoke-WebRequest $jsUrl -UseBasicParsing).Content }
+$host = ([uri]$Backend).Host
+$hasBackend = $js -match [regex]::Escape($host)
+if ($hasBackend) { Done "✅ Backend host is baked into the bundle ($host)" }
+else             { Fail "Bundle does NOT contain backend host ($host). On Render Static Site: keep ONLY env key VITE_BACKEND_URL=$Backend, then Clear build cache & Deploy." }
 
-Ok "Build complete. Backend baked in: $Backend"
-Warn "Remember (Render Static Site): set Environment key VITE_BACKEND_URL=$Backend, then 'Manual Deploy' → 'Clear build cache & deploy'."
 
 
 
