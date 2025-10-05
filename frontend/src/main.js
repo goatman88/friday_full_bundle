@@ -1,4 +1,4 @@
-﻿import { VITE_BACKEND_URL } from './env.mjs';
+import { VITE_BACKEND_URL } from './env.mjs';
 
 async function ping() {
   const r = await fetch(\\/api/health\);
