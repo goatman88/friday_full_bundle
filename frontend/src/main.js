@@ -1,13 +1,24 @@
-import { VITE_BACKEND_URL } from './env.mjs';
+﻿const backend = "https://friday-backend-ksep.onrender.com";
 
 async function ping() {
-  const r = await fetch(\\/api/health\);
-  const t = await r.text();
-  document.body.innerHTML =
-    '<h1>Friday Frontend</h1><button id="btn">Ping backend</button><pre>'+t+'</pre>';
+  try {
+    const r = await fetch(`${backend}/api/health`, { cache: 'no-cache' });
+    const t = await r.text();
+    const out = document.getElementById('out') || document.body;
+    out.textContent = t;
+  } catch (e) {
+    const out = document.getElementById('out') || document.body;
+    out.textContent = `Request failed: ${e}`;
+  }
 }
-document.addEventListener('click', e => { if(e.target.id==='btn') ping() });
-ping();
+
+document.addEventListener('DOMContentLoaded', () => {
+  const btn = document.getElementById('ping');
+  if (btn) btn.addEventListener('click', ping);
+  // also auto-ping on load for sanity
+  ping();
+});
+
 
 
 
