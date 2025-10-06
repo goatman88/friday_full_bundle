@@ -1,4 +1,4 @@
-﻿const backend = "https://friday-backend-ksep.onrender.com";
+﻿const backend = 'https://friday-backend-ksep.onrender.com';
 
 async function ping() {
   try {
@@ -18,6 +18,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // also auto-ping on load for sanity
   ping();
 });
+
+
+
+
+
 
 
 
