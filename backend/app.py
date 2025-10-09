@@ -40,3 +40,4 @@ def echo(body: EchoIn, request: Request):
         "client": request.client.host if request.client else None,
         "server": platform.node(),
     }
+
