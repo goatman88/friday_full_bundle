@@ -89,6 +89,9 @@ def version():
 class EchoIn(BaseModel):
     msg: str
 
+@app.get("/")
+def root(): return {"ok": True, "service": "backend"}
+
 @app.post("/api/echo")
 def echo(body: EchoIn, request: Request):
     return {
