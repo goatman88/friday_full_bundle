@@ -90,7 +90,7 @@ class EchoIn(BaseModel):
     msg: str
 
 @app.get("/")
-def root(): return {"ok": True, "service": "backend"}
+def root(): return {"ok": True, "service": "friday-backend"}
 
 @app.post("/api/echo")
 def echo(body: EchoIn, request: Request):
