@@ -1,0 +1,3 @@
+flask
+requests
+openai>=1.40.0  # harmless if you don't use it; you can remove if totally offline
