@@ -22,8 +22,8 @@ _allow_all = not _env_origins or "*" in _env_origins
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"] if _allow_all else _env_origins,
-    allow_credentials=False if _allow_all else True,
+    allow_origins=["https://friday-full-bundle.onrender.com", "http://localhost:5173", "*"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
