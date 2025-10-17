@@ -3,6 +3,17 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import os, time, platform
+# app.py
+from flask import Flask
+from routes.loadout_routes import bp as loadout_bp   # <-- add this import
+
+def create_app():
+    app = Flask(__name__)
+    # ... your existing setup (CORS, auth, etc.)
+
+    app.register_blueprint(loadout_bp)               # <-- add this line
+
+    return app
 
 # --------------------------------------------------
 # App
